@@ -1,0 +1,10 @@
+name = "smt2lean"
+version = "0.1.0"
+defaultTargets = ["smt2lean"]
+
+[[lean_lib]]
+name = "Smt2Lean"
+
+[[lean_exe]]
+name = "smt2lean"
+root = "Main"

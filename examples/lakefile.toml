@@ -1,0 +1,11 @@
+# Generated Lean project: one module per SMT-LIB query in ../tests, plus the prelude.
+name = "smt2lean-examples"
+version = "0.1.0"
+defaultTargets = ["Generated"]
+
+[[lean_lib]]
+name = "Smt2Lean"
+roots = ["Smt2Lean.Prelude"]
+
+[[lean_lib]]
+name = "Generated"
