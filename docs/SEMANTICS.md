@@ -255,7 +255,8 @@ distinguished from new query-specific assumptions when proof results are reporte
 | Unresolved / failed | An explicit unsupported case, remaining goal, error, or resource limit |
 
 These outcomes must remain distinguishable; their concrete serialization belongs
-to task 2. Always record the exact proved target and requested task kind. For
+to the later manifest task in [PR-PLAN.md](PR-PLAN.md). Always record the exact
+proved target and requested task kind. For
 example, a completed proof of a requested `¬ Problem` both completes that task and
 refutes the canonical `Problem`; it does not refute `¬ Problem`. These descriptions
 are related observations, not mutually exclusive verdicts with an implicit polarity.

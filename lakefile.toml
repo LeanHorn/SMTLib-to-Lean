@@ -2,6 +2,16 @@ name = "smt2lean"
 version = "0.1.0"
 defaultTargets = ["smt2lean"]
 
+[[require]]
+name = "smt"
+git = "https://github.com/ufmg-smite/lean-smt.git"
+rev = "5bdc51674065a074ece67b04e10024e9f426ec1f"
+
+[[require]]
+name = "cvc5"
+git = "https://github.com/abdoo8080/lean-cvc5.git"
+rev = "7e3365990661b697ccb30e92d6912f4cc6589322"
+
 [[lean_lib]]
 name = "Smt2Lean"
 

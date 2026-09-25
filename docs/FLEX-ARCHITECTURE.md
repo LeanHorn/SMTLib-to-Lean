@@ -34,7 +34,7 @@ execution plan, using the user's revised three stages.
 | lean-smt | `5bdc51674065a074ece67b04e10024e9f426ec1f` | Extensible sort/term reconstruction; Lean 4.33.0; main includes Mathlib, lean-auto, and lean-cvc5 |
 | Public LeanHorn/Flex | `6bc56e2cecef1168c00345426b0ea278466d63c6` | Source inspected; Lean 4.29.0-rc8; Mathlib-free with pinned aesop |
 | Local Flex | HEAD `8e22dfd823dcebca571d7f898180f5a477f910dc` plus pre-existing edits | Existing compiled cache used for a small Prop/peeling/flattening smoke test; not a clean build of the public pin |
-| This translator | Lean 4.33.1 | Existing stub/prelude; adding the upstream reconstruction dependency still needs a build compatibility check |
+| This translator | Lean 4.33.1 | Task 2.1 builds the pinned cvc5 and Boolean/builtin reconstruction imports, links the CLI, and builds the examples; parser execution remains task 2.2 |
 
 The local Flex smoke test accepted a three-clause integer loop problem and found
 one unary relation and three clauses. Nullary relations and a relation whose
@@ -46,7 +46,11 @@ test in a clean generated project before calling that integration verified.
 The cvc5 CLI probe verifies syntax/sort compatibility, not our future API driver:
 CLI parse-only mode skips executing assertions. The driver must invoke assertion
 and scope commands explicitly and capture `getAssertions` at query boundaries.
-The Lean FFI package has been inspected, not built/tested during this investigation.
+The initial investigation only inspected the Lean FFI package. Task 2.1 subsequently
+built the pinned bindings and reconstruction modules from source on Lean 4.33.1 and
+launched the linked CLI. This verifies compilation/linking; the native parser smoke
+test remains task 2.2. Mathlib's optional prebuilt-cache hook requires upstream's
+exact Lean 4.33.0 and is skipped for this source build, as documented in README.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`
@@ -89,6 +93,12 @@ flowchart TD
 
 Only CHC output follows the Flex path. The ordinary SMT path ends in independent
 Lean obligations unless the user explicitly chooses another downstream tactic.
+
+This diagram describes the target architecture. Implement the smallest runnable
+path first: a Boolean query to Lean files, integer terms, then the first existing
+CHC. Extend its source tracking, scopes, theory support, and packaging using actual
+inputs. The manifest and benchmark automation follow working translation; the
+diagram's eventual data contracts are not prerequisites for the first demo.
 
 ## Data contracts and modules to construct
 
@@ -206,7 +216,7 @@ track names: competition samples can include `let`, nullary predicates, quoted
 names, recursive datatypes, high-arity relations, and arrays nested in datatypes.
 
 Inspected examples from CHC-COMP25 at
-`ddd279cab0717db6effe69baad451a8eb04ffd86` provide a concrete Stage 2 seed list:
+`ddd279cab0717db6effe69baad451a8eb04ffd86` provide concrete Stage 1 competition examples:
 
 | Benchmark | Features observed |
 | --- | --- |
@@ -322,10 +332,14 @@ operator needs a named, individually scoped implementation PR before claiming co
 coverage. Parsed, faithfully translated, Lean-elaborated, Flex-compatible and proved
 remain separate states.
 
-The first full current-corpus checkpoint is PR 42; the full competition-translation
-gate is PR 69. Frontend tooling ends at PR 81. The recurring Flex anchor is completed
-by PR 97. Unknown features discovered by the inventory require extra small PRs before
-the relevant gate, not silently narrowed benchmark selections.
+Build order prioritizes working translation: PR 2 exercises the dependencies,
+PR 3 runs the first Boolean translation, PR 4 adds integer queries, and PR 8
+translates the unedited lh_sum_rec CHC. The full current-corpus demo is PR 37;
+competition selection/fetch/inventory follow in PRs 38–40. The existing manifest
+draft is deferred to PR 64, immediately before benchmark automation. The full
+competition-translation gate remains PR 69, frontend tooling ends at PR 81, and
+the recurring Flex anchor ends at PR 97. Unknown features discovered by inventory
+require extra small PRs before the relevant gate; do not silently narrow selections.
 
 ## Sources
 
