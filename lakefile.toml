@@ -22,3 +22,4 @@ root = "Main"
 [[lean_exe]]
 name = "backendSmoke"
 root = "tests.BackendSmoke"
+supportInterpreter = true

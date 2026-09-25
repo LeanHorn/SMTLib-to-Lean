@@ -10,8 +10,8 @@ Pass the captured assertions (`Array cvc5.Term`) and invoked command names
 to a callback after the full input has been accepted. Reject other commands
 and propagate parsing/invocation errors.
 
-The reconstruction imports register Lean-SMT handlers for task 2.3.
-This driver does not yet translate assertions into Lean propositions.
+The reconstruction imports register the handlers used by `tests/BackendSmoke.lean`
+to translate assertion terms into Lean propositions.
 -/
 
 namespace Smt2Lean.Backend

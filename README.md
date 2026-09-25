@@ -40,9 +40,9 @@ cd examples
 lake build
 ```
 
-## Native parser smoke test
+## Parser and Lean reconstruction smoke test
 
-Run the task 2.2 check with:
+Run the tasks 2.2–2.3 checks with:
 
 ```sh
 lake exe backendSmoke
@@ -64,6 +64,17 @@ unsupported queries, missing/repeated checks, and trailing commands. A failed
 check exits nonzero. The driver currently accepts only `set-logic`, `assert`, and
 one final `check-sat`; this is not yet a general SMT-LIB importer.
 
-The main `smt2lean` CLI remains a stub. Tasks 2.1 and 2.2 establish the dependency
-build and native parsing; reconstruction and checking of the corresponding Lean
-proposition follow in task 2.3 of the [implementation plan](docs/PR-PLAN.md).
+The inspection callback then uses Lean-SMT to translate the term into a Lean
+expression. It checks that the expression has type `Prop` and matches
+`True ∧ ¬False`, then asks Lean's kernel to check this definition:
+
+```lean
+def BackendSmoke.assertion : Prop := True ∧ ¬False
+```
+
+The definition is installed in memory, with no unresolved variables, unfinished
+goals, or axiom dependencies. This checks the proposition's construction; it does
+not prove the proposition. No output file is generated yet.
+
+The main `smt2lean` CLI remains a stub. PR 3 adds file input and generated Lean
+files; see the [implementation plan](docs/PR-PLAN.md).

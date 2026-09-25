@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Next: task 2.3, reconstruct and check the smoke proposition.** Tasks 2.1 and 2.2
-are implemented and verified on Lean 4.33.1. PRs 2 and 3 have
+**Next: task 3.1, read and validate one flat Boolean query.** Tasks 2.1–2.3
+are implemented and verified on Lean 4.33.1, completing PR 2. PRs 2 and 3 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -113,7 +113,7 @@ metadata rather than guessing filenames.
 
    **Implementation:** [SEMANTICS.md](SEMANTICS.md) defines this invariant and provides ordinary-SMT and CHC expected-output examples. Executable translator regressions follow with the implementation tasks.
 
-- [ ] **2. Build and exercise the parser/reconstruction dependencies.** Pin the inspected lean-cvc5 and lean-smt revisions, check compatibility with Lean 4.33.1, and align the translator toolchain if needed. Add one executable smoke case that parses a closed Boolean assertion through the native API and reconstructs a Lean proposition without solving. Keep the adapter limited to the calls needed by the next PR.
+- [x] **2. Build and exercise the parser/reconstruction dependencies.** Pin the inspected lean-cvc5 and lean-smt revisions, check compatibility with Lean 4.33.1, and align the translator toolchain if needed. Add one executable smoke case that parses a closed Boolean assertion through the native API and reconstructs a Lean proposition without solving. Keep the adapter limited to the calls needed by the next PR.
 
    **Merge when:** A clean build runs the smoke case and Lean checks the reconstructed proposition; the exact dependency/toolchain pins are recorded. No solver check is executed.
 
@@ -129,11 +129,13 @@ metadata rather than guessing filenames.
 
       **Check:** `lake exe backendSmoke` obtains exactly one Bool-sorted assertion. A dispatch trace records the actual invoked command names and excludes check-sat; the adapter has no calls to `checkSat`, `checkSatAssuming`, or lean-smt's solving/query runners. Malformed input fails visibly. Use this small dispatcher as the basis of PR 3.
 
-      **Verified:** `lake exe backendSmoke` passes on Lean 4.33.1. It checks the assertion's Bool sort, AND/NOT children and true/false values, with invocation trace `#[set-logic, assert]`. Malformed input, invalid logic, check-sat-assuming, missing/repeated checks, and trailing commands are rejected. Native invocation is confined to the two-command allowlist, and unexpected command-response text is propagated as an error. Native terms are inspected in the driver's callback. Task 2.3 remains unimplemented; no Lean proposition is reconstructed yet.
+      **Verified:** `lake exe backendSmoke` passes on Lean 4.33.1. It checks the assertion's Bool sort, AND/NOT children and true/false values, with invocation trace `#[set-logic, assert]`. Malformed input, invalid logic, check-sat-assuming, missing/repeated checks, and trailing commands are rejected. Native invocation is confined to the two-command allowlist, and unexpected command-response text is propagated as an error. Native terms are inspected in the driver's callback.
 
-   - [ ] **2.3. Reconstruct and check the smoke proposition.** Extend the same executable to run `Smt.Reconstruct.reconstructSort` and `reconstructTerm` in a Lean environment containing the registered reconstructors, using a fresh reconstruction context/state. Check the returned expression as the body of a `Prop` definition. This exercises the term path without proof reconstruction.
+   - [x] **2.3. Reconstruct and check the smoke proposition.** Extend the same executable to run `Smt.Reconstruct.reconstructSort` and `reconstructTerm` in a Lean environment containing the registered reconstructors, using a fresh reconstruction context/state. Check the returned expression as the body of a `Prop` definition. This exercises the term path without proof reconstruction.
 
       **Check:** `lake exe backendSmoke` parses the input, reconstructs `True ∧ ¬False` (up to definitional equality), and installs a checked definition with no unresolved variables, metavariables, or admitted dependencies. It exits nonzero on any failed check. Document this one smoke command; PR 2 is complete only after it runs from a clean dependency build.
+
+      **Verified:** The callback reconstructs both the sort and term, checks the expected proposition, and synchronously installs `BackendSmoke.assertion : Prop := True ∧ ¬False` through Lean's kernel. The definition has no axiom dependencies or unresolved variables/goals. The smoke test and all parser rejection checks pass on Lean 4.33.1, including after a clean build of all required Lean modules and the C++ binding (98 jobs for both executables), reusing only the pinned native cvc5 1.3.2 SDK. Root and example builds also pass. The executable enables interpreter support and loads the registered reconstructors into its Lean environment. No solver query, proof reconstruction, or source-file emission is performed.
 
 - [ ] **3. Translate one Boolean query end to end.** Replace the CLI stub with `smt2lean <input.smt2> --out <fresh-directory>`. Accept one flat query with Boolean constants/nullary declarations, assertions, true/false, not/and/or/implication/equality, and check-sat. Handle set-logic, status metadata, and exit explicitly. Use cvc5 for parsing/sorts and lean-smt reconstruction through a minimal local-variable map; intercept the check without solving. Emit `Statements.lean` with a closed refutation proposition and a separate `Proofs.lean` theorem containing `sorry`. Reject unsupported commands/terms or multiple checks before emitting a successful result.
 
@@ -423,9 +425,9 @@ metadata rather than guessing filenames.
 
    **Merge when:** Manifests describe real generated ordinary/CHC artifacts; schema fixtures reject missing provenance and never equate typechecked with proved.
 
-   **Deferred draft:** The schema already in the working tree is parked here. It does not constrain earlier implementation and must be checked against actual outputs before version 1 is frozen. Resume these subtasks only when this PR is reached; stop for review after each.
+   **Deferred work:** No schema draft is currently present in the working tree. Build it from actual translator outputs when this PR is reached; it does not constrain earlier implementation. Stop for review after each subtask.
 
-   - [x] **64.1. Record a candidate provenance schema.** [Schema](../schemas/manifest.schema.json) and [field conventions](../schemas/README.md) exist as an unaccepted draft covering input paths/hashes, query IDs/locations, required features, and generated files.
+   - [ ] **64.1. Record a candidate provenance schema.** Create `schemas/manifest.schema.json` and document field conventions in `schemas/README.md`, covering input paths/hashes, query IDs/locations, required features, and generated files.
    - [ ] **64.2. Reconcile the draft with real outputs and requested tasks.** Check the working emitter's artifacts and source references; distinguish ordinary SMT refutation from CHC model existence, keeping source kind and requested target separate from solver metadata.
    - [ ] **64.3. Define independent result fields.** Separate recorded solver answers, translation, Lean elaboration, and proof completion; identify the exact proof target.
    - [ ] **64.4. Add Lean manifest types and JSON serialization.** Implement `Smt2Lean/Manifest.lean` against the revised schema, including reference and source-location validation.
