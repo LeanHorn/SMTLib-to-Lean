@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Next: task 2.2, parse a closed assertion without invoking a query.** Task 2.1
-is implemented and verified on Lean 4.33.1. PRs 2 and 3 have
+**Next: task 2.3, reconstruct and check the smoke proposition.** Tasks 2.1 and 2.2
+are implemented and verified on Lean 4.33.1. PRs 2 and 3 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -123,11 +123,13 @@ metadata rather than guessing filenames.
 
       **Check:** `lake build` compiles the backend imports and links the executable; the example project still builds under its recorded toolchain. The lockfile contains immutable resolved revisions. This establishes compilation/linking; native parser execution is checked in 2.2.
 
-      **Verified:** Root build passed (97 jobs), the linked CLI launched successfully, and the example build passed (4 jobs) on macOS arm64 / Lean 4.33.1. Both direct pins and all 12 resolved Git revisions were checked. The current toolchain works when building these backend modules from source; README documents skipping Mathlib's optional 4.33.0 cache hook during dependency updates. Tasks 2.2 and 2.3 remain unimplemented.
+      **Verified:** Root build passed (97 jobs), the linked CLI launched successfully, and the example build passed (4 jobs) on macOS arm64 / Lean 4.33.1. Both direct pins and all 12 resolved Git revisions were checked. The current toolchain works when building these backend modules from source; README documents skipping Mathlib's optional 4.33.0 cache hook during dependency updates.
 
-   - [ ] **2.2. Parse a closed assertion without invoking a query.** In `Smt2Lean/Backend.lean`, create the cvc5 solver/parser and add a small command-dispatch loop for a fixed smoke input containing `(assert (and true (not false)))` and `(check-sat)`. Invoke only the supported non-query commands, propagate native errors, intercept the check, and retrieve `getAssertions`. Register a `backendSmoke` executable rooted at `Tests/BackendSmoke.lean`. Keep cvc5 values within their valid native environment lifetime.
+   - [x] **2.2. Parse a closed assertion without invoking a query.** In `Smt2Lean/Backend.lean`, create the cvc5 solver/parser and add a small command-dispatch loop for a fixed smoke input containing `(assert (and true (not false)))` and `(check-sat)`. Invoke only the supported non-query commands, propagate native errors, intercept the check, and retrieve `getAssertions`. Register a `backendSmoke` executable rooted at `tests/BackendSmoke.lean`. Keep cvc5 values within their valid native environment lifetime.
 
       **Check:** `lake exe backendSmoke` obtains exactly one Bool-sorted assertion. A dispatch trace records the actual invoked command names and excludes check-sat; the adapter has no calls to `checkSat`, `checkSatAssuming`, or lean-smt's solving/query runners. Malformed input fails visibly. Use this small dispatcher as the basis of PR 3.
+
+      **Verified:** `lake exe backendSmoke` passes on Lean 4.33.1. It checks the assertion's Bool sort, AND/NOT children and true/false values, with invocation trace `#[set-logic, assert]`. Malformed input, invalid logic, check-sat-assuming, missing/repeated checks, and trailing commands are rejected. Native invocation is confined to the two-command allowlist, and unexpected command-response text is propagated as an error. Native terms are inspected in the driver's callback. Task 2.3 remains unimplemented; no Lean proposition is reconstructed yet.
 
    - [ ] **2.3. Reconstruct and check the smoke proposition.** Extend the same executable to run `Smt.Reconstruct.reconstructSort` and `reconstructTerm` in a Lean environment containing the registered reconstructors, using a fresh reconstruction context/state. Check the returned expression as the body of a `Prop` definition. This exercises the term path without proof reconstruction.
 

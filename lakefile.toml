@@ -18,3 +18,7 @@ name = "Smt2Lean"
 [[lean_exe]]
 name = "smt2lean"
 root = "Main"
+
+[[lean_exe]]
+name = "backendSmoke"
+root = "tests.BackendSmoke"

@@ -40,6 +40,30 @@ cd examples
 lake build
 ```
 
-The CLI currently remains a stub. Task 2.1 establishes backend compilation and
-native linking; parser execution and reconstruction checks follow in tasks 2.2
-and 2.3 of the [implementation plan](docs/PR-PLAN.md).
+## Native parser smoke test
+
+Run the task 2.2 check with:
+
+```sh
+lake exe backendSmoke
+```
+
+It parses this fixed input using cvc5's native parser:
+
+```smt2
+(set-logic QF_UF)
+(assert (and true (not false)))
+(check-sat)
+```
+
+Only `set-logic` and `assert` reach native command invocation. The driver
+intercepts `check-sat`, captures the assertions, and the smoke test verifies one
+Bool-sorted term with the expected AND/NOT/constant structure. It prints the
+actual invocation trace and checks rejection of malformed input, invalid logic,
+unsupported queries, missing/repeated checks, and trailing commands. A failed
+check exits nonzero. The driver currently accepts only `set-logic`, `assert`, and
+one final `check-sat`; this is not yet a general SMT-LIB importer.
+
+The main `smt2lean` CLI remains a stub. Tasks 2.1 and 2.2 establish the dependency
+build and native parsing; reconstruction and checking of the corresponding Lean
+proposition follow in task 2.3 of the [implementation plan](docs/PR-PLAN.md).
