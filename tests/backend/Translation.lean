@@ -175,4 +175,24 @@ def main : IO Unit := do
   let congruence ← IO.FS.readFile "tests/translation/functions/congruence.smt2"
   runQuery env "function congruence" congruence fun query =>
     checkRefutation query q(∀ (f : Int → Int) (x y : Int), (x = y ∧ ¬f x = f y) → False)
-  IO.println "Translation passed: 17 refutations and generated files; existing proof work preserved"
+  let scopes ← IO.FS.readFile "tests/translation/quantifiers/scopes.smt2"
+  runQuery env "quantifier scopes" scopes fun query => do
+    checkUnmapped query
+    checkFunctionIsolation query
+    checkRefutation query q(∀ (x : Int) (p : Prop) (R : Int → Int → Prop → Prop)
+      (f : Prop → Int → Int) (namedTrue : Prop → Prop),
+      ((∀ (a : Int) (b : Prop), ∃ y : Int, y = a + 1 ∧ R a y b) ∧
+       (∃ a : Int, ∀ y : Int, R a y p) ∧
+       (x = 7 ∧ (∀ a : Int, a ≥ 0 ∧ (∃ b : Int, b < 0) ∧ a = 1) ∧ x = 8) ∧
+       (∀ a : Int, (∃ b : Int, R a b p) ∧ (∃ b : Prop, R a 0 b) ∧ R a a p) ∧
+       ((∀ (t : Prop) (a : Int), ∃ b : Prop, R a (f (t ∧ b) x) (¬t)) ∧ namedTrue p) ∧
+       ((∀ (b : Prop) (y : Int), (b ∧ y = x) → R x x p) ∧
+         (∀ (_unused : Int) (_flag : Prop), p) ∧ (∃ _unused : Prop, ∃ _value : Int, p)) ∧
+       f (∃ y : Int, y = x) x = f (∀ y : Int, R x y p) 0 ∧
+       ((∀ z : Int, R z x p) ∧ (∃ z : Int, R z x p))) → False)
+  let quantified ← IO.FS.readFile "tests/translation/quantifiers/quantified.smt2"
+  for status in #["", "sat", "unsat", "unknown"] do
+    let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
+    runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
+      checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
+  IO.println "Translation passed: 22 refutations and generated files; existing proof work preserved"

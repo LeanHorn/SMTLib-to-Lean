@@ -54,7 +54,7 @@ Run the automated demo checks with Python 3 installed:
 tests/translation/run-demo.sh
 ```
 
-The script checks the Boolean, integer, and function demos: expected outputs, metadata
+The script checks the Boolean, integer, function, and quantifier demos: expected outputs, metadata
 variants, standalone statements and templates, and the completed proofs shown here.
 It also checks rejection cases and overwrite protection, using temporary
 directories that are removed afterwards.
@@ -144,7 +144,44 @@ dependencies. The generated file uses only Lean core.
 The combined [applications fixture](tests/translation/functions/applications.smt2)
 covers nested functions and predicates, compound Boolean arguments, argument
 order, unused parameters, and quoted names matching `Int.add` and `True`.
-Only first-order Bool/Int signatures are supported. Input quantifiers follow in PR 6.
+Only first-order Bool/Int signatures are supported.
+
+## Translate quantified queries
+
+`forall` and `exists` can bind `Int` and `Bool` variables. Boolean variables become
+Lean `Prop`, including when passed to functions. Nested scopes, shadowed names,
+and unused binders are preserved.
+
+This demo asserts that every integer satisfies `P`, and that some integer does not:
+
+```sh
+lake exe smt2lean tests/translation/quantifiers/quantified.smt2 --out quantifier-demo
+lake env lean quantifier-demo/Query.lean
+```
+
+Its [expected output](tests/translation/quantifiers/expected/Query.lean) states:
+
+```lean
+∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False
+```
+
+Replace the Proofs section with:
+
+```lean
+-- Proofs
+
+theorem refutation : Refutation := by
+  intro P h
+  exact h.2.elim (fun x hx => hx (h.1 x))
+```
+
+The existential supplies `x` and `¬P x`; the universal supplies `P x`.
+Run the same Lean command again to check the completed proof using only Lean core.
+
+Use `UF`, `LIA`, `NIA`, `UFLIA`, `UFNIA`, `ALL`, or omit `set-logic` for quantified
+input. Quantifiers in `QF_*` logics, unsupported binder sorts, and quantifier
+patterns are rejected. The combined [scope fixture](tests/translation/quantifiers/scopes.smt2)
+checks alternating binders, name collisions, and Boolean formulas used as arguments.
 
 ## Development build
 
@@ -234,9 +271,10 @@ Supported inputs:
 - Functions with one or more `Bool`/`Int` arguments and either result sort, including
   nested calls and compound Boolean arguments. Bool results are Lean propositions.
 - Boolean literals and `not`, `and`, `or`, and `=>`.
+- `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
 - Integer literals, unary `-`, and `=` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
-- No `set-logic`, or an initial `QF_UF`, `QF_LIA`, `QF_NIA`, `QF_UFLIA`, `QF_UFNIA`, or `ALL` logic.
+- No `set-logic`, or an initial `UF`, `LIA`, `NIA`, `UFLIA`, `UFNIA`, their `QF_` forms, or `ALL`.
   Every term is validated; accepting a logic does not enable all its operators.
 - `set-info` fields `:status`, `:source`, `:category`, `:license`, `:notes`, and
   `:smt-lib-version 2.6`. Metadata is ignored, never used as an assumption.
@@ -260,7 +298,7 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders seventeen cases, compares the re-elaborated statements with
+This test also renders twenty-two cases, compares the re-elaborated statements with
 the original expressions, and compiles each generated file using only Lean core.
 It checks that `Refutation` has no axiom dependencies and only its proof is admitted.
 
@@ -268,6 +306,12 @@ It checks that `Refutation` has no axiom dependencies and only its proof is admi
 parameter of its reconstructed type and reconstructs the assertions using Lean-SMT.
 Names such as `|True|`, `|Int|`, and `|Int.add|` stay parameters. Unmapped terms fail,
 and each query has its own caches.
+
+The local quantifier handler maps bound native terms to fresh Lean variables.
+Each binder scope gets a fresh term cache seeded with its active variable bindings;
+leaving the scope restores the previous cache. This preserves identity even when
+an outer and inner variable have the same source name. The emitter prints binder
+types explicitly, so unused existential variables still elaborate.
 
 `defineRefutation` closes over all parameters and installs `Refutation : Prop`.
 For assertions `p` and `(not p)`, its body is:
@@ -280,5 +324,5 @@ A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
 kernel-checked and has no axiom dependencies. This checks its type, not its truth.
 
-PRs 3–5 provide the Boolean, integer, and function demos above. Next is PR 6:
-input quantifiers. See the [implementation plan](docs/PR-PLAN.md).
+PRs 3–6 provide the demos above. Next is PR 7: integer Horn-clause validation.
+See the [implementation plan](docs/PR-PLAN.md).

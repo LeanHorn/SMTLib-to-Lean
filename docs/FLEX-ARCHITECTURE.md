@@ -120,6 +120,15 @@ small congruence contradiction now has reviewed output and a completed core Lean
 proof. The existing demo runner checks all three demos and their status variants;
 input quantifiers remain PR 6.
 
+PR 6 adds Bool/Int forall/exists. Scope validation follows native variable identity,
+and a local quantifier handler binds fresh Lean variables in lean-smt's term cache.
+Each nested scope keeps active variable bindings but rebuilds expression caches;
+leaving it restores the enclosing cache. This avoids upstream's name-based lookup
+capturing an outer variable beneath a same-named binder. Formula bodies still use
+the existing reconstructors. Explicit binder types in emitted source preserve
+unused existential witnesses. Quantifier patterns and unsupported binder sorts
+are rejected; HORN input remains deferred to the CHC path.
+
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`
 lets seven parse; `lh_sets_neg` still fails on Z3's indexed array `map`. Input files

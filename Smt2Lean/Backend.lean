@@ -38,23 +38,43 @@ private def isSupportedFunction (sort : cvc5.Sort) : cvc5.Env Bool := do
   let result ← ofExcept sort.getFunctionCodomainSort
   return !domains.isEmpty && domains.all isScalarSort && isScalarSort result
 
-/-- Check every node's sort, operator, and declaration identity. -/
+/-- Check sorts, operators, declarations, and bound-variable scope. -/
 def validateAssertion (root : cvc5.Term)
-    (declarations : Array ParsedDeclaration) : cvc5.Env Unit := do
+    (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool := true) : cvc5.Env Unit := do
   unless (← ofExcept root.getSort).isBoolean do
     throw (.unsupported "expected a Bool assertion")
-  let mut pending := #[root]
-  let mut visited : Std.HashSet cvc5.Term := {}
+  let mut pending : Array (cvc5.Term × Array cvc5.Term) := #[(root, #[])]
+  let mut visited : Std.HashSet (cvc5.Term × Array cvc5.Term) := {}
   while !pending.isEmpty do
-    let term := pending.back!
+    let (term, bound) := pending.back!
     pending := pending.pop
-    if visited.contains term then continue
-    visited := visited.insert term
+    -- A shared term must be checked again when its scope changes.
+    if visited.contains (term, bound) then continue
+    visited := visited.insert (term, bound)
     let sort ← ofExcept term.getSort
     unless isScalarSort sort do
       throw (.unsupported s!"expected Bool or Int, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if kind == .FORALL || kind == .EXISTS then
+      unless allowQuantifiers do
+        throw (.unsupported "quantifiers require a quantified logic or ALL")
+      unless children.size == 2 do
+        throw (.unsupported "expected a quantifier without annotations")
+      let variables := children[0]!
+      unless (← ofExcept variables.getKind) == .VARIABLE_LIST &&
+          !variables.getChildren.isEmpty do
+        throw (.unsupported "expected a nonempty quantifier variable list")
+      let mut scope := bound
+      for binder in variables.getChildren do
+        unless (← ofExcept binder.getKind) == .VARIABLE do
+          throw (.unsupported "expected a bound variable")
+        let variableSort ← ofExcept binder.getSort
+        unless isScalarSort variableSort do
+          throw (.unsupported s!"unsupported bound variable sort: {variableSort}; expected Bool or Int")
+        scope := scope.push binder
+      pending := pending.push (children[1]!, scope)
+      continue
     if kind == .APPLY_UF then
       let some function := children[0]?
         | throw (.unsupported "function application has no function")
@@ -73,13 +93,17 @@ def validateAssertion (root : cvc5.Term)
       unless sort == (← ofExcept signature.getFunctionCodomainSort) do
         throw (.unsupported s!"wrong result sort for {function}")
       -- Validate the arguments; the declared function is allowed only as the head.
-      pending := pending ++ arguments
+      pending := pending ++ arguments.map (·, bound)
       continue
     let validArity ← match kind with
       | .CONST_BOOLEAN | .CONST_INTEGER => pure children.isEmpty
       | .CONSTANT => do
         unless declarations.any (·.term == term) do
           throw (.unsupported s!"undeclared term: {term}")
+        pure children.isEmpty
+      | .VARIABLE => do
+        unless bound.contains term do
+          throw (.unsupported s!"unbound variable: {term}")
         pure children.isEmpty
       | .NOT | .NEG | .ABS => pure (children.size == 1)
       | .AND | .OR | .IMPLIES | .ADD | .SUB | .MULT => pure (children.size >= 2)
@@ -88,7 +112,7 @@ def validateAssertion (root : cvc5.Term)
       | _ => throw (.unsupported s!"unsupported operator: {kind}")
     unless validArity do
       throw (.unsupported s!"unsupported arity for {kind}: {children.size}")
-    pending := pending ++ children
+    pending := pending ++ children.map (·, bound)
 
 /-- These metadata fields never become assumptions or select a proof target. -/
 private def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do
@@ -128,6 +152,7 @@ def parseAndInspectQuery
   let parser  ← cvc5.InputParser.new solver (some symbols)
   parser.setStringInput input (name := name)
   let mut query : ParsedQuery := {}
+  let mut allowQuantifiers := true
   let mut checked := false
   let mut exited := false
   let mut ordinal := 1
@@ -143,10 +168,12 @@ def parseAndInspectQuery
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
       match commandName with
       | "set-logic" =>
-        unless #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA", "ALL"].any
+        unless #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
+            "UF", "LIA", "NIA", "UFLIA", "UFNIA", "ALL"].any
             (fun logic => cmd.toString == s!"(set-logic {logic})") do
           throw (.unsupported s!"unsupported logic: {cmd}")
         invokeCommand cmd solver symbols
+        allowQuantifiers := !cmd.toString.startsWith "(set-logic QF_"
         query := { query with invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
         invokeCommand cmd solver symbols
@@ -168,7 +195,7 @@ def parseAndInspectQuery
         let assertions ← solver.getAssertions
         let some term := assertions.back?
           | throw (.error "assert command did not store a formula")
-        validateAssertion term query.declarations
+        validateAssertion term query.declarations allowQuantifiers
         query := { query with invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
       | "check-sat" =>

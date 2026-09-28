@@ -10,6 +10,7 @@ EXE = ROOT / ".lake/build/bin/smt2lean"
 FIXTURES = ROOT / "tests/translation/bool"
 INTEGERS = ROOT / "tests/translation/int"
 FUNCTIONS = ROOT / "tests/translation/functions"
+QUANTIFIERS = ROOT / "tests/translation/quantifiers"
 
 
 def run(*args, code=0):
@@ -58,6 +59,7 @@ def main():
         "contradiction": (FIXTURES / "expected/Query.lean").read_text(),
         "bounds": (INTEGERS / "expected/Query.lean").read_text(),
         "congruence": (FUNCTIONS / "expected/Query.lean").read_text(),
+        "quantified": (QUANTIFIERS / "expected/Query.lean").read_text(),
     }
     assert "Usage:" in run("--help").stdout
     for args in [(), ("--unknown",), ("input.smt2",),
@@ -69,6 +71,7 @@ def main():
         inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty"]]
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
+        inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified"]]
         for fixture in inputs:
             name = fixture.stem
             output = tmp / name
@@ -90,6 +93,7 @@ def main():
             (FIXTURES / "contradiction.smt2", "  intro p h\n  exact h.2 h.1\n"),
             (INTEGERS / "bounds.smt2", "  intro x h\n  exact Int.not_lt_of_ge h.1 h.2\n"),
             (FUNCTIONS / "congruence.smt2", "  intro f x y h\n  exact h.2 (congrArg f h.1)\n"),
+            (QUANTIFIERS / "quantified.smt2", "  intro P h\n  exact h.2.elim (fun x hx => hx (h.1 x))\n"),
         ]:
             name = fixture.stem
             for status in ["sat", "unsat", "unknown"]:
@@ -127,6 +131,10 @@ def main():
             "(set-logic ALL)\n(declare-fun P (Real) Bool)\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int Int) Int)\n(assert (= (f 1) 0))\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int) Int)\n(assert (= (f true) 0))\n(check-sat)",
+            "(set-logic ALL)\n(assert (forall ((x Real)) true))\n(check-sat)",
+            "(set-logic QF_LIA)\n(assert (forall ((x Int)) (> x 0)))\n(check-sat)",
+            "(set-logic ALL)\n(assert (exists ((p Bool)) (ite p true false)))\n(check-sat)",
+            "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"
@@ -150,7 +158,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: expected outputs, 17 standalone translations, metadata, and 3 completed proofs")
+    print("Demo passed: expected outputs, 22 standalone translations, metadata, and 4 completed proofs")
 
 
 if __name__ == "__main__":

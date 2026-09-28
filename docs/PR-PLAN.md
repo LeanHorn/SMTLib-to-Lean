@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**PR 5 is complete and ready for review. Next: PR 6, universal and existential binders.**
-Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, and 5.1–5.4 are implemented and verified on Lean 4.33.1. PRs 2–5 have
+**PR 6 is complete and ready for review. Next: PR 7, integer Horn-clause validation.**
+Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, 5.1–5.4, and 6.1–6.3 are implemented and verified on Lean 4.33.1. PRs 2–6 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -240,11 +240,23 @@ metadata rather than guessing filenames.
 
       **Verified:** `congruence.smt2` matches its reviewed `expected/Query.lean` with absent/sat/unsat/unknown status. The README's two-line proof compiles with warnings treated as errors and has no axiom dependencies. The existing runner passes from outside the repository: reconstruction smoke, seventeen standalone translations and isolated statement sections, all three completed README proofs, rejection diagnostics, and overwrite protection. All generated test files are temporary. The README now lists supported Bool/Int function signatures and the function demo command.
 
-   **PR 5 complete:** All four executable targets build; the parser, seventeen handwritten translation/emission comparisons, and full demo runner pass. Tasks 5.2–5.4 were completed together at the user's request; their changes remain uncommitted for review.
+   **PR 5 complete:** All four executable targets build; the parser, seventeen handwritten translation/emission comparisons, and full demo runner pass. Tasks 5.2–5.4 were completed together at the user's request.
 
-- [ ] **6. Translate universal and existential binders.** Extend the working term translator with forall/exists, preserving sort annotations, shadowing, body-only variables, and bound-term identity. Initially cover Int and Bool using the existing context bridge.
+- [x] **6. Translate universal and existential binders.** Extend the working term translator with forall/exists, preserving sort annotations, shadowing, body-only variables, and bound-term identity. Initially cover Int and Bool using the existing context bridge.
 
    **Merge when:** Nested forall/exists fixtures translate through the CLI and elaborate with their original scopes, including Bool variables used as data.
+
+   - [x] **6.1. Validate quantified inputs and binding scope.** Accept `UF`, `LIA`, `NIA`, `UFLIA`, and `UFNIA` alongside `ALL`/absent logic. Traverse forall/exists bodies with their active native variables; reject out-of-scope identities, unsupported binder sorts, patterns, and quantifiers in `QF_*` logics. Check shared terms again when the scope changes.
+
+      **Verified:** Parser checks pass for all added logics, the combined scope fixture, and rejection diagnostics. Direct native-term tests reject a dangling variable even after the same subterm passed inside a quantifier, and reject a different variable with the same printed name.
+
+   - [x] **6.2. Reconstruct binders by native identity.** Add a small forall/exists handler in `Translate.lean`. Seed each fresh term cache with active native-variable/Lean-parameter bindings, reconstruct the body with existing lean-smt handlers, then close all binders and restore the enclosing cache. Preserve unused variables.
+
+      **Verified:** All twenty-two handwritten translation/emission comparisons pass. The combined fixture covers alternation, shadowing across sorts, an outer variable retained through a `let` alias, quoted names, premise-only/unused variables, and quantified Boolean arguments. Reconstructed and emitted statements agree, have no axiom dependencies, and compile using only Lean core.
+
+   - [x] **6.3. Finish the quantified demo.** Print binder types explicitly so unused existential variables elaborate. Add the small `forall x, P x` / `exists x, not P x` demo, reviewed output, and README proof. Extend the existing CLI runner with metadata variants, failure cases, and overwrite checks; retain earlier demos.
+
+      **Verified:** The runner passes from outside the repository: reconstruction smoke, twenty-two standalone files and their isolated statements, four completed README proofs, rejection diagnostics, and overwrite protection. The quantified output matches its checked-in version for absent/sat/unsat/unknown metadata. Its completed proof has no axioms or admissions. All four executable targets build, and all generated test files are temporary. PR 6 is complete; its changes remain uncommitted for review.
 
 - [ ] **7. Recognize and validate integer Horn clauses.** Add the relation declarations and minimal typed clause records needed for the CHC path. Recognize relation-free theory guards, relation premises, and relation/False heads in the already supported Int/Bool fragment. Validate all clauses before emitting a CHC goal; report errors by input/query/clause until exact source spans arrive.
 

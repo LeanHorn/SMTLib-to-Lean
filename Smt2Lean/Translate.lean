@@ -6,6 +6,30 @@ namespace Smt2Lean.Translate
 open Lean Meta Qq
 open Backend
 
+/-- Bind by native identity so shadowed names cannot capture an outer variable. -/
+@[smt_term_reconstruct] private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
+  let kind ← ofExcept term.getKind
+  unless kind == .FORALL || kind == .EXISTS do return none
+  let variables := term[0]!.getChildren
+  let declarations ← variables.mapM fun (binder : cvc5.Term) => do
+    let type ← Smt.Reconstruct.reconstructSort (← ofExcept binder.getSort)
+    let name ← mkFreshUserName (Name.mkSimple (← ofExcept binder.getSymbol))
+    return (name, type)
+  -- Carry outer variable bindings, but discard cached expressions from that scope.
+  let bindings := (← get).termCache.filter fun binder _ => binder.getKind! == .VARIABLE
+  withLocalDeclsDND declarations fun parameters => Smt.Reconstruct.withNewTermCache do
+    let mut cache := bindings
+    for binder in variables, parameter in parameters do
+      cache := cache.insert binder parameter
+    modify fun state => { state with termCache := cache }
+    let body ← Smt.Reconstruct.reconstructTerm term[1]!
+    if kind == .FORALL then
+      return ← mkForallFVars parameters body (usedOnly := false)
+    else
+      let result ← parameters.foldrM (init := body) fun parameter body => do
+        mkAppM ``Exists #[← mkLambdaFVars #[parameter] body]
+      return result
+
 /--
 Reconstruct a parsed query using fresh parameters of each declaration's Lean type.
 Use the parameters and assertions inside `inspect`, while their local context exists.
