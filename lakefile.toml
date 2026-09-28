@@ -33,3 +33,7 @@ root = "tests.backend.Parser"
 name = "testTranslation"
 root = "tests.backend.Translation"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "testHorn"
+root = "tests.backend.Horn"

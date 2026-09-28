@@ -127,7 +127,13 @@ leaving it restores the enclosing cache. This avoids upstream's name-based looku
 capturing an outer variable beneath a same-named binder. Formula bodies still use
 the existing reconstructors. Explicit binder types in emitted source preserve
 unused existential witnesses. Quantifier patterns and unsupported binder sorts
-are rejected; HORN input remains deferred to the CHC path.
+are rejected; HORN translation remains deferred to the CHC path.
+
+Task 7.1 adds explicit CHC parsing mode to the same backend. It additionally
+accepts HORN while retaining the supported sort/operator/scope checks. `testHorn`
+parses the unedited lh_sum_rec file and checks its declaration, three assertions,
+and non-query invocation trace. Horn clause-shape validation is still separate;
+the ordinary CLI keeps rejecting HORN until the CHC emitter is connected in PR 8.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

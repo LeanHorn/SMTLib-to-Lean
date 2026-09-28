@@ -28,9 +28,15 @@ The translator's own checks run from the repository root without solving in cvc5
 lake exe testParser          # tests/backend/Parser.lean
 lake exe testReconstruction  # tests/backend/Reconstruction.lean
 lake exe testTranslation     # tests/backend/Translation.lean
+lake exe testHorn            # tests/backend/Horn.lean
 ```
 
 `Parser.lean` checks accepted queries and rejection diagnostics.
+`Horn.lean` parses the unedited `chc/lh_sum_rec.smt2` in explicit CHC mode. It checks
+one typed declaration, three quantified assertions, and an invocation trace with
+no solver query. Unsupported terms/sorts and invalid command sequences still fail
+before inspection. This currently checks parsing, not Horn clause shape. The CLI
+tests also verify that the same file is rejected without creating output.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
 contexts, and twenty-two closed Bool/Int refutations against handwritten Lean propositions.

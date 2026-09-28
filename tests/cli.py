@@ -122,6 +122,12 @@ def main():
         run(tmp / "missing.smt2", "--out", missing_output, code=1)
         assert not missing_output.exists()
 
+        horn = ROOT / "tests/chc/lh_sum_rec.smt2"
+        horn_output = tmp / "horn"
+        result = run(horn, "--out", horn_output, code=1)
+        assert f"{horn}: command 1:" in result.stderr and "unsupported logic" in result.stderr
+        assert not horn_output.exists()
+
         invalid = [
             "(set-logic HORN)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(check-sat)",

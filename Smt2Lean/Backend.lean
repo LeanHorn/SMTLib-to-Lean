@@ -17,6 +17,12 @@ and the reconstruction tests to turn assertion terms into Lean propositions.
 
 namespace Smt2Lean.Backend
 
+/-- CHC mode additionally permits HORN; clause-shape validation is separate. -/
+inductive ParseMode where
+  | smt
+  | chc
+  deriving BEq
+
 /-- An SMT name and its native identity. No Lean name has been assigned yet. -/
 structure ParsedDeclaration where
   name : String
@@ -141,11 +147,13 @@ A higher-order function that parses and validates SMT-LIB commands without solvi
 Accepts supported Bool/Int declarations and assertions, metadata, and one `check-sat`.
 Only metadata and an optional final `exit` may follow the check.
 Calls `inspect` once with the declarations, assertions, and executed command names.
+HORN requires explicit CHC mode; this parser does not check Horn clause shape.
 -/
 def parseAndInspectQuery
     (input : String)
     (inspect : ParsedQuery → cvc5.Env Unit)
-    (name : String := "backend-smoke") : cvc5.Env Unit := do
+    (name : String := "backend-smoke")
+    (mode : ParseMode := .smt) : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
   let solver  ← cvc5.Solver.new tm
   let symbols ← cvc5.SymbolManager.new tm
@@ -168,9 +176,10 @@ def parseAndInspectQuery
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
       match commandName with
       | "set-logic" =>
-        unless #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
+        let supported := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
             "UF", "LIA", "NIA", "UFLIA", "UFNIA", "ALL"].any
-            (fun logic => cmd.toString == s!"(set-logic {logic})") do
+            (fun logic => cmd.toString == s!"(set-logic {logic})")
+        unless supported || (mode == .chc && cmd.toString == "(set-logic HORN)") do
           throw (.unsupported s!"unsupported logic: {cmd}")
         invokeCommand cmd solver symbols
         allowQuantifiers := !cmd.toString.startsWith "(set-logic QF_"

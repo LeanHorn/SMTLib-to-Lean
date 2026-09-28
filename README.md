@@ -289,6 +289,18 @@ Unsupported input is rejected before `inspect` runs, including content after
 `check-sat` or `exit`. Errors include the input name and command number. cvc5 may
 print a warning when no logic is supplied; the same term validation still applies.
 
+## CHC parser check
+
+```sh
+lake exe testHorn
+```
+
+This parses the unedited `tests/chc/lh_sum_rec.smt2` in explicit CHC mode:
+one declaration, three quantified assertions, and no solver query. It reuses the
+Bool/Int sort, scope, operator, and command checks. Horn clause-shape validation
+comes in tasks 7.2–7.4. The CLI still rejects HORN input; CHC Lean output follows
+in PR 8.
+
 ## Translation checks
 
 The translator reconstructs assertions and kernel-checks a closed refutation
