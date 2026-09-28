@@ -54,7 +54,7 @@ Run the automated demo checks with Python 3 installed:
 tests/translation/run-demo.sh
 ```
 
-The script checks both the Boolean and integer demos: expected outputs, metadata
+The script checks the Boolean, integer, and function demos: expected outputs, metadata
 variants, standalone statements and templates, and the completed proofs shown here.
 It also checks rejection cases and overwrite protection, using temporary
 directories that are removed afterwards.
@@ -105,19 +105,46 @@ SMT `Bool` results become Lean propositions. All generated code uses Lean core;
 The combined [arithmetic fixture](tests/translation/int/arithmetic.smt2) covers
 these operators, nested absolute values, large integers, and comparison chains.
 
-## Translate integer functions
+## Translate functions and predicates
 
-Task 5.1 supports declarations such as `(declare-fun f (Int Int) Int)` and nested
-applications. Each function becomes a Lean parameter, here `f : Int → Int → Int`.
+Functions can take any mixture of `Bool` and `Int` arguments and return either
+sort. Each declaration becomes a Lean parameter; `Bool` becomes `Prop`, including
+when used as an argument.
+
+| SMT-LIB declaration | Lean parameter type |
+| --- | --- |
+| `(declare-fun f (Int Int) Int)` | `Int → Int → Int` |
+| `(declare-fun P (Int) Bool)` | `Int → Prop` |
+| `(declare-fun g (Bool Int) Int)` | `Prop → Int → Int` |
+| `(declare-fun b (Bool) Bool)` | `Prop → Prop` |
+
+The small congruence demo asserts `x = y` and `f(x) ≠ f(y)`:
 
 ```sh
-lake exe smt2lean tests/translation/functions/applications.smt2 --out function-demo
+lake exe smt2lean tests/translation/functions/congruence.smt2 --out function-demo
 lake env lean function-demo/Query.lean
 ```
 
-The combined fixture checks argument order, nested calls, an unused function, and
-a quoted name matching Lean's `Int.add`. Output still uses only Lean core, with an
-unfinished proof. Predicates and Boolean function arguments follow in tasks 5.2–5.3.
+Open `function-demo/Query.lean` and compare it with the
+[expected output](tests/translation/functions/expected/Query.lean).
+Replace its Proofs section with:
+
+```lean
+-- Proofs
+
+theorem refutation : Refutation := by
+  intro f x y h
+  exact h.2 (congrArg f h.1)
+```
+
+`congrArg f h.1` derives `f x = f y` from `x = y`, contradicting `h.2`.
+Run the same Lean command again; the proof checks without `sorry` or axiom
+dependencies. The generated file uses only Lean core.
+
+The combined [applications fixture](tests/translation/functions/applications.smt2)
+covers nested functions and predicates, compound Boolean arguments, argument
+order, unused parameters, and quoted names matching `Int.add` and `True`.
+Only first-order Bool/Int signatures are supported. Input quantifiers follow in PR 6.
 
 ## Development build
 
@@ -204,7 +231,8 @@ expression and its kernel validation.
 Supported inputs:
 
 - Nullary `Bool` or `Int` declarations, using `declare-const` or `declare-fun`.
-- Functions with one or more `Int` arguments and an `Int` result, including nested calls.
+- Functions with one or more `Bool`/`Int` arguments and either result sort, including
+  nested calls and compound Boolean arguments. Bool results are Lean propositions.
 - Boolean literals and `not`, `and`, `or`, and `=>`.
 - Integer literals, unary `-`, and `=` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
@@ -232,7 +260,7 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders fourteen cases, compares the re-elaborated statements with
+This test also renders seventeen cases, compares the re-elaborated statements with
 the original expressions, and compiles each generated file using only Lean core.
 It checks that `Refutation` has no axiom dependencies and only its proof is admitted.
 
@@ -252,5 +280,5 @@ A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
 kernel-checked and has no axiom dependencies. This checks its type, not its truth.
 
-PRs 3 and 4 provide the Boolean and integer demos above. PR 5 adds functions; see the
-[implementation plan](docs/PR-PLAN.md).
+PRs 3–5 provide the Boolean, integer, and function demos above. Next is PR 6:
+input quantifiers. See the [implementation plan](docs/PR-PLAN.md).

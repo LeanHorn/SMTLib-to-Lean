@@ -28,12 +28,15 @@ structure ParsedQuery where
   assertions : Array cvc5.Term := #[]
   invoked : Array String := #[]
 
-/-- This step supports functions whose arguments and result are all Int. -/
-private def isIntegerFunction (sort : cvc5.Sort) : cvc5.Env Bool := do
+private def isScalarSort (sort : cvc5.Sort) : Bool :=
+  sort.isBoolean || sort.isInteger
+
+/-- First-order functions whose arguments and result are Bool or Int. -/
+private def isSupportedFunction (sort : cvc5.Sort) : cvc5.Env Bool := do
   unless sort.isFunction do return false
   let domains ← ofExcept sort.getFunctionDomainSorts
   let result ← ofExcept sort.getFunctionCodomainSort
-  return !domains.isEmpty && domains.all (·.isInteger) && result.isInteger
+  return !domains.isEmpty && domains.all isScalarSort && isScalarSort result
 
 /-- Check every node's sort, operator, and declaration identity. -/
 def validateAssertion (root : cvc5.Term)
@@ -48,7 +51,7 @@ def validateAssertion (root : cvc5.Term)
     if visited.contains term then continue
     visited := visited.insert term
     let sort ← ofExcept term.getSort
-    unless sort.isBoolean || sort.isInteger do
+    unless isScalarSort sort do
       throw (.unsupported s!"expected Bool or Int, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
@@ -58,7 +61,7 @@ def validateAssertion (root : cvc5.Term)
       unless declarations.any (·.term == function) do
         throw (.unsupported s!"undeclared term: {function}")
       let signature ← ofExcept function.getSort
-      unless ← isIntegerFunction signature do
+      unless ← isSupportedFunction signature do
         throw (.unsupported s!"unsupported function signature: {signature}")
       let domains ← ofExcept signature.getFunctionDomainSorts
       let arguments := children.extract 1 children.size
@@ -152,8 +155,8 @@ def parseAndInspectQuery
           throw (.error "expected one new declaration")
         let term := terms.back!
         let sort ← ofExcept term.getSort
-        unless sort.isBoolean || sort.isInteger || (← isIntegerFunction sort) do
-          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, or Int → … → Int")
+        unless isScalarSort sort || (← isSupportedFunction sort) do
+          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, or a function with Bool/Int arguments and result")
         let symbol ← ofExcept term.getSymbol
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")

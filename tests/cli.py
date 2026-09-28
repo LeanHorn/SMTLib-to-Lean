@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / ".lake/build/bin/smt2lean"
 FIXTURES = ROOT / "tests/translation/bool"
 INTEGERS = ROOT / "tests/translation/int"
+FUNCTIONS = ROOT / "tests/translation/functions"
 
 
 def run(*args, code=0):
@@ -56,6 +57,7 @@ def main():
     expected = {
         "contradiction": (FIXTURES / "expected/Query.lean").read_text(),
         "bounds": (INTEGERS / "expected/Query.lean").read_text(),
+        "congruence": (FUNCTIONS / "expected/Query.lean").read_text(),
     }
     assert "Usage:" in run("--help").stdout
     for args in [(), ("--unknown",), ("input.smt2",),
@@ -66,7 +68,7 @@ def main():
         tmp = Path(temporary)
         inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty"]]
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
-        inputs += [ROOT / "tests/translation/functions/applications.smt2"]
+        inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
         for fixture in inputs:
             name = fixture.stem
             output = tmp / name
@@ -87,6 +89,7 @@ def main():
         for fixture, proof in [
             (FIXTURES / "contradiction.smt2", "  intro p h\n  exact h.2 h.1\n"),
             (INTEGERS / "bounds.smt2", "  intro x h\n  exact Int.not_lt_of_ge h.1 h.2\n"),
+            (FUNCTIONS / "congruence.smt2", "  intro f x y h\n  exact h.2 (congrArg f h.1)\n"),
         ]:
             name = fixture.stem
             for status in ["sat", "unsat", "unknown"]:
@@ -102,11 +105,11 @@ def main():
             completed.write_text(finished + "\n#print axioms refutation\n")
             axioms = check_lean(lean, completed, complete=True)
             assert "sorryAx" not in axioms, axioms
-            if name == "contradiction":
-                assert "does not depend on any axioms" in axioms
-            else:
+            if name == "bounds":
                 # This core integer-order lemma uses propositional extensionality.
                 assert "depends on axioms: [propext]" in axioms
+            else:
+                assert "does not depend on any axioms" in axioms
             saved = completed.read_text()
             run(fixture, "--out", completed.parent, code=1)
             assert completed.read_text() == saved
@@ -121,7 +124,7 @@ def main():
             "(set-logic QF_UF)\n(check-sat)\n(assert",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (div x 0) 0))\n(check-sat)",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (mod x 0) 0))\n(check-sat)",
-            "(set-logic ALL)\n(declare-fun P (Int) Bool)\n(check-sat)",
+            "(set-logic ALL)\n(declare-fun P (Real) Bool)\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int Int) Int)\n(assert (= (f 1) 0))\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int) Int)\n(assert (= (f true) 0))\n(check-sat)",
         ]
@@ -147,7 +150,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: expected outputs, 13 standalone translations, metadata, and 2 completed proofs")
+    print("Demo passed: expected outputs, 17 standalone translations, metadata, and 3 completed proofs")
 
 
 if __name__ == "__main__":

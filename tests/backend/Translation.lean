@@ -151,12 +151,28 @@ def main : IO Unit := do
   runQuery env "integer bounds" bounds fun query =>
     checkRefutation query q(∀ x : Int, (x ≥ 0 ∧ x < 0) → False)
   let functions ← IO.FS.readFile "tests/translation/functions/applications.smt2"
-  runQuery env "integer functions" functions fun query => do
+  runQuery env "functions and predicates" functions fun query => do
     checkUnmapped query
     checkFunctionIsolation query
     checkRefutation query q(∀ (f : Int → Int) (g namedAdd : Int → Int → Int)
-      (_unused : Int → Int) (x y : Int) (p : Prop),
+      (_unused : Int → Int) (x y : Int) (p : Prop) (P : Int → Prop) (R : Int → Int → Prop)
+      (b : Prop → Prop) (choose : Prop → Int → Int) (test : Int → Prop → Prop)
+      (namedTrue : Prop → Int) (_unusedBool : Prop → Int → Prop),
       (g x y = f x - f y ∧ f (g y x) = g (f y) (f x) ∧ namedAdd x y = x - y ∧
         (p → f (x + 1) > f x) ∧ g x x = f (f x) ∧
-        f 340282366920938463463374607431768211457 = g 0 (-1)) → False)
-  IO.println "Translation passed: 14 refutations and generated files; existing proof work preserved"
+        f 340282366920938463463374607431768211457 = g 0 (-1) ∧
+        (P x ∧ ¬P (f x)) ∧ (P (g x y) → R (f x) (g y x)) ∧ R x y = p ∧
+        choose p (f x) = choose (¬p) y ∧ test x (p ∧ P x) ∧ b (¬p) = (P y ∨ R x y) ∧
+        b (b True) = b False ∧ choose (x = y) (x - y) = namedTrue (p → P (f x)) ∧
+        test (choose (P (f x)) (g x y)) (b p) = b (p = P x)) → False)
+  -- Reuse f and x in separate inputs with different signatures and scalar sorts.
+  runQuery env "Bool to Int"
+    "(set-logic ALL)\n(declare-fun f (Bool) Int)\n(declare-const x Bool)\n(assert (= (f x) 1))\n(check-sat)"
+    fun query => checkRefutation query q(∀ (f : Prop → Int) (x : Prop), f x = 1 → False)
+  runQuery env "Int to Bool"
+    "(set-logic ALL)\n(declare-fun f (Int) Bool)\n(declare-const x Int)\n(assert (f x))\n(check-sat)"
+    fun query => checkRefutation query q(∀ (f : Int → Prop) (x : Int), f x → False)
+  let congruence ← IO.FS.readFile "tests/translation/functions/congruence.smt2"
+  runQuery env "function congruence" congruence fun query =>
+    checkRefutation query q(∀ (f : Int → Int) (x y : Int), (x = y ∧ ¬f x = f y) → False)
+  IO.println "Translation passed: 17 refutations and generated files; existing proof work preserved"
