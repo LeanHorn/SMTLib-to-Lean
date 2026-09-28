@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Task 7.3 is complete and ready for review. Next: 7.4, premise validation.**
-Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, 5.1–5.4, and 6.1–6.3 are implemented and verified on Lean 4.33.1. PRs 2–6 have
+**PR 7 is complete and ready for review. Next: PR 8, CHC Lean output.**
+Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, 5.1–5.4, 6.1–6.3, and 7.1–7.5 are implemented and verified on Lean 4.33.1. PRs 2–7 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -258,7 +258,7 @@ metadata rather than guessing filenames.
 
       **Verified:** The runner passes from outside the repository: reconstruction smoke, twenty-two standalone files and their isolated statements, four completed README proofs, rejection diagnostics, and overwrite protection. The quantified output matches its checked-in version for absent/sat/unsat/unknown metadata. Its completed proof has no axioms or admissions. All four executable targets build, and all generated test files are temporary. PR 6 is complete; its changes remain uncommitted for review.
 
-- [ ] **7. Recognize and validate integer Horn clauses.** Add the relation declarations and minimal typed clause records needed for the CHC path. Recognize relation-free theory guards, relation premises, and relation/False heads in the already supported Int/Bool fragment. Validate all clauses before emitting a CHC goal; report errors by input/query/clause until exact source spans arrive.
+- [x] **7. Recognize and validate integer Horn clauses.** Add the relation declarations and minimal typed clause records needed for the CHC path. Recognize relation-free theory guards, relation premises, and relation/False heads in the already supported Int/Bool fragment. Validate all clauses before emitting a CHC goal; report errors by input/query/clause until exact source spans arrive.
 
    **Merge when:** Accept facts, multi-premise rules, nullary relations, and the clauses in lh_sum_rec; reject an explicitly negated body relation or disjunctive relation heads with the offending clause identified. No Flex integration is needed.
 
@@ -291,9 +291,11 @@ metadata rather than guessing filenames.
 
       **Verified:** `lake exe testHorn` passes. `validateQuery` returns a complete `Problem` with ordered, classified premises; `parseAndInspectProblem` calls its callback only after the entire input passes. lh_sum_rec has relation-premise counts 0/1/1. The combined fixture now has twelve clauses, including a nonlinear rule with three relation premises and nested conjunctions; conjunctions inside guard disjunctions stay intact. Bound Bool negation remains a guard even when it shadows a nullary relation. Negated/hidden/nested relations and unsupported operators fail. No CHC Lean output is added. Changes are uncommitted for review.
 
-   - [ ] **7.5. Finish the validation checks and diagnostics.** Reuse the unedited lh_sum_rec file and one combined CHC fixture; keep short invalid cases inline. Report failures with the input filename, query number (1 for this single-query driver), and source clause/assertion number. Document the supported clause shape and `lake exe testHorn`; keep existing demos passing.
+   - [x] **7.5. Finish the validation checks and diagnostics.** Reuse the unedited lh_sum_rec file and one combined CHC fixture; keep short invalid cases inline. Report failures with the input filename, query number (1 for this single-query driver), and source clause/assertion number. Document the supported clause shape and `lake exe testHorn`; keep existing demos passing.
 
       **Check:** lh_sum_rec yields one relation, one fact, one recursive rule, and one false-head clause. Changing status metadata leaves that structure unchanged. A bad later clause rejects the whole problem. The parser, Horn validator, translation checks, and existing demo runner pass. No CHC Lean output or Flex execution is introduced in this PR.
+
+      **Verified:** Horn checks compare complete lh_sum_rec structure under absent/sat/unsat/unknown status metadata. Inline cases reject a bad third clause before the problem callback, checking the filename, query 1, clause 3, and reason, including parser-level unsupported operators. Declaration errors identify the input/query and symbol; command errors retain their command number. README documents the supported shape, callback, and diagnostic format. All five executable targets build. Parser checks, Horn checks, twenty-two translation checks, and the demo runner's twenty-two standalone outputs/four completed proofs pass; `git diff --check` is clean. Changes remain uncommitted for review. PR 8 has not started.
 
 - [ ] **8. Translate the first existing CHC file end to end.** Connect the Horn validator to the existing CLI and emitter. For HORN input, close all declared relations with leading existentials and conjoin universally quantified clauses; include nullary relations. Generate the positive `Problem` proposition and a separate `sorry` theorem independently of recorded status. Preserve original predicate arguments at this point; normalization follows as its own PR.
 
