@@ -6,7 +6,7 @@ open Smt2Lean
 private def usage : String :=
   "Usage: smt2lean <input.smt2> --out <new-directory>\n" ++
   "       smt2lean --help\n\n" ++
-  "Translate one Boolean SMT-LIB query into Query.lean: statements, then proofs.\n" ++
+  "Translate one supported Bool/Int SMT-LIB query into Query.lean: statements, then proofs.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++
   "The proof template contains sorry and must be completed in Lean."
 

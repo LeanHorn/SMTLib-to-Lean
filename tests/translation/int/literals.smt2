@@ -1,0 +1,13 @@
+; Mixed sorts, both declaration forms, quoted names, and exact values beyond 64 bits.
+(set-logic QF_LIA)
+(declare-const |Int| Int)
+(declare-const flag Bool)
+(declare-fun |a b| () Int)
+(declare-const unused Int)
+(assert (= |Int| 0))
+(assert (= |a b| 340282366920938463463374607431768211457))
+(assert (= (- |a b|) (- 340282366920938463463374607431768211457)))
+(assert (=> flag (= |Int| 0)))
+(assert (= |Int| 0 (- 0)))
+(check-sat)
+(exit)

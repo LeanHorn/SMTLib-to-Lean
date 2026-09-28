@@ -1,11 +1,12 @@
 import cvc5
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
+import Smt.Reconstruct.Int
 
 /-!
 Parse a restricted SMT-LIB script with cvc5 without solving it.
 
-Accept one Boolean query, with declarations, assertions, and optional metadata.
+Accept one Bool/Int query, with declarations, assertions, and optional metadata.
 Intercept `check-sat` and pass the validated query to a callback after reading
 the entire input. Report failures with the input name and command number.
 
@@ -16,19 +17,21 @@ and the reconstruction tests to turn assertion terms into Lean propositions.
 namespace Smt2Lean.Backend
 
 /-- An SMT name and its native identity. No Lean name has been assigned yet. -/
-structure BoolDeclaration where
+structure ParsedDeclaration where
   name : String
   term : cvc5.Term
 
-/-- Internal data for one Boolean query. Use native terms only inside `inspect`. -/
-structure BoolQuery where
-  declarations : Array BoolDeclaration := #[]
+/-- One validated query. Use native terms only inside `inspect`. -/
+structure ParsedQuery where
+  declarations : Array ParsedDeclaration := #[]
   assertions : Array cvc5.Term := #[]
   invoked : Array String := #[]
 
 /-- Check every node's sort, operator, and declaration identity. -/
-def validateBooleanTerm (root : cvc5.Term)
-    (declarations : Array BoolDeclaration) : cvc5.Env Unit := do
+def validateAssertion (root : cvc5.Term)
+    (declarations : Array ParsedDeclaration) : cvc5.Env Unit := do
+  unless (← ofExcept root.getSort).isBoolean do
+    throw (.unsupported "expected a Bool assertion")
   let mut pending := #[root]
   let mut visited : Std.HashSet cvc5.Term := {}
   while !pending.isEmpty do
@@ -36,21 +39,22 @@ def validateBooleanTerm (root : cvc5.Term)
     pending := pending.pop
     if visited.contains term then continue
     visited := visited.insert term
-    unless (← ofExcept term.getSort).isBoolean do
-      throw (.unsupported s!"expected Bool, got {← ofExcept term.getSort}")
+    let sort ← ofExcept term.getSort
+    unless sort.isBoolean || sort.isInteger do
+      throw (.unsupported s!"expected Bool or Int, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
     let validArity ← match kind with
-      | .CONST_BOOLEAN => pure children.isEmpty
+      | .CONST_BOOLEAN | .CONST_INTEGER => pure children.isEmpty
       | .CONSTANT => do
         unless declarations.any (·.term == term) do
-          throw (.unsupported s!"undeclared Boolean term: {term}")
+          throw (.unsupported s!"undeclared term: {term}")
         pure children.isEmpty
-      | .NOT => pure (children.size == 1)
+      | .NOT | .NEG => pure (children.size == 1)
       | .AND | .OR | .IMPLIES => pure (children.size >= 2)
       -- cvc5 expands chained equality into a conjunction of binary equalities.
       | .EQUAL => pure (children.size == 2)
-      | _ => throw (.unsupported s!"unsupported Boolean operator: {kind}")
+      | _ => throw (.unsupported s!"unsupported operator: {kind}")
     unless validArity do
       throw (.unsupported s!"unsupported arity for {kind}: {children.size}")
     pending := pending ++ children
@@ -79,20 +83,20 @@ private def commandError (name : String) (ordinal : Nat) : cvc5.Error → cvc5.E
 
 /--
 A higher-order function that parses and validates SMT-LIB commands without solving.
-Accepts Boolean declarations and assertions, supported metadata, and one `check-sat`.
+Accepts supported Bool/Int declarations and assertions, metadata, and one `check-sat`.
 Only metadata and an optional final `exit` may follow the check.
 Calls `inspect` once with the declarations, assertions, and executed command names.
 -/
 def parseAndInspectQuery
     (input : String)
-    (inspect : BoolQuery → cvc5.Env Unit)
+    (inspect : ParsedQuery → cvc5.Env Unit)
     (name : String := "backend-smoke") : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
   let solver  ← cvc5.Solver.new tm
   let symbols ← cvc5.SymbolManager.new tm
   let parser  ← cvc5.InputParser.new solver (some symbols)
   parser.setStringInput input (name := name)
-  let mut query : BoolQuery := {}
+  let mut query : ParsedQuery := {}
   let mut checked := false
   let mut exited := false
   let mut ordinal := 1
@@ -108,8 +112,9 @@ def parseAndInspectQuery
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
       match commandName with
       | "set-logic" =>
-        unless cmd.toString == "(set-logic QF_UF)" || cmd.toString == "(set-logic ALL)" do
-          throw (.unsupported s!"expected QF_UF or ALL, got {cmd}")
+        unless #["QF_UF", "QF_LIA", "QF_NIA", "ALL"].any
+            (fun logic => cmd.toString == s!"(set-logic {logic})") do
+          throw (.unsupported s!"expected QF_UF, QF_LIA, QF_NIA, or ALL, got {cmd}")
         invokeCommand cmd solver symbols
         query := { query with invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
@@ -119,8 +124,8 @@ def parseAndInspectQuery
           throw (.error "expected one new declaration")
         let term := terms.back!
         let sort ← ofExcept term.getSort
-        unless sort.isBoolean do
-          throw (.unsupported s!"only nullary Bool declarations are supported, got {sort}")
+        unless sort.isBoolean || sort.isInteger do
+          throw (.unsupported s!"only nullary Bool/Int declarations are supported, got {sort}")
         let symbol ← ofExcept term.getSymbol
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")
@@ -132,7 +137,7 @@ def parseAndInspectQuery
         let assertions ← solver.getAssertions
         let some term := assertions.back?
           | throw (.error "assert command did not store a formula")
-        validateBooleanTerm term query.declarations
+        validateAssertion term query.declarations
         query := { query with invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
       | "check-sat" =>

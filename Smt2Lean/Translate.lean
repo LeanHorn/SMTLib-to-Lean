@@ -7,16 +7,19 @@ open Lean Meta Qq
 open Backend
 
 /--
-Reconstruct a parsed query using fresh Prop parameters for its declarations.
+Reconstruct a parsed query using fresh Prop or Int parameters for its declarations.
 Use the parameters and assertions inside `inspect`, while their local context exists.
 -/
-def withAssertions [Inhabited α] (query : BoolQuery)
+def withAssertions [Inhabited α] (query : ParsedQuery)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
   -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
   for assertion in query.assertions do
-    (validateBooleanTerm assertion query.declarations).runIO
-  let declarations ← query.declarations.mapIdxM fun i _ => do
-    return (← mkFreshUserName (Name.mkSimple s!"p{i}"), q(Prop))
+    (validateAssertion assertion query.declarations).runIO
+  let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) => do
+    let sort ← ofExcept declaration.term.getSort
+    let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
+    let stem := if sort.isBoolean then "p" else "x"
+    return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
   withLocalDeclsDND declarations fun parameters => do
     let mut userNames : Std.HashMap String Expr := {}
     for declaration in query.declarations, parameter in parameters do
@@ -36,7 +39,7 @@ def withAssertions [Inhabited α] (query : BoolQuery)
 Define `Refutation : Prop := ∀ parameters, (assertions) → False` in the Lean environment.
 An empty assertion set means `True`. Kernel-check the definition, without proving it.
 -/
-def defineRefutation (query : BoolQuery) (name : Name := `Refutation) : MetaM Expr := do
+def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM Expr := do
   let value ← withAssertions query fun parameters assertions => do
     let body ← mkArrow (mkAndN assertions.toList) q(False)
     mkForallFVars parameters body (usedOnly := false)

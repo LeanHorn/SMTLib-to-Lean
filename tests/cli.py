@@ -88,6 +88,11 @@ def main():
         ) + "\n#print axioms refutation\n")
         assert "does not depend on any axioms" in check_lean(lean, completed, complete=True)
 
+        output = tmp / "integers"
+        run(ROOT / "tests/translation/int/literals.smt2", "--out", output)
+        source = check_generated(lean, output)
+        assert "340282366920938463463374607431768211457" in source
+
         missing_output = tmp / "missing-output"
         run(tmp / "missing.smt2", "--out", missing_output, code=1)
         assert not missing_output.exists()
@@ -96,6 +101,8 @@ def main():
             "(set-logic HORN)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(assert",
+            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (div x 0) 0))\n(check-sat)",
+            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (mod x 0) 0))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"
@@ -119,7 +126,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: expected output, 6 standalone translations, metadata, and completed proof")
+    print("Demo passed: expected output, 7 standalone translations, metadata, and completed proof")
 
 
 if __name__ == "__main__":

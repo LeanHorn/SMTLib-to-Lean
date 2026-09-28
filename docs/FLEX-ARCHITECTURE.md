@@ -85,8 +85,13 @@ and the README walkthrough. The script exercises the actual CLI, checks six
 generated queries (including status variants), and compiles both each full file
 and its statement section alone. It also completes the contradiction example's
 proof without axioms and runs the existing CLI rejection and overwrite checks.
-All generated test files are temporary. This completes PR 3's Boolean demo;
-integer translation starts in PR 4.
+All generated test files are temporary. This completes PR 3's Boolean demo.
+
+Task 4.1 extends the same path to nullary `Int` declarations, exact literals, unary
+minus, and equality. `ParsedQuery` replaces the Boolean-specific query name.
+`withAssertions` reconstructs each declaration's sort to create `Prop` or `Int`
+parameters. The existing CLI and emitter produce Lean-core-only files; arithmetic
+and comparisons are enabled separately in tasks 4.2–4.3.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

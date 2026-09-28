@@ -7,10 +7,11 @@ tests/translation/run-bool.sh
 ```
 
 The script builds the CLI, runs the reconstruction smoke test, and runs `cli.py`.
-The CLI checks compile six
+The CLI checks compile seven
 generated files and their statement sections using Lean core, compare the
 contradiction and its status variants with `translation/bool/expected/Query.lean`,
-and check the README's completed contradiction proof without axioms. Python 3 is required.
+and check the README's completed contradiction proof without axioms. They also
+compile the combined integer-literal fixture. Python 3 is required.
 
 For the original LiquidHaskell (`lh_*`) and Flux (`flux_*`) queries:
 
@@ -29,11 +30,11 @@ lake exe testTranslation     # tests/backend/Translation.lean
 `Parser.lean` checks accepted queries and rejection diagnostics.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
-contexts, and eight closed refutations against handwritten Lean propositions.
+contexts, and eleven closed Bool/Int refutations against handwritten Lean propositions.
 It also compares the printed statements with the original expressions and compiles
 each `Query.lean` using only Lean core. Statements have no axiom dependencies;
 only the following proof templates contain admissions. Existing proof work is
-preserved. The test reuses the three fixtures below.
+preserved. The tests reuse the combined fixtures below.
 
 Run the CLI/demo checks without rebuilding the smoke test:
 
@@ -51,10 +52,16 @@ All generated test files go into temporary directories and are removed afterward
   names, an unused declaration, metadata, and exit in one query.
 - `empty.smt2`: a query with no assertions.
 
-`backend/Parser.lean` reuses these for logic and metadata variants. Its 26 short
+`translation/int/literals.smt2` combines mixed Bool/Int declarations, quoted names,
+unused parameters, chained equality, unary minus, zero, and integers beyond 64 bits.
+The translation test compares its complete formula with a handwritten Lean target.
+
+`backend/Parser.lean` reuses these for logic and metadata variants. Its short
 rejection cases live together in a table: each needs a separate parse because
 validation stops at the first error. Checks cover declaration identity and error
 locations; invalid input must never reach the inspection callback.
+Arithmetic and comparisons remain rejected until their PR 4 subtasks; div/mod,
+Real declarations, and non-nullary functions are also rejected.
 
 ## `smt/`: verification conditions (8)
 

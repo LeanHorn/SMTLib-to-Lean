@@ -10,6 +10,8 @@ def render (refutation : Expr) : MetaM String := do
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true
       |>.setBool `pp.proofs true
+      -- Without annotations, a closed equality such as 1 = 2 defaults to Nat.
+      |>.setBool `pp.numericTypes true
       |> (pp.maxSteps.set · 1000000)) do
     return (← ppExpr refutation).pretty
   if body.contains "⋯" then
