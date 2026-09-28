@@ -13,6 +13,23 @@ structure RelationAtom where
   relation : Relation
   arguments : Array cvc5.Term
 
+/-- One universal variable, retaining its native identity and sort. -/
+structure Binder where
+  term : cvc5.Term
+  sort : cvc5.Sort
+
+inductive ClauseHead where
+  | relation (atom : RelationAtom)
+  | falsity
+
+/-- Extracted clause structure. Premises still need Horn validation in 7.4. -/
+structure Clause where
+  /-- One-based position in the source assertions. -/
+  assertionNumber : Nat
+  binders : Array Binder
+  premises : Array cvc5.Term
+  head : ClauseHead
+
 /-- Collect every declared relation, including unused ones. Use within the parser callback. -/
 def collectRelations (declarations : Array ParsedDeclaration) : cvc5.Env (Array Relation) :=
   declarations.mapM fun declaration => do
@@ -58,10 +75,54 @@ def relationAtom? (relations : Array Relation) (term : cvc5.Term) : cvc5.Env (Op
   checkArguments arguments
   return some { relation, arguments }
 
-/-- Recognize a bare relation assertion. Quantified facts and rules follow in 7.3. -/
+/-- Recognize a bare relation assertion; use extractClause for quantified clauses. -/
 def recognizeFact (relations : Array Relation) (assertion : cvc5.Term) : cvc5.Env RelationAtom := do
   let some atom ← relationAtom? relations assertion
     | throw (.unsupported s!"expected a relation fact, got {assertion}")
   return atom
+
+/-- After leading forall binders, every premise and head must be quantifier-free. -/
+private def checkNoQuantifiers (root : cvc5.Term) : cvc5.Env Unit := do
+  let mut pending := #[root]
+  let mut visited : Std.HashSet cvc5.Term := {}
+  while !pending.isEmpty do
+    let term := pending.back!
+    pending := pending.pop
+    if visited.contains term then continue
+    visited := visited.insert term
+    let kind ← ofExcept term.getKind
+    if kind == .FORALL || kind == .EXISTS then
+      throw (.unsupported "CHC quantifiers must be leading forall binders")
+    pending := pending ++ term.getChildren
+
+/--
+Extract leading binders, implication premises, and a relation/false head.
+Input must already be parsed and scope-checked. Keep native terms in the callback.
+Conjunctions in premises stay intact; their classification follows in 7.4.
+-/
+def extractClause (relations : Array Relation) (assertionNumber : Nat)
+    (assertion : cvc5.Term) : cvc5.Env Clause := do
+  let mut binders := #[]
+  let mut body := assertion
+  while (← ofExcept body.getKind) == .FORALL do
+    for term in body[0]!.getChildren do
+      binders := binders.push { term, sort := ← ofExcept term.getSort : Binder }
+    body := body[1]!
+  checkNoQuantifiers body
+  let mut premises := #[]
+  while (← ofExcept body.getKind) == .IMPLIES do
+    let children := body.getChildren
+    premises := premises ++ children.pop
+    body := children.back!
+  let falseHead ← if (← ofExcept body.getKind) == .CONST_BOOLEAN then
+    Bool.not <$> ofExcept body.getBooleanValue
+  else pure false
+  let head ← if falseHead then
+    pure ClauseHead.falsity
+  else do
+    let some atom ← relationAtom? relations body
+      | throw (.unsupported s!"expected a relation or false as CHC head, got {body}")
+    pure (ClauseHead.relation atom)
+  return { assertionNumber, binders, premises, head }
 
 end Smt2Lean.Chc

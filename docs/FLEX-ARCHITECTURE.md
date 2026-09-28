@@ -143,6 +143,14 @@ are rejected. Relation arguments may contain bound variables and theory terms,
 but no other relation occurrences. Bare facts are recognized; quantified clause
 extraction and rule validation follow in 7.3–7.4.
 
+Task 7.3 adds `Chc.extractClause`. Each extracted clause retains its one-based
+assertion number, leading universal variables with native sorts/identities,
+ordered implication premises, and a relation/false head. Nested leading forall
+groups are collected without renaming variables; chained implications are split
+along their consequents. Existentials and non-leading quantifiers are rejected.
+Premise conjunctions remain intact, and relation arguments retain their original
+expressions. These are intermediate records; premise validation remains 7.4.
+
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`
 lets seven parse; `lh_sets_neg` still fails on Z3's indexed array `map`. Input files

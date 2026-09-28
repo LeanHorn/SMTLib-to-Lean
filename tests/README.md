@@ -37,7 +37,10 @@ one typed declaration, three quantified assertions, and an invocation trace with
 no solver query. Unsupported terms/sorts and invalid command sequences still fail
 before inspection. It also recognizes relations and bare facts, checks native
 identity and bound Bool arguments, and rejects unsupported CHC declarations and
-relations nested inside arguments. Quantified facts and rules remain for 7.3–7.4.
+relations nested inside arguments. Clause extraction checks assertion numbers,
+binder identities/sorts, premise order, and relation/false heads. Existential or
+non-leading quantifiers and unsupported heads are rejected. Premise classification
+and validation remain for 7.4.
 The CLI tests verify that HORN input is rejected without creating output.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
@@ -91,11 +94,15 @@ The parser test also constructs native terms with a dangling variable and a
 different variable with the same name. Both must fail scope validation, even when
 the same subterm was already accepted under a quantifier.
 
-`translation/chc/clauses.smt2` combines six relation declarations and five bare
-facts: unary/multi-argument and nullary relations, mixed Bool/Int arguments,
-arithmetic, quoted names, and an unused relation. Short invalid cases stay inline
-in `Horn.lean`. Separate checks distinguish a bound Bool from a same-named nullary
-relation and reject a different native symbol with the same printed name.
+`translation/chc/clauses.smt2` combines six relation declarations and eleven clauses:
+five bare facts, a quantified fact, four rules, and a bare false assertion. It
+covers mixed sorts, arithmetic, quoted names, unused relations/variables, chained
+implications, and shadowed leading binders. Tests preserve argument and premise
+order, including conjunctions awaiting validation in 7.4. The unedited lh_sum_rec
+fixture retains its three clauses with binder counts 3/5/3 and heads k_1/k_1/false.
+Short invalid cases stay inline in `Horn.lean`. Separate checks distinguish a bound
+Bool from a same-named nullary relation and reject a different native symbol with
+the same printed name.
 
 The translation test compares each complete formula with a handwritten Lean target.
 Emitted absolute values use only core `if/then/else`; comparison chains retain

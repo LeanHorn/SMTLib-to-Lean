@@ -289,7 +289,7 @@ Unsupported input is rejected before `inspect` runs, including content after
 `check-sat` or `exit`. Errors include the input name and command number. cvc5 may
 print a warning when no logic is supplied; the same term validation still applies.
 
-## CHC relation and fact checks
+## CHC clause extraction
 
 ```sh
 lake exe testHorn
@@ -297,7 +297,7 @@ lake exe testHorn
 
 This parses the unedited `tests/chc/lh_sum_rec.smt2` in explicit CHC mode:
 one declaration, three quantified assertions, and no solver query. It also checks
-the combined [relation/fact fixture](tests/translation/chc/clauses.smt2).
+the combined [clause fixture](tests/translation/chc/clauses.smt2).
 
 `Smt2Lean.Chc` recognizes Bool-valued relations over Bool/Int and bare facts such
 as `(P 0)` or a nullary `done`. It retains native symbol identities, argument
@@ -305,7 +305,15 @@ order, and unused relations. Bound Bool variables remain data. Global Int
 constants, Int-valued functions, and relations inside relation arguments are
 outside this initial CHC profile.
 
-Quantified clauses and rules follow in tasks 7.3–7.4. The CLI still rejects HORN
+`extractClause` records the source assertion number, leading `forall` variables
+with their sorts, ordered implication premises, and a relation or `false` head.
+Unused variables and original argument expressions are retained. For lh_sum_rec,
+the three clauses have 3/5/3 binders and heads `k_1`, `k_1`, and `false`.
+Existential clauses, quantifiers below the leading binders, and unsupported heads
+are rejected.
+
+Conjunctions in premises remain intact. Classifying and validating those premises
+as relation calls or theory guards follows in 7.4. The CLI still rejects HORN
 input; CHC Lean output follows in PR 8.
 
 ## Translation checks

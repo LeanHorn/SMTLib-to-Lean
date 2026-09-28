@@ -5,6 +5,10 @@ open Smt2Lean.Backend Smt2Lean.Chc
 private def require (condition : Bool) (message : String) : IO Unit := do
   unless condition do throw (IO.userError message)
 
+private def headName : ClauseHead → String
+  | .relation atom => atom.relation.name
+  | .falsity => "false"
+
 private def checkRejected (name input : String) (ordinal : Nat) (reason : String)
     (mode : ParseMode := .chc) : IO Unit := do
   let inspected ← IO.mkRef false
@@ -36,6 +40,16 @@ private def checkParser : IO Unit := do
     require (query.assertions.size == 3) "expected three assertions"
     let relations ← collectRelations query.declarations
     require (relations.size == 1) "expected one CHC relation"
+    let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
+    require (clauses.map (·.assertionNumber) == #[1, 2, 3]) "wrong assertion numbers"
+    require (clauses.map (·.binders.size) == #[3, 5, 3]) "lh_sum_rec lost universal variables"
+    require (clauses.map (headName ∘ (·.head)) == #["k_1", "k_1", "false"])
+      "wrong lh_sum_rec heads"
+    for clause in clauses, count in #[3, 5, 5] do
+      require (clause.premises.size == 1) "expected one unflattened premise per clause"
+      let premise := clause.premises[0]!
+      require ((← ofExcept premise.getKind) == .AND && premise.getNumChildren == count)
+        "lh_sum_rec premise changed"
     for assertion in query.assertions do
       require ((← ofExcept assertion.getSort).isBoolean &&
         (← ofExcept assertion.getKind) == .FORALL)
@@ -57,7 +71,7 @@ private def checkParser : IO Unit := do
   ] do
     checkRejected s!"horn-{name}" ("(set-logic HORN)\n" ++ suffix) ordinal reason
 
-private def checkFacts : IO Unit := do
+private def checkClauses : IO Unit := do
   let path := "tests/translation/chc/clauses.smt2"
   let input ← IO.FS.readFile path
   (parseAndInspectQuery input (name := path) (mode := .chc) fun query => do
@@ -69,12 +83,45 @@ private def checkFacts : IO Unit := do
       "wrong relation signatures"
     for relation in relations, declaration in query.declarations do
       require (relation.term == declaration.term) "relation identity changed"
-    let facts ← query.assertions.mapM (recognizeFact relations)
+    let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
+    require (clauses.map (·.assertionNumber) == (List.range 11).toArray.map (· + 1))
+      "wrong clause count or source assertion numbers"
+    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0])
+      "wrong binder counts"
+    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0])
+      "wrong premise counts"
+    require (clauses.map (headName ∘ (·.head)) ==
+      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false"])
+      "wrong clause heads"
+    let facts ← (query.assertions.extract 0 5).mapM (recognizeFact relations)
     require (facts.map (·.relation.term) == (query.declarations.extract 0 5).map (·.term))
       "facts refer to the wrong declarations"
     require (facts.map (fun f => f.arguments.map toString) ==
       #[#["0"], #["7", "(and true (not false))", "(- 9 4)"], #[], #[], #["(= 1 2)", "(+ 10 2)"]])
       "fact arguments changed or were reordered"
+    -- Distinct antecedents catch accidental reversal or loss of chained implications.
+    let some chained := clauses[6]? | throw (.error "missing chained implication")
+    require (chained.premises.map toString == #["(P x)", "(and (> y x) b)"])
+      "nested implication premises changed"
+    let .relation head := chained.head | throw (.error "expected a relation head")
+    require (head.arguments.map toString == #["(+ x 1)", "b", "x"])
+      "head arguments were normalized or reordered"
+    let some multi := clauses[7]? | throw (.error "missing multi-operand implication")
+    require (multi.premises.map toString == #["(> x 0)", "(P x)"])
+      "multi-operand implication premises changed"
+    let some shadowed := clauses[8]? | throw (.error "missing shadowing clause")
+    let #[outer, inner, flag, onlyBody, unused] := shadowed.binders
+      | throw (.error "missing shadowed, premise-only, or unused variables")
+    require (shadowed.binders.map (fun b => toString b.sort) == #["Int", "Int", "Bool", "Int", "Bool"])
+      "binder sorts changed"
+    require (outer.term != inner.term &&
+      (← ofExcept outer.term.getSymbol) == "x" && (← ofExcept inner.term.getSymbol) == "x")
+      "shadowed binders lost their native identity"
+    let .relation head := shadowed.head | throw (.error "expected a relation head")
+    require (head.arguments == #[outer.term, flag.term, inner.term]) "shadowed head captured a variable"
+    require (shadowed.premises[0]![2]![0]! == onlyBody.term &&
+      (← ofExcept unused.term.getSymbol) == "unused")
+      "premise-only or unused binder changed"
   ).runIO
 
 private def expectError (name reason : String) (action : cvc5.Env Unit) : IO Unit := do
@@ -118,6 +165,26 @@ private def checkBoundData : IO Unit := do
       "bound Bool variable was mistaken for the nullary relation named p"
   ).runIO
 
+private def checkRejectedClauses : IO Unit := do
+  for (name, assertion, reason) in #[
+    ("existential", "(exists ((x Int)) (P x))", "leading forall"),
+    ("forall-exists", "(forall ((x Int)) (exists ((y Int)) (P y)))", "leading forall"),
+    ("quantified-premise", "(=> (forall ((x Int)) (P x)) false)", "leading forall"),
+    ("quantified-head", "(=> done (forall ((x Int)) (P x)))", "leading forall"),
+    ("quantified-argument", "(R 0 (exists ((p Bool)) p) 1)", "leading forall"),
+    ("disjunctive-head", "(forall ((x Int)) (=> (P x) (or (P x) done)))", "as CHC head"),
+    ("theory-head", "(forall ((x Int)) (=> (P x) (> x 0)))", "as CHC head"),
+    ("true-head", "(=> done true)", "as CHC head")
+  ] do
+    let input := "(set-logic HORN)\n(declare-fun P (Int) Bool)\n" ++
+      "(declare-fun R (Int Bool Int) Bool)\n(declare-const done Bool)\n" ++
+      s!"(assert {assertion})\n(check-sat)"
+    expectError name reason <| parseAndInspectQuery input (name := name) (mode := .chc)
+      fun query => do
+        let relations ← collectRelations query.declarations
+        for h : i in [:query.assertions.size] do
+          discard <| extractClause relations (i + 1) query.assertions[i]
+
 private def checkNativeIdentity : IO Unit :=
   expectError "native identity" "undeclared CHC relation" do
     let tm ← cvc5.TermManager.new
@@ -130,9 +197,10 @@ private def checkNativeIdentity : IO Unit :=
 
 def main : IO Unit := do
   checkParser
-  checkFacts
+  checkClauses
   checkRejectedFacts
   checkBoundData
+  checkRejectedClauses
   checkNativeIdentity
-  IO.println "Horn checks passed: lh_sum_rec parsed; 6 relations and 5 facts recognized"
-  IO.println "No solver query invoked. Quantified facts and rules follow in 7.3."
+  IO.println "Horn extraction passed: lh_sum_rec (3 clauses) and combined fixture (11 clauses)"
+  IO.println "No solver query invoked. Premise validation follows in 7.4."

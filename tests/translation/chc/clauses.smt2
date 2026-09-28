@@ -1,4 +1,4 @@
-; Relations and facts: ordered arguments, mixed sorts, quoted names, unused relations.
+; Relations, facts, and rules: ordered arguments, mixed sorts, shadowing, unused binders.
 (set-logic HORN)
 (declare-fun P (Int) Bool)
 (declare-fun R (Int Bool Int) Bool)
@@ -11,5 +11,17 @@
 (assert done)
 (assert |True|)
 (assert (|a b| (= 1 2) (+ 10 2)))
+; Quantified fact; retain both unused variables.
+(assert (forall ((x Int) (p Bool) (unused Int)) (P x)))
+; Nested and multi-operand implications retain premise order.
+(assert (forall ((x Int) (y Int) (b Bool))
+  (=> (P x) (=> (and (> y x) b) (R (+ x 1) b x)))))
+(assert (forall ((x Int)) (=> (> x 0) (P x) done)))
+; The outer x survives beneath the same-named inner binder through a let alias.
+(assert (forall ((x Int)) (let ((outer x))
+  (forall ((x Int) (flag Bool) (onlyBody Int) (unused Bool))
+    (=> (and (< outer x) flag (= onlyBody 7)) (R outer flag x))))))
+(assert (=> done false))
+(assert false)
 (check-sat)
 (exit)

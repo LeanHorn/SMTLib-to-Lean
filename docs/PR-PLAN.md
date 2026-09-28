@@ -17,7 +17,7 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Task 7.2 is complete and ready for review. Next: 7.3, quantified rules and heads.**
+**Task 7.3 is complete and ready for review. Next: 7.4, premise validation.**
 Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, 5.1–5.4, and 6.1–6.3 are implemented and verified on Lean 4.33.1. PRs 2–6 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
@@ -279,9 +279,11 @@ metadata rather than guessing filenames.
 
       **Verified:** `lake exe testHorn` passes: the combined `tests/translation/chc/clauses.smt2` yields six relations and five bare facts with original native identities, argument sorts, and argument order. Checks distinguish a bound Bool from a same-named nullary relation and reject a different native symbol with the same printed name. Unsupported declarations, direct/hidden/nullary relation arguments, and non-fact assertions fail. The unedited lh_sum_rec parser check remains intact. CLI and Horn targets build; the existing demo runner passes all twenty-two standalone outputs and four completed proofs, including ordinary-CLI rejection of HORN. Quantified clause extraction remains 7.3. Changes are uncommitted for review.
 
-   - [ ] **7.3. Extract universally quantified rules and heads.** Peel leading `forall` binders, retaining every native variable and its sort, including unused and premise-only variables. Split implications into ordered premises and a final head; support chained implications. Accept relation heads and literal `false`. Extend the fact record into a clause containing binders, premises, head, and source assertion number. Preserve original argument expressions; argument normalization follows later.
+   - [x] **7.3. Extract universally quantified rules and heads.** Peel leading `forall` binders, retaining every native variable and its sort, including unused and premise-only variables. Split implications into ordered premises and a final head; support chained implications. Accept relation heads and literal `false`. Extend the fact record into a clause containing binders, premises, head, and source assertion number. Preserve original argument expressions; argument normalization follows later.
 
       **Check:** Extract all three lh_sum_rec clauses with binder counts 3/5/3 and heads `k_1`, `k_1`, and `false`. Nested/shadowed leading binders retain identity. Reject existential clauses, quantifiers inside premises/heads, and unsupported heads such as `or (P x) (Q x)`.
+
+      **Verified:** `lake exe testHorn` passes: lh_sum_rec retains all three clauses with binder counts 3/5/3 and heads `k_1`, `k_1`, and `false`. The combined fixture now covers eleven clauses, checking source assertion numbers, mixed-sort/unused/shadowed binders, chained premise order, and unchanged head arguments. Existential and non-leading quantifiers, disjunctive heads, theory heads, and literal `true` heads fail explicitly. CLI and Horn targets build; the demo runner passes all twenty-two standalone translations and four completed proofs. Premise conjunctions remain intact and unclassified until 7.4; CHC Lean output remains PR 8. Changes are uncommitted for review.
 
    - [ ] **7.4. Validate relation premises and theory guards.** Flatten conjunctions in premises while preserving their order. Classify each premise as a positive relation atom or a supported Bool/Int formula containing no unknown relation anywhere in its term tree. Keep relation-free disjunctions and negations intact. Accept any number of relation premises; only return a validated problem after every clause passes.
 
