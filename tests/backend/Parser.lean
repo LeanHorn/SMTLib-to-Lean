@@ -77,6 +77,20 @@ private def checkAcceptedQueries : IO Unit := do
           "expected an Int declaration"
         require ((← ofExcept flag.term.getSort).isBoolean)
           "expected a Bool declaration"
+  let arithmetic ← IO.FS.readFile "tests/translation/int/arithmetic.smt2"
+  checkAccepted "arithmetic.smt2" arithmetic #["x", "y", "z", "p"] 9
+    (#["set-logic"] ++ Array.replicate 4 "declare-fun" ++ Array.replicate 9 "assert")
+    fun query => do
+      let chainGroups := query.assertions.back![1]!.getChildren
+      require (chainGroups.size == 4) "expected all four comparison chains"
+      for chain in chainGroups do
+        require ((← ofExcept chain.getKind) == .AND && chain.getNumChildren == 3)
+          "a four-operand chain must produce three comparisons"
+        for comparison in chain.getChildren do
+          require (comparison.getNumChildren == 2) "expected a binary comparison"
+  let bounds ← IO.FS.readFile "tests/translation/int/bounds.smt2"
+  checkAccepted "bounds.smt2" bounds #["x"] 2
+    #["set-logic", "declare-fun", "assert", "assert"]
 
 private def checkRejectedQueries : IO Unit := do
   -- Each invalid script needs its own parse: the first error stops validation.
@@ -139,15 +153,14 @@ private def checkRejectedQueries : IO Unit := do
   for (name, input, ordinal, reason) in rejected do
     checkRejected s!"reject-{name}" input ordinal reason
   -- Registering lean-smt's integer handlers must not enable unaudited operators.
-  for (term, kind) in #[("(+ x 1)", "ADD"), ("(- x 1)", "SUB"),
-      ("(* x x)", "MULT"), ("(abs x)", "ABS"),
+  for (term, kind) in #[("(div x 2)", "INTS_DIVISION"), ("(mod x 2)", "INTS_MODULUS"),
       ("(div x 0)", "INTS_DIVISION"), ("(mod x 0)", "INTS_MODULUS")] do
     checkRejected s!"reject-{kind}"
-      s!"(set-logic ALL)\n(declare-const x Int)\n(assert (= {term} 0))\n(check-sat)"
+      s!"(set-logic ALL)\n(declare-const x Int)\n(assert (= (+ 1 {term}) 0))\n(check-sat)"
       3 s!"unsupported operator: {kind}"
-  checkRejected "reject-comparison"
-    "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (< x 0))\n(check-sat)"
-    3 "unsupported operator: LT"
+  checkRejected "reject-real-comparison"
+    "(set-logic ALL)\n(assert (< 1.0 2.0))\n(check-sat)"
+    2 "expected Bool or Int"
 
 def main : IO Unit := do
   checkAcceptedQueries

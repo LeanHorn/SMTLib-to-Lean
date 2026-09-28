@@ -59,20 +59,29 @@ compiles the generated statements and templates, and checks the completed proof
 above. It also checks rejection cases and overwrite protection, using temporary
 directories that are removed afterwards.
 
-## Translate integer declarations and literals
+## Translate integer queries
 
-Task 4.1 adds `Int` variables, exact integer literals, unary minus, and equality:
+Translate contradictory integer bounds with the same command:
 
 ```sh
-lake exe smt2lean tests/translation/int/literals.smt2 --out integer-demo
+lake exe smt2lean tests/translation/int/bounds.smt2 --out integer-demo
 lake env lean integer-demo/Query.lean
 ```
 
 SMT `Bool` declarations become Lean `Prop` parameters; `Int` declarations become
 Lean `Int` parameters. Literals keep their exact values, including values beyond
 64 bits. The generated file still uses only Lean core, with statements followed
-by an unfinished proof. Arithmetic and comparisons follow in tasks 4.2–4.3;
-`div` and `mod` remain unsupported.
+by an unfinished proof. This example states `∀ x : Int, (x ≥ 0 ∧ x < 0) → False`.
+
+Supported integer operators are `+`, `-`, `*`, `abs`, `=`, `<`, `<=`, `>`, and `>=`.
+Arithmetic accepts two or more operands; unary `-` and `abs` accept one.
+Subtraction is left-associative, and comparison chains preserve every adjacent
+pair, following [SMT-LIB Ints](https://smt-lib.org/theories-Ints.shtml).
+The emitter expands `abs x` to `if x < 0 then -x else x`, keeping files independent
+of lean-smt. `div` and `mod` remain unsupported.
+
+The combined [arithmetic fixture](tests/translation/int/arithmetic.smt2) covers
+these operators, nested absolute values, large integers, and comparison chains.
 
 ## Development build
 
@@ -161,6 +170,7 @@ Supported inputs:
 - Nullary `Bool` or `Int` declarations, using `declare-const` or `declare-fun`.
 - Boolean literals and `not`, `and`, `or`, and `=>`.
 - Integer literals, unary `-`, and `=` over either supported sort.
+- Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
 - No `set-logic`, or an initial `QF_UF`, `QF_LIA`, `QF_NIA`, or `ALL` logic.
   Every term is validated; accepting a logic does not enable all its operators.
 - `set-info` fields `:status`, `:source`, `:category`, `:license`, `:notes`, and
@@ -185,7 +195,7 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders eleven cases, compares the re-elaborated statements with
+This test also renders thirteen cases, compares the re-elaborated statements with
 the original expressions, and compiles each generated file using only Lean core.
 It checks that `Refutation` has no axiom dependencies and only its proof is admitted.
 

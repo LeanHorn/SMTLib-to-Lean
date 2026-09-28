@@ -90,8 +90,14 @@ All generated test files are temporary. This completes PR 3's Boolean demo.
 Task 4.1 extends the same path to nullary `Int` declarations, exact literals, unary
 minus, and equality. `ParsedQuery` replaces the Boolean-specific query name.
 `withAssertions` reconstructs each declaration's sort to create `Prop` or `Int`
-parameters. The existing CLI and emitter produce Lean-core-only files; arithmetic
-and comparisons are enabled separately in tasks 4.2–4.3.
+parameters. The existing CLI and emitter produce Lean-core-only files.
+
+Tasks 4.2–4.3 enable integer arithmetic and comparisons through the same validated
+reconstruction path. Arithmetic preserves operand order; cvc5 lowers comparison
+chains into adjacent binary comparisons. Before printing, the emitter unfolds
+lean-smt's `Int.abs` to its core `if/then/else` definition. Combined fixtures check
+these mappings against handwritten formulas and compile the emitted files using
+only Lean core. Div/mod remain unsupported.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

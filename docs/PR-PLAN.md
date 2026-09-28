@@ -17,7 +17,7 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Next: task 4.2, integer arithmetic. Task 4.1 is implemented and verified.** Tasks 2.1–2.3
+**Next: task 4.4, finish the integer demo. Tasks 4.1–4.3 are implemented and verified.** Tasks 2.1–2.3
 and 3.1–3.6 are implemented and verified on Lean 4.33.1. PRs 2 and 3 are complete and have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
@@ -191,13 +191,17 @@ metadata rather than guessing filenames.
 
       **Verified:** All four executable targets build. Parser checks pass for the supported logic profiles and unsupported constructs. `testTranslation` checks eleven refutations, including the mixed-sort fixture, an unused Int parameter, and closed integer equality; their emitted definitions match the original expressions and have no axiom dependencies. The emitter explicitly annotates numerals after this check caught Lean defaulting a closed equality to Nat. The reconstruction smoke and CLI/demo checks pass, including seven standalone translations, unchanged Boolean expected output, the completed Boolean proof, div/mod rejection, and overwrite protection. Only one new SMT fixture was added: `tests/translation/int/literals.smt2`.
 
-   - [ ] **4.2. Translate integer arithmetic.** Enable n-ary `+`, `-`, and `*`, plus `abs`, after checking the pinned reconstructors' operand order and arities. Preserve left-associative subtraction. Make `abs` output self-contained: its upstream definition is not in Lean core.
+   - [x] **4.2. Translate integer arithmetic.** Enable n-ary `+`, `-`, and `*`, plus `abs`, after checking the pinned reconstructors' operand order and arities. Preserve left-associative subtraction. Make `abs` output self-contained: its upstream definition is not in Lean core.
 
       **Check:** One combined arithmetic fixture matches handwritten expressions, including `(- x y z)`, nested negation, nonlinear multiplication, and absolute value at negative/zero/positive inputs. Its emitted statement compiles independently. Div/mod remain rejected, including division by zero.
 
-   - [ ] **4.3. Translate integer comparisons.** Enable `<`, `<=`, `>`, and `>=`; confirm cvc5's lowering of chained comparisons preserves every adjacent pair. Add a small contradictory integer-bound example using the existing CLI.
+      **Verified:** The validator enables the audited arithmetic kinds; lean-smt reconstructs them without a new translator. The emitter unfolds only `Int.abs` to its core `if/then/else` definition, including nested uses. The combined `arithmetic.smt2` matches a handwritten formula covering left-associative subtraction, nonlinear multiplication, nested negation, independent abs semantics, and exact arithmetic beyond 64 bits. Parser, translation, and CLI checks pass; printed statements match the in-memory formulas and compile using Lean core. Div/mod with zero and nonzero divisors remain rejected even inside supported arithmetic.
+
+   - [x] **4.3. Translate integer comparisons.** Enable `<`, `<=`, `>`, and `>=`; confirm cvc5's lowering of chained comparisons preserves every adjacent pair. Add a small contradictory integer-bound example using the existing CLI.
 
       **Check:** Compare all four operators and three-or-more-operand chains with handwritten Lean propositions. Preserve operand direction and every operand; mixed Bool/Int assertions and generated files pass the existing checks.
+
+      **Verified:** The arithmetic fixture now includes four-operand chains for all four comparisons under a Boolean implication. Parser checks confirm three binary comparisons per chain; handwritten Lean targets verify their directions and all adjacent operands. `bounds.smt2` translates to `∀ x : Int, (x ≥ 0 ∧ x < 0) → False`. All four executable targets build, the parser and reconstruction smoke pass, and `testTranslation` checks thirteen refutations and their standalone files. The CLI/demo checks pass for nine generated queries and isolated statement sections, preserving the Boolean expected output, completed proof, rejection diagnostics, and existing output files. The README shows the bounds command. PR 4 remains open until task 4.4.
 
    - [ ] **4.4. Finish the integer demo.** Document the supported operator/signature table and add a reviewed expected output for the integer-bound example. Extend the existing demo checks and show how to replace its `sorry` with a completed Lean proof.
 

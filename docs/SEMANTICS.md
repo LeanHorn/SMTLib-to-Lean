@@ -2,7 +2,7 @@
 
 This document specifies what a supported SMT-LIB → Lean translation must mean.
 It is the contract for task 1 in [PR-PLAN.md](PR-PLAN.md), covering more than the
-Boolean fragment currently supported by the CLI. The architecture and investigated
+Bool/Int fragment currently supported by the CLI. The architecture and investigated
 dependencies are described in [FLEX-ARCHITECTURE.md](FLEX-ARCHITECTURE.md).
 
 The required result is a faithful, well-typed statement with an optional unfinished

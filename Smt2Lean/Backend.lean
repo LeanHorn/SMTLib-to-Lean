@@ -50,10 +50,10 @@ def validateAssertion (root : cvc5.Term)
         unless declarations.any (·.term == term) do
           throw (.unsupported s!"undeclared term: {term}")
         pure children.isEmpty
-      | .NOT | .NEG => pure (children.size == 1)
-      | .AND | .OR | .IMPLIES => pure (children.size >= 2)
-      -- cvc5 expands chained equality into a conjunction of binary equalities.
-      | .EQUAL => pure (children.size == 2)
+      | .NOT | .NEG | .ABS => pure (children.size == 1)
+      | .AND | .OR | .IMPLIES | .ADD | .SUB | .MULT => pure (children.size >= 2)
+      -- cvc5 expands chains into conjunctions of adjacent binary comparisons.
+      | .EQUAL | .LT | .LEQ | .GT | .GEQ => pure (children.size == 2)
       | _ => throw (.unsupported s!"unsupported operator: {kind}")
     unless validArity do
       throw (.unsupported s!"unsupported arity for {kind}: {children.size}")

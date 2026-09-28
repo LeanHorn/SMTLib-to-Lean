@@ -88,10 +88,12 @@ def main():
         ) + "\n#print axioms refutation\n")
         assert "does not depend on any axioms" in check_lean(lean, completed, complete=True)
 
-        output = tmp / "integers"
-        run(ROOT / "tests/translation/int/literals.smt2", "--out", output)
-        source = check_generated(lean, output)
-        assert "340282366920938463463374607431768211457" in source
+        for name in ["literals", "arithmetic", "bounds"]:
+            output = tmp / name
+            run(ROOT / f"tests/translation/int/{name}.smt2", "--out", output)
+            source = check_generated(lean, output)
+            if name != "bounds":
+                assert "340282366920938463463374607431768211457" in source
 
         missing_output = tmp / "missing-output"
         run(tmp / "missing.smt2", "--out", missing_output, code=1)
@@ -126,7 +128,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: expected output, 7 standalone translations, metadata, and completed proof")
+    print("Demo passed: expected output, 9 standalone translations, metadata, and completed proof")
 
 
 if __name__ == "__main__":

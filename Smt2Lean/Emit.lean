@@ -6,6 +6,8 @@ open Lean Meta
 
 /-- Render one file with statements first, followed by unfinished proofs. -/
 def render (refutation : Expr) : MetaM String := do
+  -- lean-smt's Int.abs is not in Lean core; emit its if/then/else definition.
+  let refutation ← deltaExpand refutation (· == ``Int.abs)
   let body ← withOptions (fun options => options
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true

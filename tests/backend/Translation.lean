@@ -124,4 +124,22 @@ def main : IO Unit := do
   runQuery env "closed integer equality"
     "(set-logic QF_LIA)\n(assert (= 1 2))\n(check-sat)" fun query =>
       checkRefutation query q((1 : Int) = 2 → False)
-  IO.println "Translation passed: 11 refutations and generated files; existing proof work preserved"
+  let arithmetic ← IO.FS.readFile "tests/translation/int/arithmetic.smt2"
+  runQuery env "integer arithmetic" arithmetic fun query =>
+    checkRefutation query q(
+      let abs := fun x : Int => if x < 0 then -x else x
+      ∀ (x y z : Int) (p : Prop),
+        ((x + y + z + 7) = (x - y - z) ∧ (x * y * z) = (x * -y) ∧ -(-x) = x ∧
+          (p → abs (-x) = abs x) ∧ abs (abs x) = abs x ∧
+          ((7 : Int) = 7 ∧ (0 : Int) = 0 ∧ (9 : Int) = 9) ∧
+          (340282366920938463463374607431768211457 : Int) + -1 =
+            340282366920938463463374607431768211456 ∧
+          (10 : Int) - 3 - 2 = 5 ∧
+          (p → (x < y ∧ y < z ∧ z < x + 1) ∧
+               (x ≤ y ∧ y ≤ z ∧ z ≤ x + 2) ∧
+               (x > y ∧ y > z ∧ z > x - 1) ∧
+               (x ≥ y ∧ y ≥ z ∧ z ≥ x - 2))) → False)
+  let bounds ← IO.FS.readFile "tests/translation/int/bounds.smt2"
+  runQuery env "integer bounds" bounds fun query =>
+    checkRefutation query q(∀ x : Int, (x ≥ 0 ∧ x < 0) → False)
+  IO.println "Translation passed: 13 refutations and generated files; existing proof work preserved"
