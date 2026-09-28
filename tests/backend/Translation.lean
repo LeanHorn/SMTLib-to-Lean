@@ -39,6 +39,14 @@ private def checkUnmapped (query : ParsedQuery) : MetaM Unit := do
   unless (← error.toMessageData.toString).contains "undeclared term" do
     throw error
 
+/-- Even nested reconstructions must not reuse the enclosing query's parameters. -/
+private def checkFunctionIsolation (query : ParsedQuery) : MetaM Unit :=
+  withAssertions query fun parameters _ =>
+    withAssertions query fun fresh assertions => do
+      for previous in parameters, current in fresh do
+        if previous == current || assertions.any (·.containsFVar previous.fvarId!) then
+          throwError "function reconstructions shared a parameter"
+
 private def runQuery (env : Environment) (name input : String)
     (check : ParsedQuery → MetaM Unit) : IO Unit :=
   (parseAndInspectQuery input (name := name) fun query => do
@@ -142,4 +150,13 @@ def main : IO Unit := do
   let bounds ← IO.FS.readFile "tests/translation/int/bounds.smt2"
   runQuery env "integer bounds" bounds fun query =>
     checkRefutation query q(∀ x : Int, (x ≥ 0 ∧ x < 0) → False)
-  IO.println "Translation passed: 13 refutations and generated files; existing proof work preserved"
+  let functions ← IO.FS.readFile "tests/translation/functions/applications.smt2"
+  runQuery env "integer functions" functions fun query => do
+    checkUnmapped query
+    checkFunctionIsolation query
+    checkRefutation query q(∀ (f : Int → Int) (g namedAdd : Int → Int → Int)
+      (_unused : Int → Int) (x y : Int) (p : Prop),
+      (g x y = f x - f y ∧ f (g y x) = g (f y) (f x) ∧ namedAdd x y = x - y ∧
+        (p → f (x + 1) > f x) ∧ g x x = f (f x) ∧
+        f 340282366920938463463374607431768211457 = g 0 (-1)) → False)
+  IO.println "Translation passed: 14 refutations and generated files; existing proof work preserved"

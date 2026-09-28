@@ -105,6 +105,20 @@ SMT `Bool` results become Lean propositions. All generated code uses Lean core;
 The combined [arithmetic fixture](tests/translation/int/arithmetic.smt2) covers
 these operators, nested absolute values, large integers, and comparison chains.
 
+## Translate integer functions
+
+Task 5.1 supports declarations such as `(declare-fun f (Int Int) Int)` and nested
+applications. Each function becomes a Lean parameter, here `f : Int → Int → Int`.
+
+```sh
+lake exe smt2lean tests/translation/functions/applications.smt2 --out function-demo
+lake env lean function-demo/Query.lean
+```
+
+The combined fixture checks argument order, nested calls, an unused function, and
+a quoted name matching Lean's `Int.add`. Output still uses only Lean core, with an
+unfinished proof. Predicates and Boolean function arguments follow in tasks 5.2–5.3.
+
 ## Development build
 
 Install [elan](https://github.com/leanprover/elan), Git, and a C++ toolchain
@@ -127,7 +141,7 @@ When deliberately refreshing dependency resolution, skip that cache hook:
 MATHLIB_NO_CACHE_ON_UPDATE=1 lake update
 ```
 
-The translator imports cvc5 and lean-smt's Boolean/builtin/integer term reconstructors
+The translator imports cvc5 and lean-smt's Boolean/builtin/integer/UF term reconstructors
 through `Smt2Lean/Backend.lean`. The direct dependencies are pinned to:
 
 | Dependency | Revision |
@@ -190,10 +204,11 @@ expression and its kernel validation.
 Supported inputs:
 
 - Nullary `Bool` or `Int` declarations, using `declare-const` or `declare-fun`.
+- Functions with one or more `Int` arguments and an `Int` result, including nested calls.
 - Boolean literals and `not`, `and`, `or`, and `=>`.
 - Integer literals, unary `-`, and `=` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
-- No `set-logic`, or an initial `QF_UF`, `QF_LIA`, `QF_NIA`, or `ALL` logic.
+- No `set-logic`, or an initial `QF_UF`, `QF_LIA`, `QF_NIA`, `QF_UFLIA`, `QF_UFNIA`, or `ALL` logic.
   Every term is validated; accepting a logic does not enable all its operators.
 - `set-info` fields `:status`, `:source`, `:category`, `:license`, `:notes`, and
   `:smt-lib-version 2.6`. Metadata is ignored, never used as an assumption.
@@ -217,13 +232,14 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders thirteen cases, compares the re-elaborated statements with
+This test also renders fourteen cases, compares the re-elaborated statements with
 the original expressions, and compiles each generated file using only Lean core.
 It checks that `Refutation` has no axiom dependencies and only its proof is admitted.
 
 `Smt2Lean.Translate.withAssertions` binds each SMT declaration to a fresh Lean
-`Prop` or `Int` parameter and reconstructs the assertions using Lean-SMT. Names such
-as `|True|` and `|Int|` stay variables. Unmapped terms fail, and each query has its own caches.
+parameter of its reconstructed type and reconstructs the assertions using Lean-SMT.
+Names such as `|True|`, `|Int|`, and `|Int.add|` stay parameters. Unmapped terms fail,
+and each query has its own caches.
 
 `defineRefutation` closes over all parameters and installs `Refutation : Prop`.
 For assertions `p` and `(not p)`, its body is:
@@ -236,5 +252,5 @@ A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
 kernel-checked and has no axiom dependencies. This checks its type, not its truth.
 
-PRs 3 and 4 provide the Boolean and integer demos above. Functions are next; see the
+PRs 3 and 4 provide the Boolean and integer demos above. PR 5 adds functions; see the
 [implementation plan](docs/PR-PLAN.md).

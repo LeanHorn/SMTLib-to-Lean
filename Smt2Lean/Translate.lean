@@ -7,7 +7,7 @@ open Lean Meta Qq
 open Backend
 
 /--
-Reconstruct a parsed query using fresh Prop or Int parameters for its declarations.
+Reconstruct a parsed query using fresh parameters of each declaration's Lean type.
 Use the parameters and assertions inside `inspect`, while their local context exists.
 -/
 def withAssertions [Inhabited α] (query : ParsedQuery)
@@ -18,7 +18,7 @@ def withAssertions [Inhabited α] (query : ParsedQuery)
   let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) => do
     let sort ← ofExcept declaration.term.getSort
     let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
-    let stem := if sort.isBoolean then "p" else "x"
+    let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
     return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
   withLocalDeclsDND declarations fun parameters => do
     let mut userNames : Std.HashMap String Expr := {}

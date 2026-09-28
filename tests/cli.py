@@ -66,6 +66,7 @@ def main():
         tmp = Path(temporary)
         inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty"]]
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
+        inputs += [ROOT / "tests/translation/functions/applications.smt2"]
         for fixture in inputs:
             name = fixture.stem
             output = tmp / name
@@ -120,6 +121,9 @@ def main():
             "(set-logic QF_UF)\n(check-sat)\n(assert",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (div x 0) 0))\n(check-sat)",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (mod x 0) 0))\n(check-sat)",
+            "(set-logic ALL)\n(declare-fun P (Int) Bool)\n(check-sat)",
+            "(set-logic QF_UFLIA)\n(declare-fun f (Int Int) Int)\n(assert (= (f 1) 0))\n(check-sat)",
+            "(set-logic QF_UFLIA)\n(declare-fun f (Int) Int)\n(assert (= (f true) 0))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"
@@ -143,7 +147,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: expected outputs, 12 standalone translations, metadata, and 2 completed proofs")
+    print("Demo passed: expected outputs, 13 standalone translations, metadata, and 2 completed proofs")
 
 
 if __name__ == "__main__":

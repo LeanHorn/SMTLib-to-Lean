@@ -2,6 +2,7 @@ import cvc5
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
 import Smt.Reconstruct.Int
+import Smt.Reconstruct.UF
 
 /-!
 Parse a restricted SMT-LIB script with cvc5 without solving it.
@@ -27,6 +28,13 @@ structure ParsedQuery where
   assertions : Array cvc5.Term := #[]
   invoked : Array String := #[]
 
+/-- This step supports functions whose arguments and result are all Int. -/
+private def isIntegerFunction (sort : cvc5.Sort) : cvc5.Env Bool := do
+  unless sort.isFunction do return false
+  let domains ← ofExcept sort.getFunctionDomainSorts
+  let result ← ofExcept sort.getFunctionCodomainSort
+  return !domains.isEmpty && domains.all (·.isInteger) && result.isInteger
+
 /-- Check every node's sort, operator, and declaration identity. -/
 def validateAssertion (root : cvc5.Term)
     (declarations : Array ParsedDeclaration) : cvc5.Env Unit := do
@@ -44,6 +52,26 @@ def validateAssertion (root : cvc5.Term)
       throw (.unsupported s!"expected Bool or Int, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if kind == .APPLY_UF then
+      let some function := children[0]?
+        | throw (.unsupported "function application has no function")
+      unless declarations.any (·.term == function) do
+        throw (.unsupported s!"undeclared term: {function}")
+      let signature ← ofExcept function.getSort
+      unless ← isIntegerFunction signature do
+        throw (.unsupported s!"unsupported function signature: {signature}")
+      let domains ← ofExcept signature.getFunctionDomainSorts
+      let arguments := children.extract 1 children.size
+      unless arguments.size == domains.size do
+        throw (.unsupported s!"wrong argument count for {function}: expected {domains.size}, got {arguments.size}")
+      for argument in arguments, domain in domains do
+        unless (← ofExcept argument.getSort) == domain do
+          throw (.unsupported s!"wrong argument sort for {function}: expected {domain}")
+      unless sort == (← ofExcept signature.getFunctionCodomainSort) do
+        throw (.unsupported s!"wrong result sort for {function}")
+      -- Validate the arguments; the declared function is allowed only as the head.
+      pending := pending ++ arguments
+      continue
     let validArity ← match kind with
       | .CONST_BOOLEAN | .CONST_INTEGER => pure children.isEmpty
       | .CONSTANT => do
@@ -112,9 +140,9 @@ def parseAndInspectQuery
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
       match commandName with
       | "set-logic" =>
-        unless #["QF_UF", "QF_LIA", "QF_NIA", "ALL"].any
+        unless #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA", "ALL"].any
             (fun logic => cmd.toString == s!"(set-logic {logic})") do
-          throw (.unsupported s!"expected QF_UF, QF_LIA, QF_NIA, or ALL, got {cmd}")
+          throw (.unsupported s!"unsupported logic: {cmd}")
         invokeCommand cmd solver symbols
         query := { query with invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
@@ -124,8 +152,8 @@ def parseAndInspectQuery
           throw (.error "expected one new declaration")
         let term := terms.back!
         let sort ← ofExcept term.getSort
-        unless sort.isBoolean || sort.isInteger do
-          throw (.unsupported s!"only nullary Bool/Int declarations are supported, got {sort}")
+        unless sort.isBoolean || sort.isInteger || (← isIntegerFunction sort) do
+          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, or Int → … → Int")
         let symbol ← ofExcept term.getSymbol
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")
