@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Next: PR 4, extend translation to integers.** Tasks 2.1–2.3
-and 3.1–3.6 are implemented and verified on Lean 4.33.1. PRs 2 and 3 are complete and have
+**Next: PR 5, Int/Bool functions and predicates.** Tasks 2.1–2.3, 3.1–3.6,
+and 4.1–4.4 are implemented and verified on Lean 4.33.1. PRs 2–4 are complete and have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -173,15 +173,41 @@ metadata rather than guessing filenames.
 
       **Verified:** The CLI connects file reading, complete query validation, reconstruction, and emission. `--help` exits 0; invalid arguments exit 2; input, translation, and output failures exit 1 on stderr. Successful generation reports the path and an unfinished proof. `lake env python3 tests/cli.py` checks all three fixtures, missing files, invalid arguments, unsupported/malformed/repeated queries, existing directories/files/symlinks, and output failures. Invalid input creates no output directory; existing proof work remains unchanged.
 
-   - [x] **3.6. Make the Boolean demo repeatable.** Add `tests/translation/run-bool.sh` to exercise the actual CLI and check generated files in fresh temporary directories with the repository's Lean toolchain. Reuse the fixtures/checks introduced above; add a reviewed expected output and a README walkthrough showing generation, Lean checking, and opening the theorem for editing. Keep the harness limited to these Boolean cases.
+   - [x] **3.6. Make the Boolean demo repeatable.** Add `tests/translation/run-demo.sh` to exercise the actual CLI and check generated files in fresh temporary directories with the repository's Lean toolchain. Reuse the fixtures/checks introduced above; add a reviewed expected output and a README walkthrough showing generation, Lean checking, and opening the theorem for editing. Keep the harness limited to these Boolean cases.
 
       **Check:** The documented walkthrough and script pass for contradictory, satisfiable, empty-assertion, and metadata-variant inputs, and verify failure for unsupported/repeated-query input. Every generated statement elaborates independently of its unfinished theorem. The unchanged PR 2 smoke test also passes. This completes PR 3; integer translation begins in PR 4.
 
-      **Verified:** `tests/translation/run-bool.sh` passes when launched outside the repository. It builds the CLI and reruns the unchanged reconstruction smoke before the CLI/demo checks. The three existing fixtures plus three status variants produce six Lean-core-only files; their statement sections also compile without proof templates. Contradiction output matches `tests/translation/bool/expected/Query.lean` byte-for-byte, regardless of status metadata. The README proof compiles with warnings treated as errors and has no axiom dependencies. Existing rejection and overwrite checks pass, and all generated test files are removed. The README documents generation, opening/checking the file, and replacing the proof template.
+      **Verified:** `tests/translation/run-demo.sh` passes when launched outside the repository. It builds the CLI and reruns the unchanged reconstruction smoke before the CLI/demo checks. The three existing fixtures plus three status variants produce six Lean-core-only files; their statement sections also compile without proof templates. Contradiction output matches `tests/translation/bool/expected/Query.lean` byte-for-byte, regardless of status metadata. The README proof compiles with warnings treated as errors and has no axiom dependencies. Existing rejection and overwrite checks pass, and all generated test files are removed. The README documents generation, opening/checking the file, and replacing the proof template.
 
-- [ ] **4. Translate integer queries through the working command.** Extend the Boolean path with Int declarations, exact large/negative literals, n-ary arithmetic, multiplication, abs, unary minus, and chained comparisons. Add a small standalone integer-bound example with its own supported declarations; the unedited frontend sessions follow once their preambles and scopes are supported.
+- [x] **4. Translate integer queries through the working command.** Extend the Boolean path with Int declarations, exact large/negative literals, n-ary arithmetic, multiplication, abs, unary minus, and chained comparisons. Add a small standalone integer-bound example with its own supported declarations; the unedited frontend sessions follow once their preambles and scopes are supported.
 
    **Merge when:** The same CLI produces an editable, well-typed integer obligation. Reviewed arithmetic fixtures preserve associativity and exact values without machine-integer truncation; unsupported div/mod is still rejected explicitly.
+
+   Implement these four commits in order; stop for review after each:
+
+   - [x] **4.1. Translate integer declarations, literals, and equality end to end.** Rename the Boolean-only query types, accept nullary `Int` declarations alongside `Bool`, and permit `QF_LIA`/`QF_NIA` profiles. Register lean-smt's integer reconstructor, give every declaration a parameter of its reconstructed sort, and allow integer literals, unary minus, and equality. Keep all other integer operators rejected. Reuse the existing emitter and CLI, printing numeric types so closed integer expressions cannot default to `Nat` when read back.
+
+      **Check:** One combined fixture covers mixed sorts, both declaration forms, quoted names, unused parameters, zero, negative values, and values beyond 64 bits. Compare with a handwritten Lean proposition, kernel-check it without axioms, and compile the generated file using Lean core. Previous Boolean checks stay green; Real, functions, arithmetic not yet enabled, and div/mod fail before output.
+
+      **Verified:** All four executable targets build. Parser checks pass for the supported logic profiles and unsupported constructs. `testTranslation` checks eleven refutations, including the mixed-sort fixture, an unused Int parameter, and closed integer equality; their emitted definitions match the original expressions and have no axiom dependencies. The emitter explicitly annotates numerals after this check caught Lean defaulting a closed equality to Nat. The reconstruction smoke and CLI/demo checks pass, including seven standalone translations, unchanged Boolean expected output, the completed Boolean proof, div/mod rejection, and overwrite protection. Only one new SMT fixture was added: `tests/translation/int/literals.smt2`.
+
+   - [x] **4.2. Translate integer arithmetic.** Enable n-ary `+`, `-`, and `*`, plus `abs`, after checking the pinned reconstructors' operand order and arities. Preserve left-associative subtraction. Make `abs` output self-contained: its upstream definition is not in Lean core.
+
+      **Check:** One combined arithmetic fixture matches handwritten expressions, including `(- x y z)`, nested negation, nonlinear multiplication, and absolute value at negative/zero/positive inputs. Its emitted statement compiles independently. Div/mod remain rejected, including division by zero.
+
+      **Verified:** The validator enables the audited arithmetic kinds; lean-smt reconstructs them without a new translator. The emitter unfolds only `Int.abs` to its core `if/then/else` definition, including nested uses. The combined `arithmetic.smt2` matches a handwritten formula covering left-associative subtraction, nonlinear multiplication, nested negation, independent abs semantics, and exact arithmetic beyond 64 bits. Parser, translation, and CLI checks pass; printed statements match the in-memory formulas and compile using Lean core. Div/mod with zero and nonzero divisors remain rejected even inside supported arithmetic.
+
+   - [x] **4.3. Translate integer comparisons.** Enable `<`, `<=`, `>`, and `>=`; confirm cvc5's lowering of chained comparisons preserves every adjacent pair. Add a small contradictory integer-bound example using the existing CLI.
+
+      **Check:** Compare all four operators and three-or-more-operand chains with handwritten Lean propositions. Preserve operand direction and every operand; mixed Bool/Int assertions and generated files pass the existing checks.
+
+      **Verified:** The arithmetic fixture now includes four-operand chains for all four comparisons under a Boolean implication. Parser checks confirm three binary comparisons per chain; handwritten Lean targets verify their directions and all adjacent operands. `bounds.smt2` translates to `∀ x : Int, (x ≥ 0 ∧ x < 0) → False`. All four executable targets build, the parser and reconstruction smoke pass, and `testTranslation` checks thirteen refutations and their standalone files. The CLI/demo checks pass for nine generated queries and isolated statement sections, preserving the Boolean expected output, completed proof, rejection diagnostics, and existing output files. The README shows the bounds command. PR 4 remains open until task 4.4.
+
+   - [x] **4.4. Finish the integer demo.** Document the supported operator/signature table and add a reviewed expected output for the integer-bound example. Extend the existing demo checks and show how to replace its `sorry` with a completed Lean proof.
+
+      **Check:** The documented command produces one `Query.lean`, statements first and proofs second. Status metadata does not change the target. The completed proof checks without admissions; Boolean demos and unsupported-input/overwrite protections still pass. Mark PR 4 complete only after these checks.
+
+      **Verified:** The renamed `tests/translation/run-demo.sh` passes from outside the repository. It builds the CLI, runs the reconstruction smoke, and checks twelve standalone translations and their isolated statement sections. Boolean and integer demos match their checked-in expected outputs with absent/sat/unsat/unknown metadata. Both README proofs compile with warnings treated as errors and no `sorryAx`; the integer order lemma depends only on standard `propext`. Edited templates and completed proofs survive overwrite attempts. The exact integer README walkthrough also passes from the repository root, and all generated test files are removed. No production Lean code changed in this subtask. PR 4 is complete.
 
 - [ ] **5. Extend the Lean context bridge to Int/Bool functions.** Generalize the minimal declaration map from the first translator to typed function/relation parameters, populate userNames, and keep reconstruction contexts and caches local to each translation. Keep the generated definitions closed over every required interpretation.
 

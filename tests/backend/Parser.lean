@@ -9,7 +9,7 @@ private def require (condition : Bool) (message : String) : IO Unit := do
 
 private def checkAccepted (name input : String) (names : Array String) (count : Nat)
     (invoked : Array String)
-    (inspect : BoolQuery → cvc5.Env Unit := fun _ => pure ()) : IO Unit := do
+    (inspect : ParsedQuery → cvc5.Env Unit := fun _ => pure ()) : IO Unit := do
   let calls ← IO.mkRef 0
   (parseAndInspectQuery input (name := name) fun query => do
     calls.modify (· + 1)
@@ -63,6 +63,34 @@ private def checkAcceptedQueries : IO Unit := do
       (connectives.replace ":status sat" s!":status {status}")
   checkConnectives "connectives.smt2 (ALL)"
     (connectives.replace "(set-logic QF_UF)" "(set-logic ALL)")
+  let integers ← IO.FS.readFile "tests/translation/int/literals.smt2"
+  for logic in #["QF_LIA", "QF_NIA", "ALL", ""] do
+    let command := if logic.isEmpty then "" else s!"(set-logic {logic})"
+    let trace := if logic.isEmpty then #[] else #["set-logic"]
+    checkAccepted s!"literals.smt2 ({logic})"
+      (integers.replace "(set-logic QF_LIA)" command) #["Int", "flag", "a b", "unused"] 5
+      (trace ++ Array.replicate 4 "declare-fun" ++ Array.replicate 5 "assert")
+      fun query => do
+        let #[x, flag, _, _] := query.declarations
+          | throw (.error "expected four declarations")
+        require ((← ofExcept x.term.getSort).isInteger)
+          "expected an Int declaration"
+        require ((← ofExcept flag.term.getSort).isBoolean)
+          "expected a Bool declaration"
+  let arithmetic ← IO.FS.readFile "tests/translation/int/arithmetic.smt2"
+  checkAccepted "arithmetic.smt2" arithmetic #["x", "y", "z", "p"] 9
+    (#["set-logic"] ++ Array.replicate 4 "declare-fun" ++ Array.replicate 9 "assert")
+    fun query => do
+      let chainGroups := query.assertions.back![1]!.getChildren
+      require (chainGroups.size == 4) "expected all four comparison chains"
+      for chain in chainGroups do
+        require ((← ofExcept chain.getKind) == .AND && chain.getNumChildren == 3)
+          "a four-operand chain must produce three comparisons"
+        for comparison in chain.getChildren do
+          require (comparison.getNumChildren == 2) "expected a binary comparison"
+  let bounds ← IO.FS.readFile "tests/translation/int/bounds.smt2"
+  checkAccepted "bounds.smt2" bounds #["x"] 2
+    #["set-logic", "declare-fun", "assert", "assert"]
 
 private def checkRejectedQueries : IO Unit := do
   -- Each invalid script needs its own parse: the first error stops validation.
@@ -71,10 +99,12 @@ private def checkRejectedQueries : IO Unit := do
       2, "EOF_TOK"),
     ("invalid-logic", "(set-logic NOT_A_LOGIC)\n(check-sat)",
       1, "cannot parse logic string"),
-    ("int", "(set-logic ALL)\n(declare-const x Int)\n(check-sat)",
-      2, "nullary Bool"),
+    ("real", "(set-logic ALL)\n(declare-const x Real)\n(check-sat)",
+      2, "nullary Bool/Int"),
     ("function", "(set-logic ALL)\n(declare-fun f (Bool) Bool)\n(check-sat)",
-      2, "nullary Bool"),
+      2, "nullary Bool/Int"),
+    ("int-function", "(set-logic ALL)\n(declare-fun f (Int) Int)\n(check-sat)",
+      2, "nullary Bool/Int"),
     ("quantifier", "(set-logic ALL)\n(assert (forall ((p Bool)) p))\n(check-sat)",
       2, "FORALL"),
     ("ite", "(set-logic ALL)\n(declare-const p Bool)\n(assert (ite p true false))\n(check-sat)",
@@ -84,13 +114,13 @@ private def checkRejectedQueries : IO Unit := do
     ("pop", "(set-logic QF_UF)\n(pop 1)\n(check-sat)",
       2, "unsupported command: pop"),
     ("horn", "(set-logic HORN)\n(assert true)\n(check-sat)",
-      1, "expected QF_UF or ALL"),
-    ("logic", "(set-logic QF_LIA)\n(assert true)\n(check-sat)",
-      1, "expected QF_UF or ALL"),
+      1, "expected QF_UF, QF_LIA, QF_NIA, or ALL"),
+    ("logic", "(set-logic QF_LRA)\n(assert true)\n(check-sat)",
+      1, "expected QF_UF, QF_LIA, QF_NIA, or ALL"),
     ("xor", "(set-logic QF_UF)\n(declare-const p Bool)\n(assert (xor p true))\n(check-sat)",
       3, "XOR"),
-    ("int-equality", "(set-logic ALL)\n(assert (= 1 2))\n(check-sat)",
-      2, "expected Bool"),
+    ("real-equality", "(set-logic ALL)\n(assert (= 1.0 2.0))\n(check-sat)",
+      2, "expected Bool or Int"),
     ("assuming", "(set-logic QF_UF)\n(check-sat-assuming ())",
       2, "unsupported command: check-sat-assuming"),
     ("missing-check", "(set-logic QF_UF)\n(assert true)",
@@ -122,8 +152,17 @@ private def checkRejectedQueries : IO Unit := do
   ]
   for (name, input, ordinal, reason) in rejected do
     checkRejected s!"reject-{name}" input ordinal reason
+  -- Registering lean-smt's integer handlers must not enable unaudited operators.
+  for (term, kind) in #[("(div x 2)", "INTS_DIVISION"), ("(mod x 2)", "INTS_MODULUS"),
+      ("(div x 0)", "INTS_DIVISION"), ("(mod x 0)", "INTS_MODULUS")] do
+    checkRejected s!"reject-{kind}"
+      s!"(set-logic ALL)\n(declare-const x Int)\n(assert (= (+ 1 {term}) 0))\n(check-sat)"
+      3 s!"unsupported operator: {kind}"
+  checkRejected "reject-real-comparison"
+    "(set-logic ALL)\n(assert (< 1.0 2.0))\n(check-sat)"
+    2 "expected Bool or Int"
 
 def main : IO Unit := do
   checkAcceptedQueries
   checkRejectedQueries
-  IO.println "Parser passed: 8 accepted cases, 26 rejected cases"
+  IO.println "Parser passed: Bool/Int queries, declaration identity, and rejection diagnostics"

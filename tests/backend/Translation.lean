@@ -8,7 +8,7 @@ private def checkEqual (actual expected : Expr) : MetaM Unit := do
   unless ← isDefEq actual expected do
     throwError "expected {expected}, got {actual}"
 
-private def checkConnectives (query : BoolQuery) : MetaM Unit :=
+private def checkConnectives (query : ParsedQuery) : MetaM Unit :=
   withAssertions query fun parameters assertions => do
     let #[t, a, p, q, r, _] := parameters
       | throwError "expected six declaration parameters"
@@ -30,17 +30,17 @@ private def checkConnectives (query : BoolQuery) : MetaM Unit :=
       unless other[0]! != t && values[0]! == other[0]! do
         throwError "reconstructions shared a variable"
 
-private def checkUnmapped (query : BoolQuery) : MetaM Unit := do
+private def checkUnmapped (query : ParsedQuery) : MetaM Unit := do
   let error? ← try
     withAssertions { query with declarations := #[] } fun _ _ => pure ()
     pure none
   catch error => pure (some error)
   let some error := error? | throwError "an unmapped SMT name was accepted"
-  unless (← error.toMessageData.toString).contains "undeclared Boolean term" do
+  unless (← error.toMessageData.toString).contains "undeclared term" do
     throw error
 
 private def runQuery (env : Environment) (name input : String)
-    (check : BoolQuery → MetaM Unit) : IO Unit :=
+    (check : ParsedQuery → MetaM Unit) : IO Unit :=
   (parseAndInspectQuery input (name := name) fun query => do
     discard <| (check query).toIO { fileName := name, fileMap := default } { env }
   ).runIO
@@ -78,7 +78,7 @@ private def checkEmission (value : Expr) : MetaM Unit := do
     unless refused && (← IO.FS.readFile (output / "Query.lean")) == edited do
       throwError "existing proof work was overwritten"
 
-private def checkRefutation (query : BoolQuery) (expected : Expr) : MetaM Unit := do
+private def checkRefutation (query : ParsedQuery) (expected : Expr) : MetaM Unit := do
   let value ← defineRefutation query
   checkEqual value expected
   let .defnInfo definition ← getConstInfo `Refutation
@@ -111,4 +111,35 @@ def main : IO Unit := do
   runQuery env "unused declaration"
     (empty.replace "(check-sat)" "(declare-const unused Bool)\n(check-sat)") fun query =>
       checkRefutation query q(∀ _unused : Prop, True → False)
-  IO.println "Translation passed: 8 refutations and generated files; existing proof work preserved"
+  let integers ← IO.FS.readFile "tests/translation/int/literals.smt2"
+  runQuery env "integer literals" integers fun query => do
+    checkUnmapped query
+    checkRefutation query q(∀ (x : Int) (p : Prop) (y _unused : Int),
+      (x = 0 ∧ y = 340282366920938463463374607431768211457 ∧
+        -y = -340282366920938463463374607431768211457 ∧
+        (p → x = 0) ∧ (x = 0 ∧ (0 : Int) = -0)) → False)
+  runQuery env "unused integer"
+    "(set-logic QF_LIA)\n(declare-const unused Int)\n(check-sat)" fun query =>
+      checkRefutation query q(∀ _unused : Int, True → False)
+  runQuery env "closed integer equality"
+    "(set-logic QF_LIA)\n(assert (= 1 2))\n(check-sat)" fun query =>
+      checkRefutation query q((1 : Int) = 2 → False)
+  let arithmetic ← IO.FS.readFile "tests/translation/int/arithmetic.smt2"
+  runQuery env "integer arithmetic" arithmetic fun query =>
+    checkRefutation query q(
+      let abs := fun x : Int => if x < 0 then -x else x
+      ∀ (x y z : Int) (p : Prop),
+        ((x + y + z + 7) = (x - y - z) ∧ (x * y * z) = (x * -y) ∧ -(-x) = x ∧
+          (p → abs (-x) = abs x) ∧ abs (abs x) = abs x ∧
+          ((7 : Int) = 7 ∧ (0 : Int) = 0 ∧ (9 : Int) = 9) ∧
+          (340282366920938463463374607431768211457 : Int) + -1 =
+            340282366920938463463374607431768211456 ∧
+          (10 : Int) - 3 - 2 = 5 ∧
+          (p → (x < y ∧ y < z ∧ z < x + 1) ∧
+               (x ≤ y ∧ y ≤ z ∧ z ≤ x + 2) ∧
+               (x > y ∧ y > z ∧ z > x - 1) ∧
+               (x ≥ y ∧ y ≥ z ∧ z ≥ x - 2))) → False)
+  let bounds ← IO.FS.readFile "tests/translation/int/bounds.smt2"
+  runQuery env "integer bounds" bounds fun query =>
+    checkRefutation query q(∀ x : Int, (x ≥ 0 ∧ x < 0) → False)
+  IO.println "Translation passed: 13 refutations and generated files; existing proof work preserved"

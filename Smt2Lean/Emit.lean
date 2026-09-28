@@ -6,10 +6,14 @@ open Lean Meta
 
 /-- Render one file with statements first, followed by unfinished proofs. -/
 def render (refutation : Expr) : MetaM String := do
+  -- lean-smt's Int.abs is not in Lean core; emit its if/then/else definition.
+  let refutation ← deltaExpand refutation (· == ``Int.abs)
   let body ← withOptions (fun options => options
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true
       |>.setBool `pp.proofs true
+      -- Without annotations, a closed equality such as 1 = 2 defaults to Nat.
+      |>.setBool `pp.numericTypes true
       |> (pp.maxSteps.set · 1000000)) do
     return (← ppExpr refutation).pretty
   if body.contains "⋯" then
