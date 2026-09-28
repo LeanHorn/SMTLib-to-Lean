@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Next: task 3.6, finish the repeatable Boolean demo.** Tasks 2.1–2.3
-and 3.1–3.5 are implemented and verified on Lean 4.33.1. PR 2 is complete. PRs 2 and 3 have
+**Next: PR 4, extend translation to integers.** Tasks 2.1–2.3
+and 3.1–3.6 are implemented and verified on Lean 4.33.1. PRs 2 and 3 are complete and have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -137,7 +137,7 @@ metadata rather than guessing filenames.
 
       **Verified:** The callback reconstructs both the sort and term, checks the expected proposition, and synchronously installs `Reconstruction.assertion : Prop := True ∧ ¬False` through Lean's kernel. The definition has no axiom dependencies or unresolved variables/goals. The smoke test and all parser rejection checks pass on Lean 4.33.1, including after a clean build of all required Lean modules and the C++ binding (98 jobs for both executables), reusing only the pinned native cvc5 1.3.2 SDK. Root and example builds also pass. The executable enables interpreter support and loads the registered reconstructors into its Lean environment. No solver query, proof reconstruction, or source-file emission is performed.
 
-- [ ] **3. Translate one Boolean query end to end.** Replace the CLI stub with `smt2lean <input.smt2> --out <fresh-directory>`. Accept one flat query with Boolean constants/nullary declarations, assertions, true/false, not/and/or/implication/equality, and check-sat. Handle set-logic, status metadata, and exit explicitly. Use cvc5 for parsing/sorts and lean-smt reconstruction through a minimal local-variable map; intercept the check without solving. Emit one `Query.lean` with the closed refutation proposition first, followed by a proof template containing `sorry`. Reject unsupported commands/terms or multiple checks before emitting a successful result.
+- [x] **3. Translate one Boolean query end to end.** Replace the CLI stub with `smt2lean <input.smt2> --out <fresh-directory>`. Accept one flat query with Boolean constants/nullary declarations, assertions, true/false, not/and/or/implication/equality, and check-sat. Handle set-logic, status metadata, and exit explicitly. Use cvc5 for parsing/sorts and lean-smt reconstruction through a minimal local-variable map; intercept the check without solving. Emit one `Query.lean` with the closed refutation proposition first, followed by a proof template containing `sorry`. Reject unsupported commands/terms or multiple checks before emitting a successful result.
 
    **Merge when:** An ordinary Boolean fixture translates from disk and the generated file elaborates using the repository toolchain. Changing sat/unsat/unknown metadata leaves the proposition unchanged. Unsupported input fails visibly, canonical statements contain no admissions, and an instrumented driver makes zero checkSat calls. No manifest, general IR framework, or standalone project generator is required.
 
@@ -173,9 +173,11 @@ metadata rather than guessing filenames.
 
       **Verified:** The CLI connects file reading, complete query validation, reconstruction, and emission. `--help` exits 0; invalid arguments exit 2; input, translation, and output failures exit 1 on stderr. Successful generation reports the path and an unfinished proof. `lake env python3 tests/cli.py` checks all three fixtures, missing files, invalid arguments, unsupported/malformed/repeated queries, existing directories/files/symlinks, and output failures. Invalid input creates no output directory; existing proof work remains unchanged.
 
-   - [ ] **3.6. Make the Boolean demo repeatable.** Add `tests/translation/run-bool.sh` to exercise the actual CLI and check generated files in fresh temporary directories with the repository's Lean toolchain. Reuse the fixtures/checks introduced above; add a reviewed expected output and a README walkthrough showing generation, Lean checking, and opening the theorem for editing. Keep the harness limited to these Boolean cases.
+   - [x] **3.6. Make the Boolean demo repeatable.** Add `tests/translation/run-bool.sh` to exercise the actual CLI and check generated files in fresh temporary directories with the repository's Lean toolchain. Reuse the fixtures/checks introduced above; add a reviewed expected output and a README walkthrough showing generation, Lean checking, and opening the theorem for editing. Keep the harness limited to these Boolean cases.
 
       **Check:** The documented walkthrough and script pass for contradictory, satisfiable, empty-assertion, and metadata-variant inputs, and verify failure for unsupported/repeated-query input. Every generated statement elaborates independently of its unfinished theorem. The unchanged PR 2 smoke test also passes. This completes PR 3; integer translation begins in PR 4.
+
+      **Verified:** `tests/translation/run-bool.sh` passes when launched outside the repository. It builds the CLI and reruns the unchanged reconstruction smoke before the CLI/demo checks. The three existing fixtures plus three status variants produce six Lean-core-only files; their statement sections also compile without proof templates. Contradiction output matches `tests/translation/bool/expected/Query.lean` byte-for-byte, regardless of status metadata. The README proof compiles with warnings treated as errors and has no axiom dependencies. Existing rejection and overwrite checks pass, and all generated test files are removed. The README documents generation, opening/checking the file, and replacing the proof template.
 
 - [ ] **4. Translate integer queries through the working command.** Extend the Boolean path with Int declarations, exact large/negative literals, n-ary arithmetic, multiplication, abs, unary minus, and chained comparisons. Add a small standalone integer-bound example with its own supported declarations; the unedited frontend sessions follow once their preambles and scopes are supported.
 

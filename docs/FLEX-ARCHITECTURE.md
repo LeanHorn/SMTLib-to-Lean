@@ -78,7 +78,15 @@ one `Query.lean`: statements first, followed by proof templates with `sorry`, us
 only Lean core. The file is written only after the full query is validated and its
 statement is kernel-checked. Existing output paths are refused. Tests compare the
 printed propositions with the originals and compile the file independently of
-the translator. The reviewed demo walkthrough remains task 3.6.
+the translator.
+
+Task 3.6 adds `tests/translation/run-bool.sh`, a checked-in expected `Query.lean`,
+and the README walkthrough. The script exercises the actual CLI, checks six
+generated queries (including status variants), and compiles both each full file
+and its statement section alone. It also completes the contradiction example's
+proof without axioms and runs the existing CLI rejection and overwrite checks.
+All generated test files are temporary. This completes PR 3's Boolean demo;
+integer translation starts in PR 4.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

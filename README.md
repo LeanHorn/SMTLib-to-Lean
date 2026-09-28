@@ -4,16 +4,40 @@ A tool to connect SMT-based frontends to Lean4.
 
 ## Translate a Boolean query
 
-From the repository root:
+From the repository root, after installing the development tools below:
 
-```sh
-lake exe smt2lean tests/translation/bool/contradiction.smt2 --out boolean-demo
-```
+1. **Generate the Lean file.** Choose a new output directory:
 
-This creates one `Query.lean` file: a **Statements** section with the closed
-`Refutation : Prop` definition, followed by a **Proofs** section with an unfinished
-theorem containing `by sorry`. The file uses Lean core, without cvc5 or translator
-dependencies.
+   ```sh
+   lake exe smt2lean tests/translation/bool/contradiction.smt2 --out boolean-demo
+   ```
+
+   This creates `boolean-demo/Query.lean`: **Statements** first, then **Proofs**
+   with `sorry`. Compare it with the [expected output](tests/translation/bool/expected/Query.lean).
+
+2. **Open `boolean-demo/Query.lean` in your Lean editor.** Check it from the terminal:
+
+   ```sh
+   lake env lean boolean-demo/Query.lean
+   ```
+
+   The `sorry` warning is expected: the statement is well-typed, but its proof is unfinished.
+
+3. **Complete the proof.** Replace the Proofs section with:
+
+   ```lean
+   -- Proofs
+
+   theorem refutation : Refutation := by
+     intro p h
+     exact h.2 h.1
+   ```
+
+   Here `h.1` proves `p`, and `h.2` proves `¬p`. Run the same Lean command again;
+   it now succeeds without the `sorry` warning.
+
+The file uses Lean core, without cvc5 or translator dependencies. This proof is for
+the contradiction example; translation alone does not establish every query's refutation.
 
 The output directory must be new, and its parent must exist. Existing proof work
 is never overwritten. The translator validates the whole input and kernel-checks
@@ -23,6 +47,17 @@ prove the theorem.
 Use `lake exe smt2lean --help` for usage. Exit codes are `0` for generation/help,
 `2` for invalid arguments, and `1` for input, translation, or output errors.
 Only the Boolean fragment listed below is currently supported.
+
+Run the automated demo checks with Python 3 installed:
+
+```sh
+tests/translation/run-bool.sh
+```
+
+The script builds the CLI, checks the expected output and metadata variants,
+compiles the generated statements and templates, and checks the completed proof
+above. It also checks rejection cases and overwrite protection, using temporary
+directories that are removed afterwards.
 
 ## Development build
 
@@ -152,6 +187,5 @@ A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
 kernel-checked and has no axiom dependencies. This checks its type, not its truth.
 
-Tasks 3.4–3.5 connect this translation to file generation and the CLI above.
-The reviewed demo walkthrough remains task 3.6; see the
+Tasks 3.1–3.6 complete the Boolean demo above. Integer translation is next; see the
 [implementation plan](docs/PR-PLAN.md).

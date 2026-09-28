@@ -1,6 +1,18 @@
 # Tests
 
-Real SMT-LIB queries from LiquidHaskell (`lh_*`) and Flux (`flux_*`).
+Run the Boolean demo checks from the repository root:
+
+```sh
+tests/translation/run-bool.sh
+```
+
+The script builds the CLI, runs the reconstruction smoke test, and runs `cli.py`.
+The CLI checks compile six
+generated files and their statement sections using Lean core, compare the
+contradiction and its status variants with `translation/bool/expected/Query.lean`,
+and check the README's completed contradiction proof without axioms. Python 3 is required.
+
+For the original LiquidHaskell (`lh_*`) and Flux (`flux_*`) queries:
 
 ```sh
 tests/run.sh   # replays every file through z3 and checks the recorded answers
@@ -23,7 +35,7 @@ each `Query.lean` using only Lean core. Statements have no axiom dependencies;
 only the following proof templates contain admissions. Existing proof work is
 preserved. The test reuses the three fixtures below.
 
-Check the CLI's exit codes, diagnostics, and output protection with:
+Run the CLI/demo checks without rebuilding the smoke test:
 
 ```sh
 lake build smt2lean

@@ -1,6 +1,7 @@
 """Run with `lake env python3 tests/cli.py` after `lake build smt2lean`."""
 
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 
@@ -19,7 +20,39 @@ def run(*args, code=0):
     return result
 
 
+def check_lean(lean, source, *, complete=False):
+    args = [str(lean)]
+    if complete:
+        args.append("-DwarningAsError=true")
+    result = subprocess.run(
+        [*args, source.name], cwd=source.parent,
+        env=dict(os.environ, LEAN_PATH=str(source.parent)),
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, (source, result.stdout, result.stderr)
+    return result.stdout
+
+
+def check_generated(lean, output):
+    assert [p.name for p in output.iterdir()] == ["Query.lean"]
+    query = output / "Query.lean"
+    source = query.read_text()
+    statements, proofs = source.split("-- Proofs\n", 1)
+    assert "-- Statements" in statements and "def Refutation" in statements
+    assert "sorry" not in statements and "by\n  sorry" in proofs
+    check_lean(lean, query)
+    # The statement must also compile after removing the unfinished proof entirely.
+    standalone = output / "StatementsOnly.lean"
+    standalone.write_text(statements)
+    check_lean(lean, standalone)
+    standalone.unlink()
+    return source
+
+
 def main():
+    prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
+    lean = Path(prefix) / "bin/lean"
+    expected = (FIXTURES / "expected/Query.lean").read_text()
     assert "Usage:" in run("--help").stdout
     for args in [(), ("--unknown",), ("input.smt2",),
                  ("input.smt2", "--out", ""), ("input.smt2", "--out", "--help")]:
@@ -31,17 +64,29 @@ def main():
             output = tmp / name
             result = run(FIXTURES / f"{name}.smt2", "--out", output)
             assert "Proof unfinished" in result.stdout
-            assert [p.name for p in output.iterdir()] == ["Query.lean"]
+            source = check_generated(lean, output)
+            if name == "contradiction":
+                assert source == expected, ("contradiction output changed", source)
             query = output / "Query.lean"
-            source = query.read_text()
-            statements, proofs = source.split("-- Proofs\n", 1)
-            assert "-- Statements" in statements and "def Refutation" in statements
-            assert "sorry" not in statements and "by\n  sorry" in proofs
             edited = source + "\n-- User proof work.\n"
             query.write_text(edited)
             result = run(FIXTURES / f"{name}.smt2", "--out", output, code=1)
             assert "output already exists" in result.stderr
             assert query.read_text() == edited
+
+        contradiction = (FIXTURES / "contradiction.smt2").read_text()
+        for status in ["sat", "unsat", "unknown"]:
+            source, output = tmp / f"{status}.smt2", tmp / status
+            source.write_text(f"(set-info :status {status})\n" + contradiction)
+            run(source, "--out", output)
+            assert check_generated(lean, output) == expected, f"{status} changed the target"
+
+        # Check the exact proof shown in the README, on the actual generated file.
+        completed = tmp / "contradiction/Query.lean"
+        completed.write_text(completed.read_text().replace(
+            "  sorry\n", "  intro p h\n  exact h.2 h.1\n"
+        ) + "\n#print axioms refutation\n")
+        assert "does not depend on any axioms" in check_lean(lean, completed, complete=True)
 
         missing_output = tmp / "missing-output"
         run(tmp / "missing.smt2", "--out", missing_output, code=1)
@@ -74,6 +119,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
+    print("Demo passed: expected output, 6 standalone translations, metadata, and completed proof")
 
 
 if __name__ == "__main__":
