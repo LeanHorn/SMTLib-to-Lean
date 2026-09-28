@@ -40,12 +40,12 @@ cd examples
 lake build
 ```
 
-## Parser and Lean reconstruction smoke test
+## Lean reconstruction test
 
-Run the tasks 2.2–2.3 checks with:
+Run the closed-proposition check with:
 
 ```sh
-lake exe backendSmoke
+lake exe testReconstruction
 ```
 
 It parses this fixed input using cvc5's native parser:
@@ -56,25 +56,51 @@ It parses this fixed input using cvc5's native parser:
 (check-sat)
 ```
 
-Only `set-logic` and `assert` reach native command invocation. The driver
-intercepts `check-sat`, captures the assertions, and the smoke test verifies one
-Bool-sorted term with the expected AND/NOT/constant structure. It prints the
-actual invocation trace and checks rejection of malformed input, invalid logic,
-unsupported queries, missing/repeated checks, and trailing commands. A failed
-check exits nonzero. The driver currently accepts only `set-logic`, `assert`, and
-one final `check-sat`; this is not yet a general SMT-LIB importer.
+The test checks that only `set-logic` and `assert` were invoked and exactly one
+assertion was captured. `check-sat` is intercepted without solving.
 
 The inspection callback then uses Lean-SMT to translate the term into a Lean
 expression. It checks that the expression has type `Prop` and matches
 `True ∧ ¬False`, then asks Lean's kernel to check this definition:
 
 ```lean
-def BackendSmoke.assertion : Prop := True ∧ ¬False
+def Reconstruction.assertion : Prop := True ∧ ¬False
 ```
 
 The definition is installed in memory, with no unresolved variables, unfinished
 goals, or axiom dependencies. This checks the proposition's construction; it does
-not prove the proposition. No output file is generated yet.
+not prove the proposition. No output file is generated yet. A failed check exits
+nonzero.
 
-The main `smt2lean` CLI remains a stub. PR 3 adds file input and generated Lean
-files; see the [implementation plan](docs/PR-PLAN.md).
+## Boolean query validation
+
+Task 3.1 extends the backend to accept one Boolean query. Run its fixtures with:
+
+```sh
+lake exe testParser
+```
+
+Both test modules live in `tests/backend/`. The parser test checks accepted inputs,
+malformed input, and unsupported features; the reconstruction test checks the Lean
+expression and its kernel validation.
+
+Supported inputs:
+
+- `declare-const p Bool` and `declare-fun p () Bool`.
+- Boolean literals and `not`, `and`, `or`, `=>`, and Boolean `=`.
+- No `set-logic`, or an initial `QF_UF` or `ALL` logic.
+- `set-info` fields `:status`, `:source`, `:category`, `:license`, `:notes`, and
+  `:smt-lib-version 2.6`. Metadata is ignored, never used as an assumption.
+- Exactly one `check-sat`, followed only by metadata and an optional final `exit`.
+
+The driver validates every declaration and assertion, then calls `inspect` once
+with a `BoolQuery`: declarations (SMT names and native term identities), assertion
+terms, and executed command names. cvc5 reports both declaration spellings as
+`declare-fun` in this trace. No query command is executed.
+
+Unsupported input is rejected before `inspect` runs, including content after
+`check-sat` or `exit`. Errors include the input name and command number. cvc5 may
+print a warning when no logic is supplied; the Boolean validation still applies.
+
+The main `smt2lean` CLI remains a stub. Variable reconstruction and generated Lean
+files follow in tasks 3.2–3.6; see the [implementation plan](docs/PR-PLAN.md).

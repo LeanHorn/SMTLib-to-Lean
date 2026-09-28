@@ -34,7 +34,7 @@ execution plan, using the user's revised three stages.
 | lean-smt | `5bdc51674065a074ece67b04e10024e9f426ec1f` | Extensible sort/term reconstruction; Lean 4.33.0; main includes Mathlib, lean-auto, and lean-cvc5 |
 | Public LeanHorn/Flex | `6bc56e2cecef1168c00345426b0ea278466d63c6` | Source inspected; Lean 4.29.0-rc8; Mathlib-free with pinned aesop |
 | Local Flex | HEAD `8e22dfd823dcebca571d7f898180f5a477f910dc` plus pre-existing edits | Existing compiled cache used for a small Prop/peeling/flattening smoke test; not a clean build of the public pin |
-| This translator | Lean 4.33.1 | Tasks 2.1–2.3 build the pinned backend, parse without solving, and reconstruct a closed Boolean proposition checked by Lean's kernel |
+| This translator | Lean 4.33.1 | Tasks 2.1–2.3 reconstruct and kernel-check a closed Boolean proposition; task 3.1 validates Boolean query inputs without solving |
 
 The local Flex smoke test accepted a three-clause integer loop problem and found
 one unary relation and three clauses. Nullary relations and a relation whose
@@ -48,16 +48,23 @@ CLI parse-only mode skips executing assertions. The driver must invoke assertion
 and scope commands explicitly and capture `getAssertions` at query boundaries.
 The initial investigation only inspected the Lean FFI package. Task 2.1 subsequently
 built the pinned bindings and reconstruction modules from source on Lean 4.33.1 and
-launched the linked CLI. Task 2.2's `lake exe backendSmoke` now retrieves one
-Bool-sorted assertion, inspects its native term structure, and verifies that only
-`set-logic` and `assert` were invoked. The driver intercepts `check-sat` and rejects
-unsupported or malformed input. Task 2.3 reconstructs the assertion with Lean-SMT
-and installs `BackendSmoke.assertion : Prop := True ∧ ¬False` in memory after a
+launched the linked CLI. `lake exe testReconstruction` covers tasks 2.2–2.3: it
+retrieves one assertion and verifies that only `set-logic` and `assert` were invoked.
+The driver intercepts `check-sat`; `lake exe testParser` checks rejection of
+unsupported or malformed input. Reconstruction translates the assertion with Lean-SMT
+and installs `Reconstruction.assertion : Prop := True ∧ ¬False` in memory after a
 synchronous kernel check and an axiom-dependency check. This smoke test also
 passes after rebuilding all required Lean modules and the C++ binding from source,
 reusing the pinned native cvc5 SDK. No solver query or proof reconstruction runs.
 Mathlib's optional prebuilt-cache hook requires upstream's
 exact Lean 4.33.0 and is skipped for this source build, as documented in README.
+
+Task 3.1 extends the driver with Boolean declarations, supported metadata, and
+`exit`. Its callback receives declaration names/native identities, assertions,
+and an invocation trace only after the full input passes validation. The
+`testParser` executable checks supported and rejected fixtures with input names
+and command numbers in diagnostics. Variable reconstruction and generated Lean
+files remain tasks 3.2–3.6.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

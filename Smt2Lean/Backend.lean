@@ -5,55 +5,145 @@ import Smt.Reconstruct.Builtin
 /-!
 Parse a restricted SMT-LIB script with cvc5 without solving it.
 
-Execute `set-logic` and `assert`; intercept exactly one final `check-sat`.
-Pass the captured assertions (`Array cvc5.Term`) and invoked command names
-to a callback after the full input has been accepted. Reject other commands
-and propagate parsing/invocation errors.
+Accept one Boolean query, with declarations, assertions, and optional metadata.
+Intercept `check-sat` and pass the validated query to a callback after reading
+the entire input. Report failures with the input name and command number.
 
-The reconstruction imports register the handlers used by `tests/BackendSmoke.lean`
+The reconstruction imports register the handlers used by `tests/backend/Reconstruction.lean`
 to translate assertion terms into Lean propositions.
 -/
 
 namespace Smt2Lean.Backend
 
+/-- An SMT name and its native identity. No Lean name has been assigned yet. -/
+structure BoolDeclaration where
+  name : String
+  term : cvc5.Term
+
+/-- Internal data for one Boolean query. Use native terms only inside `inspect`. -/
+structure BoolQuery where
+  declarations : Array BoolDeclaration := #[]
+  assertions : Array cvc5.Term := #[]
+  invoked : Array String := #[]
+
+/-- Check every node, including operands of Boolean equality. -/
+private def validateBooleanTerm (root : cvc5.Term)
+    (declarations : Array BoolDeclaration) : cvc5.Env Unit := do
+  let mut pending := #[root]
+  let mut visited : Std.HashSet cvc5.Term := {}
+  while !pending.isEmpty do
+    let term := pending.back!
+    pending := pending.pop
+    if visited.contains term then continue
+    visited := visited.insert term
+    unless (← ofExcept term.getSort).isBoolean do
+      throw (.unsupported s!"expected Bool, got {← ofExcept term.getSort}")
+    let kind ← ofExcept term.getKind
+    let children := term.getChildren
+    let validArity ← match kind with
+      | .CONST_BOOLEAN => pure children.isEmpty
+      | .CONSTANT => do
+        unless declarations.any (·.term == term) do
+          throw (.unsupported s!"undeclared Boolean term: {term}")
+        pure children.isEmpty
+      | .NOT => pure (children.size == 1)
+      | .AND | .OR | .IMPLIES | .EQUAL => pure (children.size >= 2)
+      | _ => throw (.unsupported s!"unsupported Boolean operator: {kind}")
+    unless validArity do
+      throw (.unsupported s!"unsupported arity for {kind}: {children.size}")
+    pending := pending ++ children
+
+/-- These metadata fields never become assumptions or select a proof target. -/
+private def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do
+  -- The binding exposes no command arguments; inspect cvc5's canonical printing.
+  let text := command.toString
+  let keys := #[":status", ":source", ":category", ":license", ":notes"]
+  if keys.any (fun key => text.startsWith s!"(set-info {key} ") then return
+  if text == "(set-info :smt-lib-version 2.6)" then return
+  throw (.unsupported s!"unsupported metadata: {text}")
+
+private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
+    (symbols : cvc5.SymbolManager) : cvc5.Env Unit := do
+  let response := (← command.invoke solver symbols).trimAscii.toString
+  unless response.isEmpty || response == "success" do
+    throw (.error s!"{command.getCommandName}: {response}")
+
+private def commandError (name : String) (ordinal : Nat) : cvc5.Error → cvc5.Error
+  | .error message => .error s!"{name}: command {ordinal}: {message}"
+  | .recoverable message => .recoverable s!"{name}: command {ordinal}: {message}"
+  | .unsupported message => .unsupported s!"{name}: command {ordinal}: {message}"
+  | .option message => .option s!"{name}: command {ordinal}: {message}"
+  | .missingValue => .error s!"{name}: command {ordinal}: missing native value"
+
 /--
 A higher-order function that parses and validates SMT-LIB commands without solving.
-Accepts `set-logic`, `assert`, and exactly one final `check-sat`.
-Calls the caller's `inspect` function once with all assertion terms and the names
-of commands actually executed.
+Accepts Boolean declarations and assertions, supported metadata, and one `check-sat`.
+Only metadata and an optional final `exit` may follow the check.
+Calls `inspect` once with the declarations, assertions, and executed command names.
 -/
 def parseAndInspectQuery
     (input : String)
-    (inspect : Array cvc5.Term → Array String → cvc5.Env Unit)
+    (inspect : BoolQuery → cvc5.Env Unit)
     (name : String := "backend-smoke") : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
   let solver  ← cvc5.Solver.new tm
   let symbols ← cvc5.SymbolManager.new tm
   let parser  ← cvc5.InputParser.new solver (some symbols)
   parser.setStringInput input (name := name)
-  let mut invoked     : Array String             := #[]
-  let mut assertions  : Option (Array cvc5.Term) := none
+  let mut query : BoolQuery := {}
+  let mut checked := false
+  let mut exited := false
+  let mut ordinal := 1
   while true do
-    let cmd ← parser.nextCommand
-    if  cmd.isNull then break
-    let commandName := cmd.getCommandName
-    if assertions.isSome then
-      throw (.error s!"{name}: unexpected command after check-sat: {commandName}")
-    match commandName with
-    | "set-logic" | "assert" =>
-      let output ← cmd.invoke solver symbols
-      invoked := invoked.push commandName
-      -- The binding can report command failures as SMT-LIB output rather than
-      -- throwing. Neither supported command should produce other output.
-      let response := output.trimAscii.toString
-      unless response.isEmpty || response == "success" do
-        throw (.error s!"{name}: {commandName}: {response}")
-    | "check-sat" =>
-      assertions := some (← solver.getAssertions)
-    | _ =>
-      throw (.unsupported s!"{name}: unsupported command: {commandName}")
-  match assertions with
-  | none => throw (.error s!"{name}: expected one check-sat")
-  | some terms => inspect terms invoked
+    let commandOrdinal := ordinal
+    try
+      let cmd ← parser.nextCommand
+      if cmd.isNull then break
+      let commandName := cmd.getCommandName
+      if exited then
+        throw (.unsupported s!"unexpected command after exit: {commandName}")
+      if checked && commandName != "set-info" && commandName != "exit" then
+        throw (.unsupported s!"unexpected command after check-sat: {commandName}")
+      match commandName with
+      | "set-logic" =>
+        unless cmd.toString == "(set-logic QF_UF)" || cmd.toString == "(set-logic ALL)" do
+          throw (.unsupported s!"expected QF_UF or ALL, got {cmd}")
+        invokeCommand cmd solver symbols
+        query := { query with invoked := query.invoked.push commandName }
+      | "declare-const" | "declare-fun" =>
+        invokeCommand cmd solver symbols
+        let terms ← symbols.getDeclaredTerms
+        unless terms.size == query.declarations.size + 1 do
+          throw (.error "expected one new declaration")
+        let term := terms.back!
+        let sort ← ofExcept term.getSort
+        unless sort.isBoolean do
+          throw (.unsupported s!"only nullary Bool declarations are supported, got {sort}")
+        let symbol ← ofExcept term.getSymbol
+        if query.declarations.any (·.name == symbol) then
+          throw (.unsupported s!"duplicate declaration: {symbol}")
+        query := { query with
+          declarations := query.declarations.push { name := symbol, term }
+          invoked := query.invoked.push commandName }
+      | "assert" =>
+        invokeCommand cmd solver symbols
+        let assertions ← solver.getAssertions
+        let some term := assertions.back?
+          | throw (.error "assert command did not store a formula")
+        validateBooleanTerm term query.declarations
+        query := { query with invoked := query.invoked.push commandName }
+      | "set-info" => validateMetadata cmd
+      | "check-sat" =>
+        query := { query with assertions := ← solver.getAssertions }
+        checked := true
+      | "exit" =>
+        unless checked do throw (.error "exit before check-sat")
+        exited := true
+      | _ => throw (.unsupported s!"unsupported command: {commandName}")
+      ordinal := ordinal + 1
+    catch error => throw (commandError name commandOrdinal error)
+  unless checked do
+    throw (commandError name ordinal (.error "expected one check-sat"))
+  inspect query
 
 end Smt2Lean.Backend

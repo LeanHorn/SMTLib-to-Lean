@@ -6,6 +6,28 @@ Real SMT-LIB queries from LiquidHaskell (`lh_*`) and Flux (`flux_*`).
 tests/run.sh   # replays every file through z3 and checks the recorded answers
 ```
 
+The translator's own checks run from the repository root without solving in cvc5:
+
+```sh
+lake exe testParser          # tests/backend/Parser.lean
+lake exe testReconstruction  # tests/backend/Reconstruction.lean
+```
+
+`Parser.lean` checks accepted queries and rejection diagnostics.
+`Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
+
+`translation/bool/` keeps three reusable queries:
+
+- `contradiction.smt2`: the smallest demo, `p` and `not p`.
+- `connectives.smt2`: all supported connectives, both declaration forms, quoted
+  names, an unused declaration, metadata, and exit in one query.
+- `empty.smt2`: a query with no assertions.
+
+`backend/Parser.lean` reuses these for logic and metadata variants. Its 26 short
+rejection cases live together in a table: each needs a separate parse because
+validation stops at the first error. Checks cover declaration identity and error
+locations; invalid input must never reach the inspection callback.
+
 ## `smt/`: verification conditions (8)
 
 Unedited z3 sessions saved by `fixpoint --save`. After each `(check-sat)` there's a `; SMT Says:` comment with the answer z3 gave at the time.

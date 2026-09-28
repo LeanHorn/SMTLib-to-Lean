@@ -1,6 +1,6 @@
 # Ordered PR backlog: working translation, frontend tooling, Flex
 
-Updated 2026-09-25. This is the current execution plan and supersedes the earlier
+Updated 2026-09-28. This is the current execution plan and supersedes the earlier
 ordering in ROADMAP.md and FLEX-ARCHITECTURE.md. PRs are ordered to get runnable
 translation working first, extend it on real inputs, and add tooling when needed.
 
@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Next: task 3.1, read and validate one flat Boolean query.** Tasks 2.1–2.3
-are implemented and verified on Lean 4.33.1, completing PR 2. PRs 2 and 3 have
+**Next: task 3.2, reconstruct Boolean variables and connectives.** Tasks 2.1–2.3
+and 3.1 are implemented and verified on Lean 4.33.1. PR 2 is complete. PRs 2 and 3 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -125,17 +125,17 @@ metadata rather than guessing filenames.
 
       **Verified:** Root build passed (97 jobs), the linked CLI launched successfully, and the example build passed (4 jobs) on macOS arm64 / Lean 4.33.1. Both direct pins and all 12 resolved Git revisions were checked. The current toolchain works when building these backend modules from source; README documents skipping Mathlib's optional 4.33.0 cache hook during dependency updates.
 
-   - [x] **2.2. Parse a closed assertion without invoking a query.** In `Smt2Lean/Backend.lean`, create the cvc5 solver/parser and add a small command-dispatch loop for a fixed smoke input containing `(assert (and true (not false)))` and `(check-sat)`. Invoke only the supported non-query commands, propagate native errors, intercept the check, and retrieve `getAssertions`. Register a `backendSmoke` executable rooted at `tests/BackendSmoke.lean`. Keep cvc5 values within their valid native environment lifetime.
+   - [x] **2.2. Parse a closed assertion without invoking a query.** In `Smt2Lean/Backend.lean`, create the cvc5 solver/parser and add a small command-dispatch loop for a fixed smoke input containing `(assert (and true (not false)))` and `(check-sat)`. Invoke only the supported non-query commands, propagate native errors, intercept the check, and retrieve `getAssertions`. Register a `testReconstruction` executable rooted at `tests/backend/Reconstruction.lean`. Keep cvc5 values within their valid native environment lifetime.
 
-      **Check:** `lake exe backendSmoke` obtains exactly one Bool-sorted assertion. A dispatch trace records the actual invoked command names and excludes check-sat; the adapter has no calls to `checkSat`, `checkSatAssuming`, or lean-smt's solving/query runners. Malformed input fails visibly. Use this small dispatcher as the basis of PR 3.
+      **Check:** `lake exe testReconstruction` obtains exactly one Bool-sorted assertion. A dispatch trace records the actual invoked command names and excludes check-sat; the adapter has no calls to `checkSat`, `checkSatAssuming`, or lean-smt's solving/query runners. Malformed input fails visibly. Use this small dispatcher as the basis of PR 3.
 
-      **Verified:** `lake exe backendSmoke` passes on Lean 4.33.1. It checks the assertion's Bool sort, AND/NOT children and true/false values, with invocation trace `#[set-logic, assert]`. Malformed input, invalid logic, check-sat-assuming, missing/repeated checks, and trailing commands are rejected. Native invocation is confined to the two-command allowlist, and unexpected command-response text is propagated as an error. Native terms are inspected in the driver's callback.
+      **Verified:** `lake exe testReconstruction` checks one assertion with invocation trace `#[set-logic, assert]` and reconstructs the expected `True ∧ ¬False`. Parser rejection checks now live in `tests/backend/Parser.lean`, run with `lake exe testParser`: malformed input, invalid logic, check-sat-assuming, missing/repeated checks, and trailing commands are rejected. Unexpected command-response text is propagated as an error. Native terms are inspected in the driver's callback.
 
    - [x] **2.3. Reconstruct and check the smoke proposition.** Extend the same executable to run `Smt.Reconstruct.reconstructSort` and `reconstructTerm` in a Lean environment containing the registered reconstructors, using a fresh reconstruction context/state. Check the returned expression as the body of a `Prop` definition. This exercises the term path without proof reconstruction.
 
-      **Check:** `lake exe backendSmoke` parses the input, reconstructs `True ∧ ¬False` (up to definitional equality), and installs a checked definition with no unresolved variables, metavariables, or admitted dependencies. It exits nonzero on any failed check. Document this one smoke command; PR 2 is complete only after it runs from a clean dependency build.
+      **Check:** `lake exe testReconstruction` parses the input, reconstructs `True ∧ ¬False` (up to definitional equality), and installs a checked definition with no unresolved variables, metavariables, or admitted dependencies. It exits nonzero on any failed check. Document this one smoke command; PR 2 is complete only after it runs from a clean dependency build.
 
-      **Verified:** The callback reconstructs both the sort and term, checks the expected proposition, and synchronously installs `BackendSmoke.assertion : Prop := True ∧ ¬False` through Lean's kernel. The definition has no axiom dependencies or unresolved variables/goals. The smoke test and all parser rejection checks pass on Lean 4.33.1, including after a clean build of all required Lean modules and the C++ binding (98 jobs for both executables), reusing only the pinned native cvc5 1.3.2 SDK. Root and example builds also pass. The executable enables interpreter support and loads the registered reconstructors into its Lean environment. No solver query, proof reconstruction, or source-file emission is performed.
+      **Verified:** The callback reconstructs both the sort and term, checks the expected proposition, and synchronously installs `Reconstruction.assertion : Prop := True ∧ ¬False` through Lean's kernel. The definition has no axiom dependencies or unresolved variables/goals. The smoke test and all parser rejection checks pass on Lean 4.33.1, including after a clean build of all required Lean modules and the C++ binding (98 jobs for both executables), reusing only the pinned native cvc5 1.3.2 SDK. Root and example builds also pass. The executable enables interpreter support and loads the registered reconstructors into its Lean environment. No solver query, proof reconstruction, or source-file emission is performed.
 
 - [ ] **3. Translate one Boolean query end to end.** Replace the CLI stub with `smt2lean <input.smt2> --out <fresh-directory>`. Accept one flat query with Boolean constants/nullary declarations, assertions, true/false, not/and/or/implication/equality, and check-sat. Handle set-logic, status metadata, and exit explicitly. Use cvc5 for parsing/sorts and lean-smt reconstruction through a minimal local-variable map; intercept the check without solving. Emit `Statements.lean` with a closed refutation proposition and a separate `Proofs.lean` theorem containing `sorry`. Reject unsupported commands/terms or multiple checks before emitting a successful result.
 
@@ -143,9 +143,11 @@ metadata rather than guessing filenames.
 
    Implement these six commits after PR 2, reviewing each before continuing:
 
-   - [ ] **3.1. Read and validate one flat Boolean query.** Extend the working backend to accept supplied SMT-LIB text, Boolean `declare-const`/nullary `declare-fun`, assertions, and exactly one check. Allow absent logic or the initial QF_UF/ALL profiles; handle nonsemantic set-info metadata and exit explicitly. Retain declaration identity and original names in a small private query record. Validate Bool-only sorts and the supported Boolean term kinds before reconstruction. Read the whole input; reject missing/repeated checks, state changes after the check, unsupported commands/operators/sorts, and HORN input. Preserve parser diagnostics with the input name and command ordinal; exact source spans follow in PR 9.
+   - [x] **3.1. Read and validate one flat Boolean query.** Extend the working backend to accept supplied SMT-LIB text, Boolean `declare-const`/nullary `declare-fun`, assertions, and exactly one check. Allow absent logic or the initial QF_UF/ALL profiles; handle nonsemantic set-info metadata and exit explicitly. Retain declaration identity and original names in a small internal query record. Validate Bool-only sorts and the supported Boolean term kinds before reconstruction. Read the whole input; reject missing/repeated checks, state changes after the check, unsupported commands/operators/sorts, and HORN input. Preserve parser diagnostics with the input name and command ordinal; exact source spans follow in PR 9.
 
       **Check:** Focused fixtures under `tests/translation/bool/` accept both declaration spellings and an empty assertion set. Int/function/quantifier/ite/push-pop/HORN cases and an unsupported command after a valid check fail. No source query command reaches native invocation and no unsupported term is converted to an uninterpreted placeholder.
+
+      **Verified:** `lake exe testParser` passes 8 accepted cases from three combined fixtures and 26 rejected cases kept inline in the test runner. Checks cover native declaration identity, quoted names, unused declarations, all supported connectives, metadata independence, full-input validation, and error locations. The callback receives one internal `BoolQuery` only after validation; rejected inputs never reach it. Native invocation is limited to logic, declaration, and assertion commands. The existing parser/reconstruction smoke, all three executable builds, and the example build pass. No Boolean variable reconstruction or file generation is implemented yet; those remain tasks 3.2–3.6.
 
    - [ ] **3.2. Reconstruct Boolean variables and connectives.** Add `Smt2Lean/Translate.lean`. Create fresh Lean `Prop` parameters for the declared Boolean constants and populate lean-smt's `userNames` map explicitly. Reuse the registered term reconstructors for true/false, not/and/or/implication, and Boolean equality; preserve operand order and the parser's supported arities. Use fresh internal binder names so SMT names cannot accidentally resolve to existing Lean declarations. Keep reconstruction caches local to the translation.
 

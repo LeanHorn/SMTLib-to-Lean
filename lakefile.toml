@@ -20,6 +20,10 @@ name = "smt2lean"
 root = "Main"
 
 [[lean_exe]]
-name = "backendSmoke"
-root = "tests.BackendSmoke"
+name = "testReconstruction"
+root = "tests.backend.Reconstruction"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "testParser"
+root = "tests.backend.Parser"
