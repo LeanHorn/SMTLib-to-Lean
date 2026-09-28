@@ -105,6 +105,21 @@ runner is now `tests/translation/run-demo.sh`; it checks both Boolean and intege
 outputs across status metadata variants and compiles their completed proofs with
 warnings treated as errors. All generated test files are temporary.
 
+Task 5.1 enables integer-valued functions of integer arguments. Application heads
+must be declared native terms with a supported signature; only their arguments
+enter the scalar-term traversal. The existing context bridge reconstructs function
+types and binds fresh parameters, while lean-smt's UF handler reconstructs calls.
+The combined fixture checks nesting, argument order, name collisions, and cache
+isolation; the existing emitter produces standalone Lean-core-only statements.
+
+Tasks 5.2–5.4 extend this path to arbitrary Bool/Int argument combinations and
+either result sort. Bool maps to Prop in both argument and result positions;
+predicates and compound Boolean arguments reuse the same reconstructors. Separate
+inputs with reused names and different signatures have independent bindings. A
+small congruence contradiction now has reviewed output and a completed core Lean
+proof. The existing demo runner checks all three demos and their status variants;
+input quantifiers remain PR 6.
+
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`
 lets seven parse; `lh_sets_neg` still fails on Z3's indexed array `map`. Input files

@@ -1,19 +1,20 @@
 # Tests
 
-Run the Boolean and integer demo checks from the repository root:
+Run the Boolean, integer, and function demos from the repository root:
 
 ```sh
 tests/translation/run-demo.sh
 ```
 
 The script builds the CLI, runs the reconstruction smoke test, and runs `cli.py`.
-The CLI checks compile twelve generated files and their statement sections using
-Lean core. Boolean contradiction and integer bounds outputs, including their
-status variants, must match `translation/bool/expected/Query.lean` and
-`translation/int/expected/Query.lean`. Both README proofs compile with warnings
-treated as errors and no `sorryAx` dependency. The Boolean proof has no axioms;
-the integer proof uses core's `propext` through its order lemma. Edited templates
-and completed proofs survive attempted overwrites. Python 3 is required.
+The CLI checks compile seventeen generated files and their statement sections using
+Lean core. Boolean contradiction, integer bounds, and function congruence outputs,
+including their status variants, must match the `expected/Query.lean` in each
+fixture directory. All three README proofs compile with warnings treated as errors
+and no `sorryAx` dependency. The Boolean and function proofs have no axioms; the
+integer proof uses core's `propext` through its order lemma. Edited templates and
+completed proofs survive attempted overwrites. The combined function/predicate
+fixture also compiles through the CLI. Python 3 is required.
 
 For the original LiquidHaskell (`lh_*`) and Flux (`flux_*`) queries:
 
@@ -32,7 +33,7 @@ lake exe testTranslation     # tests/backend/Translation.lean
 `Parser.lean` checks accepted queries and rejection diagnostics.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
-contexts, and thirteen closed Bool/Int refutations against handwritten Lean propositions.
+contexts, and seventeen closed Bool/Int refutations against handwritten Lean propositions.
 It also compares the printed statements with the original expressions and compiles
 each `Query.lean` using only Lean core. Statements have no axiom dependencies;
 only the following proof templates contain admissions. Existing proof work is
@@ -62,6 +63,14 @@ All generated test files go into temporary directories and are removed afterward
   absolute value at negative/zero/positive inputs, and all four comparison chains.
 - `bounds.smt2`: the small contradiction `x ≥ 0` and `x < 0`.
 
+`translation/functions/` keeps two queries:
+
+- `applications.smt2`: Bool/Int functions and predicates, mixed signatures, nested
+  calls, compound Boolean arguments, quoted `Int.add`/`True` names, and unused
+  parameters. Tests check argument order, missing mappings, and fresh parameters
+  across nested reconstructions and separate inputs with reused names.
+- `congruence.smt2`: the small contradiction `x = y` and `f(x) ≠ f(y)`.
+
 The translation test compares each complete formula with a handwritten Lean target.
 Emitted absolute values use only core `if/then/else`; comparison chains retain
 every adjacent pair. The parser test also checks their native binary structure.
@@ -71,7 +80,8 @@ rejection cases live together in a table: each needs a separate parse because
 validation stops at the first error. Checks cover declaration identity and error
 locations; invalid input must never reach the inspection callback.
 Div/mod remain rejected for zero and nonzero divisors, including inside supported
-arithmetic. Real terms and non-nullary functions are also rejected.
+arithmetic. Real, array, and bitvector signatures, higher-order logic, and incorrect
+application arities/types are also rejected.
 
 ## `smt/`: verification conditions (8)
 

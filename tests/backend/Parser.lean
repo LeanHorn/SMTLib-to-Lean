@@ -91,6 +91,23 @@ private def checkAcceptedQueries : IO Unit := do
   let bounds ← IO.FS.readFile "tests/translation/int/bounds.smt2"
   checkAccepted "bounds.smt2" bounds #["x"] 2
     #["set-logic", "declare-fun", "assert", "assert"]
+  let functions ← IO.FS.readFile "tests/translation/functions/applications.smt2"
+  for logic in #["QF_UFLIA", "QF_UFNIA", "ALL"] do
+    checkAccepted s!"applications.smt2 ({logic})"
+      (functions.replace "QF_UFLIA" logic)
+      #["f", "g", "Int.add", "unused", "x", "y", "p", "P", "R", "b", "choose", "test", "True", "unusedBool"] 15
+      (#["set-logic"] ++ Array.replicate 14 "declare-fun" ++ Array.replicate 15 "assert")
+      fun query => do
+        let #[_, g, _, _, x, y, _, _, _, _, _, _, _, _] := query.declarations
+          | throw (.error "expected fourteen declarations")
+        let application := query.assertions[0]![0]!
+        require ((← ofExcept application.getKind) == .APPLY_UF)
+          "expected an uninterpreted function application"
+        require (application.getChildren == #[g.term, x.term, y.term])
+          "function identity or argument order changed"
+  let congruence ← IO.FS.readFile "tests/translation/functions/congruence.smt2"
+  checkAccepted "congruence.smt2" congruence #["f", "x", "y"] 2
+    (#["set-logic"] ++ Array.replicate 3 "declare-fun" ++ Array.replicate 2 "assert")
 
 private def checkRejectedQueries : IO Unit := do
   -- Each invalid script needs its own parse: the first error stops validation.
@@ -100,11 +117,23 @@ private def checkRejectedQueries : IO Unit := do
     ("invalid-logic", "(set-logic NOT_A_LOGIC)\n(check-sat)",
       1, "cannot parse logic string"),
     ("real", "(set-logic ALL)\n(declare-const x Real)\n(check-sat)",
-      2, "nullary Bool/Int"),
-    ("function", "(set-logic ALL)\n(declare-fun f (Bool) Bool)\n(check-sat)",
-      2, "nullary Bool/Int"),
-    ("int-function", "(set-logic ALL)\n(declare-fun f (Int) Int)\n(check-sat)",
-      2, "nullary Bool/Int"),
+      2, "unsupported declaration sort"),
+    ("array-argument", "(set-logic ALL)\n(declare-fun f ((Array Int Int)) Int)\n(check-sat)",
+      2, "unsupported declaration sort"),
+    ("bitvector-result", "(set-logic ALL)\n(declare-fun f (Bool) (_ BitVec 8))\n(check-sat)",
+      2, "unsupported declaration sort"),
+    ("real-argument", "(set-logic ALL)\n(declare-fun f (Real) Int)\n(check-sat)",
+      2, "unsupported declaration sort"),
+    ("real-result", "(set-logic ALL)\n(declare-fun f (Int) Real)\n(check-sat)",
+      2, "unsupported declaration sort"),
+    ("function-arity", "(set-logic QF_UFLIA)\n(declare-fun f (Int Int) Int)\n(assert (= (f 1) 0))\n(check-sat)",
+      3, "partially apply"),
+    ("function-argument", "(set-logic QF_UFLIA)\n(declare-fun f (Int) Int)\n(assert (= (f true) 0))\n(check-sat)",
+      3, "type"),
+    ("mixed-arguments", "(set-logic ALL)\n(declare-fun f (Bool Int) Bool)\n(assert (f 0 true))\n(check-sat)",
+      3, "type"),
+    ("higher-order-logic", "(set-logic HO_ALL)\n(check-sat)",
+      1, "unsupported logic"),
     ("quantifier", "(set-logic ALL)\n(assert (forall ((p Bool)) p))\n(check-sat)",
       2, "FORALL"),
     ("ite", "(set-logic ALL)\n(declare-const p Bool)\n(assert (ite p true false))\n(check-sat)",
@@ -114,9 +143,9 @@ private def checkRejectedQueries : IO Unit := do
     ("pop", "(set-logic QF_UF)\n(pop 1)\n(check-sat)",
       2, "unsupported command: pop"),
     ("horn", "(set-logic HORN)\n(assert true)\n(check-sat)",
-      1, "expected QF_UF, QF_LIA, QF_NIA, or ALL"),
+      1, "unsupported logic"),
     ("logic", "(set-logic QF_LRA)\n(assert true)\n(check-sat)",
-      1, "expected QF_UF, QF_LIA, QF_NIA, or ALL"),
+      1, "unsupported logic"),
     ("xor", "(set-logic QF_UF)\n(declare-const p Bool)\n(assert (xor p true))\n(check-sat)",
       3, "XOR"),
     ("real-equality", "(set-logic ALL)\n(assert (= 1.0 2.0))\n(check-sat)",

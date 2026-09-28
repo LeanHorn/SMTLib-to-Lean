@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Next: PR 5, Int/Bool functions and predicates.** Tasks 2.1–2.3, 3.1–3.6,
-and 4.1–4.4 are implemented and verified on Lean 4.33.1. PRs 2–4 are complete and have
+**PR 5 is complete and ready for review. Next: PR 6, universal and existential binders.**
+Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, and 5.1–5.4 are implemented and verified on Lean 4.33.1. PRs 2–5 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -209,9 +209,38 @@ metadata rather than guessing filenames.
 
       **Verified:** The renamed `tests/translation/run-demo.sh` passes from outside the repository. It builds the CLI, runs the reconstruction smoke, and checks twelve standalone translations and their isolated statement sections. Boolean and integer demos match their checked-in expected outputs with absent/sat/unsat/unknown metadata. Both README proofs compile with warnings treated as errors and no `sorryAx`; the integer order lemma depends only on standard `propext`. Edited templates and completed proofs survive overwrite attempts. The exact integer README walkthrough also passes from the repository root, and all generated test files are removed. No production Lean code changed in this subtask. PR 4 is complete.
 
-- [ ] **5. Extend the Lean context bridge to Int/Bool functions.** Generalize the minimal declaration map from the first translator to typed function/relation parameters, populate userNames, and keep reconstruction contexts and caches local to each translation. Keep the generated definitions closed over every required interpretation.
+- [x] **5. Extend the Lean context bridge to Int/Bool functions.** Generalize the minimal declaration map from the first translator to typed function/relation parameters, populate userNames, and keep reconstruction contexts and caches local to each translation. Keep the generated definitions closed over every required interpretation.
 
    **Merge when:** Int-valued functions and Int/Bool-valued predicate arguments/results translate through the CLI without unresolved or stale free variables; separate input files cannot share accidental bindings.
+
+   Implement these four commits in order; stop for review after each. Grow one
+   combined fixture across 5.1–5.3, then add a small demo in 5.4.
+
+   - [x] **5.1. Translate integer functions end to end.** Accept non-nullary `declare-fun` signatures with Int arguments and an Int result. Enable `QF_UFLIA`/`QF_UFNIA`. Validate application heads against native declaration identities, check argument counts/sorts and result sorts, and traverse the arguments without treating the function head as data. Register lean-smt's UF application reconstructor; reuse its existing function-sort reconstruction and the fresh parameter map.
+
+      **Check:** The combined `tests/translation/functions/applications.smt2` covers unary/multi-argument functions, nested applications, operand order, an unused function, and a quoted name colliding with Lean's `Int.add`. Compare the closed target with a handwritten Lean formula and compile emitted code using only Lean core. Nested reconstructions use distinct parameters; unmapped symbols fail. Wrong arities/types, predicates, Bool arguments, and Real signatures remain rejected before output. Earlier demos continue to pass.
+
+      **Verified:** All four executable targets build. Parser checks pass for QF_UFLIA/QF_UFNIA/ALL, function-head identity, argument order, and rejection diagnostics. The native parser rejects partial applications and wrong argument types before inspection. `testTranslation` checks fourteen closed refutations and emitted files, including the full function fixture; its unused function remains quantified, its `Int.add` name remains a parameter, and nested reconstructions share no variables. Definitions have no axiom dependencies. The demo runner passes thirteen standalone translations and both previous completed proofs, with output protection and earlier expected outputs unchanged. Only one new SMT fixture was added; the README documents its CLI command.
+
+   - [x] **5.2. Translate predicates with integer arguments.** Allow Bool results for functions of Int arguments; reconstruct `P : Int → Prop` and predicate applications inside the supported Boolean connectives. Extend the same combined fixture.
+
+      **Check:** Nested integer functions can supply predicate arguments. Formulas such as `(and (P x) (not (P (f x))))` agree with handwritten propositions; their generated statements compile without admissions or unresolved variables.
+
+      **Verified:** The signature validator accepts Bool results; existing sort/application reconstruction produces Prop-valued functions without another translator. The combined fixture adds unary/binary predicates, nested integer arguments, negation, implication, and Boolean equality. Parser and translation checks pass, including comparisons with handwritten Lean targets, fresh parameters, axiom-free definitions, and standalone compilation of all fourteen generated cases.
+
+   - [x] **5.3. Translate Boolean arguments and mixed signatures.** Allow any mixture of Bool/Int arguments and either result sort. Map Bool arguments to Lean Prop consistently, including compound formulas passed as arguments. Extend the same fixture and context-isolation checks.
+
+      **Check:** `g : Prop → Int → Int` and Bool-valued functions accept correctly reconstructed arguments. Quoted names remain parameters; repeated source names in separate inputs cannot share bindings or caches. Unsupported sorts and higher-order function use still fail explicitly.
+
+      **Verified:** Parser checks and all sixteen translation/emission cases pass. The combined fixture includes mixed signatures, compound Boolean arguments, nested predicates, quoted `True`, and an unused mixed-signature predicate. Its closed target matches a handwritten Lean formula. Separate inputs reuse `f` and `x` with different signatures without sharing bindings. Array/bitvector/Real signatures, higher-order logic, and incorrect argument types are rejected. Generated definitions remain axiom-free and compile using only Lean core.
+
+   - [x] **5.4. Finish the function demo.** Add a small congruence contradiction (`x = y` and `f x ≠ f y`), its reviewed expected output, and a README proof. Extend the existing demo runner and document the supported signatures.
+
+      **Check:** Generated statements compile independently; status variants preserve the target; the completed proof checks without admissions. Unsupported signatures fail before output, and prior demos and overwrite protection still pass. Mark PR 5 complete only after these checks; quantifiers remain PR 6.
+
+      **Verified:** `congruence.smt2` matches its reviewed `expected/Query.lean` with absent/sat/unsat/unknown status. The README's two-line proof compiles with warnings treated as errors and has no axiom dependencies. The existing runner passes from outside the repository: reconstruction smoke, seventeen standalone translations and isolated statement sections, all three completed README proofs, rejection diagnostics, and overwrite protection. All generated test files are temporary. The README now lists supported Bool/Int function signatures and the function demo command.
+
+   **PR 5 complete:** All four executable targets build; the parser, seventeen handwritten translation/emission comparisons, and full demo runner pass. Tasks 5.2–5.4 were completed together at the user's request; their changes remain uncommitted for review.
 
 - [ ] **6. Translate universal and existential binders.** Extend the working term translator with forall/exists, preserving sort annotations, shadowing, body-only variables, and bound-term identity. Initially cover Int and Bool using the existing context bridge.
 
