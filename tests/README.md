@@ -18,7 +18,18 @@ lake exe testTranslation     # tests/backend/Translation.lean
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
 contexts, and eight closed refutations against handwritten Lean propositions.
-It reuses the same three fixtures below, including metadata and empty-query variants.
+It also compares the printed statements with the original expressions, compiles
+the generated statements and proof templates using only Lean core, and checks that
+existing proof work is preserved. It reuses the three fixtures below.
+
+Check the CLI's exit codes, diagnostics, and output protection with:
+
+```sh
+lake build smt2lean
+lake env python3 tests/cli.py
+```
+
+All generated test files go into temporary directories and are removed afterwards.
 
 `translation/bool/` keeps three reusable queries:
 

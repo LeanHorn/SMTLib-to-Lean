@@ -2,6 +2,27 @@
 
 A tool to connect SMT-based frontends to Lean4.
 
+## Translate a Boolean query
+
+From the repository root:
+
+```sh
+lake exe smt2lean tests/translation/bool/contradiction.smt2 --out boolean-demo
+```
+
+This creates `Statements.lean` with the closed `Refutation : Prop` definition and
+`Proofs.lean` with an unfinished theorem containing `by sorry`. The generated
+files use Lean core; they do not depend on cvc5 or this translator.
+
+The output directory must be new, and its parent must exist. Existing proof work
+is never overwritten. The translator validates the whole input and kernel-checks
+the in-memory statement before writing files. It does not solve the query or
+prove the theorem.
+
+Use `lake exe smt2lean --help` for usage. Exit codes are `0` for generation/help,
+`2` for invalid arguments, and `1` for input, translation, or output errors.
+Only the Boolean fragment listed below is currently supported.
+
 ## Development build
 
 Install [elan](https://github.com/leanprover/elan), Git, and a C++ toolchain
@@ -69,7 +90,7 @@ def Reconstruction.assertion : Prop := True ∧ ¬False
 
 The definition is installed in memory, with no unresolved variables, unfinished
 goals, or axiom dependencies. This checks the proposition's construction; it does
-not prove the proposition. No output file is generated yet. A failed check exits
+not prove the proposition. This test does not write files. A failed check exits
 nonzero.
 
 ## Boolean query validation
@@ -80,7 +101,7 @@ Task 3.1 extends the backend to accept one Boolean query. Run its fixtures with:
 lake exe testParser
 ```
 
-The test modules live in `tests/backend/`. The parser test checks accepted inputs,
+The Lean test modules live in `tests/backend/`. The parser test checks accepted inputs,
 malformed input, and unsupported features; the reconstruction test checks the Lean
 expression and its kernel validation.
 
@@ -111,6 +132,9 @@ definition in memory. Run:
 lake exe testTranslation
 ```
 
+This test also renders all eight cases, compares the re-elaborated statements with
+the original expressions, and compiles both generated files using only Lean core.
+
 `Smt2Lean.Translate.withAssertions` binds each SMT declaration to a fresh Lean
 `Prop` parameter and reconstructs the assertions using Lean-SMT. Names such as
 `|True|` stay variables. Unmapped terms fail, and each query has its own caches.
@@ -126,5 +150,6 @@ A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
 kernel-checked and has no axiom dependencies. This checks its type, not its truth.
 
-The main `smt2lean` CLI remains a stub. File generation and the CLI follow in
-tasks 3.4–3.6; see the [implementation plan](docs/PR-PLAN.md).
+Tasks 3.4–3.5 connect this translation to file generation and the CLI above.
+The reviewed demo walkthrough remains task 3.6; see the
+[implementation plan](docs/PR-PLAN.md).

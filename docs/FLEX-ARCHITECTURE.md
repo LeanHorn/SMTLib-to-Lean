@@ -70,8 +70,15 @@ parameters, explicitly maps SMT names, and reconstructs assertions with fresh
 Lean-SMT caches. `defineRefutation` builds `∀ parameters, (assertions) → False`,
 using `True` for no assertions, and installs a kernel-checked, axiom-free
 `Refutation : Prop` definition in memory. `testTranslation` checks names,
-connectives, closure, and independence from status metadata. File generation and
-the CLI remain tasks 3.4–3.6.
+connectives, closure, and independence from status metadata.
+
+Tasks 3.4–3.5 add `Smt2Lean/Emit.lean` and the CLI:
+`smt2lean <input.smt2> --out <new-directory>`. The emitter uses Lean's printer for
+`Statements.lean` and writes a separate `Proofs.lean` template with `sorry`, using
+only Lean core. Files are written only after the full query is validated and its
+statement is kernel-checked. Existing output paths are refused. Tests compare the
+printed propositions with the originals and compile both files independently of
+the translator. The reviewed demo walkthrough remains task 3.6.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

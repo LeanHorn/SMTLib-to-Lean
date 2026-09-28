@@ -18,6 +18,7 @@ name = "Smt2Lean"
 [[lean_exe]]
 name = "smt2lean"
 root = "Main"
+supportInterpreter = true
 
 [[lean_exe]]
 name = "testReconstruction"
