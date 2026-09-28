@@ -35,8 +35,10 @@ lake exe testHorn            # tests/backend/Horn.lean
 `Horn.lean` parses the unedited `chc/lh_sum_rec.smt2` in explicit CHC mode. It checks
 one typed declaration, three quantified assertions, and an invocation trace with
 no solver query. Unsupported terms/sorts and invalid command sequences still fail
-before inspection. This currently checks parsing, not Horn clause shape. The CLI
-tests also verify that the same file is rejected without creating output.
+before inspection. It also recognizes relations and bare facts, checks native
+identity and bound Bool arguments, and rejects unsupported CHC declarations and
+relations nested inside arguments. Quantified facts and rules remain for 7.3–7.4.
+The CLI tests verify that HORN input is rejected without creating output.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
 contexts, and twenty-two closed Bool/Int refutations against handwritten Lean propositions.
@@ -88,6 +90,12 @@ All generated test files go into temporary directories and are removed afterward
 The parser test also constructs native terms with a dangling variable and a
 different variable with the same name. Both must fail scope validation, even when
 the same subterm was already accepted under a quantifier.
+
+`translation/chc/clauses.smt2` combines six relation declarations and five bare
+facts: unary/multi-argument and nullary relations, mixed Bool/Int arguments,
+arithmetic, quoted names, and an unused relation. Short invalid cases stay inline
+in `Horn.lean`. Separate checks distinguish a bound Bool from a same-named nullary
+relation and reject a different native symbol with the same printed name.
 
 The translation test compares each complete formula with a handwritten Lean target.
 Emitted absolute values use only core `if/then/else`; comparison chains retain

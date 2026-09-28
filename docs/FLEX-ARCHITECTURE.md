@@ -135,6 +135,14 @@ parses the unedited lh_sum_rec file and checks its declaration, three assertions
 and non-query invocation trace. Horn clause-shape validation is still separate;
 the ordinary CLI keeps rejecting HORN until the CHC emitter is connected in PR 8.
 
+Task 7.2 adds `Chc.collectRelations`, `relationAtom?`, and `recognizeFact`. The small
+relation/atom records retain native identities, argument sorts, and ordered terms
+inside the parser callback. All declarations in this initial CHC profile must be
+Bool-valued relations over Bool/Int; global Int constants and Int-valued functions
+are rejected. Relation arguments may contain bound variables and theory terms,
+but no other relation occurrences. Bare facts are recognized; quantified clause
+extraction and rule validation follow in 7.3–7.4.
+
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`
 lets seven parse; `lh_sets_neg` still fails on Z3's indexed array `map`. Input files

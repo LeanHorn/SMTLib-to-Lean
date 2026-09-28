@@ -17,7 +17,7 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**Task 7.1 is complete and ready for review. Next: 7.2, relation and fact recognition.**
+**Task 7.2 is complete and ready for review. Next: 7.3, quantified rules and heads.**
 Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, 5.1–5.4, and 6.1–6.3 are implemented and verified on Lean 4.33.1. PRs 2–6 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
@@ -273,9 +273,11 @@ metadata rather than guessing filenames.
 
       **Verified:** `lake exe testHorn` passes with `(mode := .chc)`: one `k_1 : Int → Bool` declaration, three quantified Bool assertions, and invocation trace `set-logic`, `declare-fun`, and three `assert` commands. Invalid sorts/operators and missing/repeated/trailing query commands are rejected before inspection. Default SMT mode and the actual CLI reject the unedited fixture at command 1 without creating output. All five executable targets build; parser checks, twenty-two translation checks, and the demo runner's twenty-two standalone outputs/four completed proofs pass. No clause-shape validation or CHC emission is added yet. Changes remain uncommitted for review.
 
-   - [ ] **7.2. Recognize relations and facts.** Add `Smt2Lean/Chc.lean`. Identify declared Bool-valued symbols by native identity, including nullary relations; accept Bool/Int arguments. Recognize a relation application as a fact with no premises, and retain its ordered arguments in a small relation-atom record. Reject occurrences of unknown relations inside relation arguments. Initially reject global Int constants and Int-valued uninterpreted functions: accounting for their background interpretations is outside this first CHC profile. Quantified Bool variables remain clause data, distinct from declared relations.
+   - [x] **7.2. Recognize relations and facts.** Add `Smt2Lean/Chc.lean`. Identify declared Bool-valued symbols by native identity, including nullary relations; accept Bool/Int arguments. Recognize a relation application as a fact with no premises, and retain its ordered arguments in a small relation-atom record. Reject occurrences of unknown relations inside relation arguments. Initially reject global Int constants and Int-valued uninterpreted functions: accounting for their background interpretations is outside this first CHC profile. Quantified Bool variables remain clause data, distinct from declared relations.
 
       **Check:** One combined fixture covers unary/multi-argument and nullary facts, mixed argument sorts, unused relations, arithmetic arguments, and quoted names. Incorrect signatures and a nested relation argument such as `R (P x)` fail explicitly.
+
+      **Verified:** `lake exe testHorn` passes: the combined `tests/translation/chc/clauses.smt2` yields six relations and five bare facts with original native identities, argument sorts, and argument order. Checks distinguish a bound Bool from a same-named nullary relation and reject a different native symbol with the same printed name. Unsupported declarations, direct/hidden/nullary relation arguments, and non-fact assertions fail. The unedited lh_sum_rec parser check remains intact. CLI and Horn targets build; the existing demo runner passes all twenty-two standalone outputs and four completed proofs, including ordinary-CLI rejection of HORN. Quantified clause extraction remains 7.3. Changes are uncommitted for review.
 
    - [ ] **7.3. Extract universally quantified rules and heads.** Peel leading `forall` binders, retaining every native variable and its sort, including unused and premise-only variables. Split implications into ordered premises and a final head; support chained implications. Accept relation heads and literal `false`. Extend the fact record into a clause containing binders, premises, head, and source assertion number. Preserve original argument expressions; argument normalization follows later.
 
