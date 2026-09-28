@@ -1,6 +1,6 @@
 # Ordered PR backlog: working translation, frontend tooling, Flex
 
-Updated 2026-09-28. This is the current execution plan and supersedes the earlier
+Updated 2026-09-29. This is the current execution plan and supersedes the earlier
 ordering in ROADMAP.md and FLEX-ARCHITECTURE.md. PRs are ordered to get runnable
 translation working first, extend it on real inputs, and add tooling when needed.
 
@@ -17,8 +17,8 @@ Implement one PR at a time and stop for user review. Do not commit unless asked.
 
 ## Implementation order
 
-**PR 5 is complete and ready for review. Next: PR 6, universal and existential binders.**
-Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, and 5.1–5.4 are implemented and verified on Lean 4.33.1. PRs 2–5 have
+**Task 7.3 is complete and ready for review. Next: 7.4, premise validation.**
+Tasks 2.1–2.3, 3.1–3.6, 4.1–4.4, 5.1–5.4, and 6.1–6.3 are implemented and verified on Lean 4.33.1. PRs 2–6 have
 commit-sized checklists below. Implement one subtask, run its checks, and stop for
 user review before starting the next. These are intended commit boundaries;
 leave changes uncommitted unless explicitly asked to commit. PR 1's semantic
@@ -240,15 +240,60 @@ metadata rather than guessing filenames.
 
       **Verified:** `congruence.smt2` matches its reviewed `expected/Query.lean` with absent/sat/unsat/unknown status. The README's two-line proof compiles with warnings treated as errors and has no axiom dependencies. The existing runner passes from outside the repository: reconstruction smoke, seventeen standalone translations and isolated statement sections, all three completed README proofs, rejection diagnostics, and overwrite protection. All generated test files are temporary. The README now lists supported Bool/Int function signatures and the function demo command.
 
-   **PR 5 complete:** All four executable targets build; the parser, seventeen handwritten translation/emission comparisons, and full demo runner pass. Tasks 5.2–5.4 were completed together at the user's request; their changes remain uncommitted for review.
+   **PR 5 complete:** All four executable targets build; the parser, seventeen handwritten translation/emission comparisons, and full demo runner pass. Tasks 5.2–5.4 were completed together at the user's request.
 
-- [ ] **6. Translate universal and existential binders.** Extend the working term translator with forall/exists, preserving sort annotations, shadowing, body-only variables, and bound-term identity. Initially cover Int and Bool using the existing context bridge.
+- [x] **6. Translate universal and existential binders.** Extend the working term translator with forall/exists, preserving sort annotations, shadowing, body-only variables, and bound-term identity. Initially cover Int and Bool using the existing context bridge.
 
    **Merge when:** Nested forall/exists fixtures translate through the CLI and elaborate with their original scopes, including Bool variables used as data.
+
+   - [x] **6.1. Validate quantified inputs and binding scope.** Accept `UF`, `LIA`, `NIA`, `UFLIA`, and `UFNIA` alongside `ALL`/absent logic. Traverse forall/exists bodies with their active native variables; reject out-of-scope identities, unsupported binder sorts, patterns, and quantifiers in `QF_*` logics. Check shared terms again when the scope changes.
+
+      **Verified:** Parser checks pass for all added logics, the combined scope fixture, and rejection diagnostics. Direct native-term tests reject a dangling variable even after the same subterm passed inside a quantifier, and reject a different variable with the same printed name.
+
+   - [x] **6.2. Reconstruct binders by native identity.** Add a small forall/exists handler in `Translate.lean`. Seed each fresh term cache with active native-variable/Lean-parameter bindings, reconstruct the body with existing lean-smt handlers, then close all binders and restore the enclosing cache. Preserve unused variables.
+
+      **Verified:** All twenty-two handwritten translation/emission comparisons pass. The combined fixture covers alternation, shadowing across sorts, an outer variable retained through a `let` alias, quoted names, premise-only/unused variables, and quantified Boolean arguments. Reconstructed and emitted statements agree, have no axiom dependencies, and compile using only Lean core.
+
+   - [x] **6.3. Finish the quantified demo.** Print binder types explicitly so unused existential variables elaborate. Add the small `forall x, P x` / `exists x, not P x` demo, reviewed output, and README proof. Extend the existing CLI runner with metadata variants, failure cases, and overwrite checks; retain earlier demos.
+
+      **Verified:** The runner passes from outside the repository: reconstruction smoke, twenty-two standalone files and their isolated statements, four completed README proofs, rejection diagnostics, and overwrite protection. The quantified output matches its checked-in version for absent/sat/unsat/unknown metadata. Its completed proof has no axioms or admissions. All four executable targets build, and all generated test files are temporary. PR 6 is complete; its changes remain uncommitted for review.
 
 - [ ] **7. Recognize and validate integer Horn clauses.** Add the relation declarations and minimal typed clause records needed for the CHC path. Recognize relation-free theory guards, relation premises, and relation/False heads in the already supported Int/Bool fragment. Validate all clauses before emitting a CHC goal; report errors by input/query/clause until exact source spans arrive.
 
    **Merge when:** Accept facts, multi-premise rules, nullary relations, and the clauses in lh_sum_rec; reject an explicitly negated body relation or disjunctive relation heads with the offending clause identified. No Flex integration is needed.
+
+   Implement these five commits in order; stop for review after each. Keep native
+   terms inside the parser callback. Add records only as the validator needs them;
+   no serialized schema or general-purpose IR. PR 7 delivers `lake exe testHorn`;
+   CHC Lean output follows in PR 8.
+
+   - [x] **7.1. Parse HORN inputs through an explicit CHC mode.** Reuse `Backend.lean`'s declaration, assertion, sort, and scope checks. Add a CHC parsing mode that accepts `set-logic HORN`, and a `testHorn` executable rooted at `tests/backend/Horn.lean`. Keep the ordinary CLI rejecting HORN until PR 8, so it cannot emit an ordinary refutation for a CHC problem.
+
+      **Check:** Parse the unedited `tests/chc/lh_sum_rec.smt2`: one declaration and three assertions, without invoking `check-sat`. Existing SMT translation behavior stays unchanged; the ordinary CLI rejects HORN before creating output.
+
+      **Verified:** `lake exe testHorn` passes with `(mode := .chc)`: one `k_1 : Int → Bool` declaration, three quantified Bool assertions, and invocation trace `set-logic`, `declare-fun`, and three `assert` commands. Invalid sorts/operators and missing/repeated/trailing query commands are rejected before inspection. Default SMT mode and the actual CLI reject the unedited fixture at command 1 without creating output. All five executable targets build; parser checks, twenty-two translation checks, and the demo runner's twenty-two standalone outputs/four completed proofs pass. No clause-shape validation or CHC emission is added yet. Changes remain uncommitted for review.
+
+   - [x] **7.2. Recognize relations and facts.** Add `Smt2Lean/Chc.lean`. Identify declared Bool-valued symbols by native identity, including nullary relations; accept Bool/Int arguments. Recognize a relation application as a fact with no premises, and retain its ordered arguments in a small relation-atom record. Reject occurrences of unknown relations inside relation arguments. Initially reject global Int constants and Int-valued uninterpreted functions: accounting for their background interpretations is outside this first CHC profile. Quantified Bool variables remain clause data, distinct from declared relations.
+
+      **Check:** One combined fixture covers unary/multi-argument and nullary facts, mixed argument sorts, unused relations, arithmetic arguments, and quoted names. Incorrect signatures and a nested relation argument such as `R (P x)` fail explicitly.
+
+      **Verified:** `lake exe testHorn` passes: the combined `tests/translation/chc/clauses.smt2` yields six relations and five bare facts with original native identities, argument sorts, and argument order. Checks distinguish a bound Bool from a same-named nullary relation and reject a different native symbol with the same printed name. Unsupported declarations, direct/hidden/nullary relation arguments, and non-fact assertions fail. The unedited lh_sum_rec parser check remains intact. CLI and Horn targets build; the existing demo runner passes all twenty-two standalone outputs and four completed proofs, including ordinary-CLI rejection of HORN. Quantified clause extraction remains 7.3. Changes are uncommitted for review.
+
+   - [x] **7.3. Extract universally quantified rules and heads.** Peel leading `forall` binders, retaining every native variable and its sort, including unused and premise-only variables. Split implications into ordered premises and a final head; support chained implications. Accept relation heads and literal `false`. Extend the fact record into a clause containing binders, premises, head, and source assertion number. Preserve original argument expressions; argument normalization follows later.
+
+      **Check:** Extract all three lh_sum_rec clauses with binder counts 3/5/3 and heads `k_1`, `k_1`, and `false`. Nested/shadowed leading binders retain identity. Reject existential clauses, quantifiers inside premises/heads, and unsupported heads such as `or (P x) (Q x)`.
+
+      **Verified:** `lake exe testHorn` passes: lh_sum_rec retains all three clauses with binder counts 3/5/3 and heads `k_1`, `k_1`, and `false`. The combined fixture now covers eleven clauses, checking source assertion numbers, mixed-sort/unused/shadowed binders, chained premise order, and unchanged head arguments. Existential and non-leading quantifiers, disjunctive heads, theory heads, and literal `true` heads fail explicitly. CLI and Horn targets build; the demo runner passes all twenty-two standalone translations and four completed proofs. Premise conjunctions remain intact and unclassified until 7.4; CHC Lean output remains PR 8. Changes are uncommitted for review.
+
+   - [x] **7.4. Validate relation premises and theory guards.** Flatten conjunctions in premises while preserving their order. Classify each premise as a positive relation atom or a supported Bool/Int formula containing no unknown relation anywhere in its term tree. Keep relation-free disjunctions and negations intact. Accept any number of relation premises; only return a validated problem after every clause passes.
+
+      **Check:** Accept facts, linear rules, nonlinear rules with several relation premises, nullary relations, and false-head rules. Reject negated relations, relations hidden inside equality/disjunction/arguments, and unsupported operators. `(not cond)` is a valid guard when `cond` is a bound Bool variable; `(not (P x))` is rejected. lh_sum_rec has relation-premise counts 0/1/1.
+
+      **Verified:** `lake exe testHorn` passes. `validateQuery` returns a complete `Problem` with ordered, classified premises; `parseAndInspectProblem` calls its callback only after the entire input passes. lh_sum_rec has relation-premise counts 0/1/1. The combined fixture now has twelve clauses, including a nonlinear rule with three relation premises and nested conjunctions; conjunctions inside guard disjunctions stay intact. Bound Bool negation remains a guard even when it shadows a nullary relation. Negated/hidden/nested relations and unsupported operators fail. No CHC Lean output is added. Changes are uncommitted for review.
+
+   - [ ] **7.5. Finish the validation checks and diagnostics.** Reuse the unedited lh_sum_rec file and one combined CHC fixture; keep short invalid cases inline. Report failures with the input filename, query number (1 for this single-query driver), and source clause/assertion number. Document the supported clause shape and `lake exe testHorn`; keep existing demos passing.
+
+      **Check:** lh_sum_rec yields one relation, one fact, one recursive rule, and one false-head clause. Changing status metadata leaves that structure unchanged. A bad later clause rejects the whole problem. The parser, Horn validator, translation checks, and existing demo runner pass. No CHC Lean output or Flex execution is introduced in this PR.
 
 - [ ] **8. Translate the first existing CHC file end to end.** Connect the Horn validator to the existing CLI and emitter. For HORN input, close all declared relations with leading existentials and conjoin universally quantified clauses; include nullary relations. Generate the positive `Problem` proposition and a separate `sorry` theorem independently of recorded status. Preserve original predicate arguments at this point; normalization follows as its own PR.
 

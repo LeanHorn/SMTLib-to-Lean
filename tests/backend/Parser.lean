@@ -108,6 +108,29 @@ private def checkAcceptedQueries : IO Unit := do
   let congruence ← IO.FS.readFile "tests/translation/functions/congruence.smt2"
   checkAccepted "congruence.smt2" congruence #["f", "x", "y"] 2
     (#["set-logic"] ++ Array.replicate 3 "declare-fun" ++ Array.replicate 2 "assert")
+  let scopes ← IO.FS.readFile "tests/translation/quantifiers/scopes.smt2"
+  for logic in #["UFLIA", "UFNIA", "ALL"] do
+    checkAccepted s!"scopes.smt2 ({logic})" (scopes.replace "UFLIA" logic)
+      #["x", "p", "R", "f", "True"] 8
+      (#["set-logic"] ++ Array.replicate 5 "declare-fun" ++ Array.replicate 8 "assert")
+      fun query => do
+        let outer := query.assertions[3]!
+        let body := outer[1]!
+        let inner := body[0]!
+        let outerVar := outer[0]![0]!
+        let innerVar := inner[0]![0]!
+        require (outerVar != innerVar && inner[1]![1]! == outerVar && inner[1]![2]! == innerVar)
+          "shadowed variables lost their native identity"
+  let quantified ← IO.FS.readFile "tests/translation/quantifiers/quantified.smt2"
+  checkAccepted "quantified.smt2" quantified #["P"] 2
+    #["set-logic", "declare-fun", "assert", "assert"]
+  for logic in #["LIA", "NIA"] do
+    checkAccepted s!"integer binders ({logic})"
+      s!"(set-logic {logic})\n(assert (forall ((x Int)) (exists ((y Int)) (= x y))))\n(check-sat)"
+      #[] 1 #["set-logic", "assert"]
+  checkAccepted "Boolean binders (UF)"
+    "(set-logic UF)\n(assert (forall ((p Bool)) (exists ((q Bool)) (= p q))))\n(check-sat)"
+    #[] 1 #["set-logic", "assert"]
 
 private def checkRejectedQueries : IO Unit := do
   -- Each invalid script needs its own parse: the first error stops validation.
@@ -134,8 +157,18 @@ private def checkRejectedQueries : IO Unit := do
       3, "type"),
     ("higher-order-logic", "(set-logic HO_ALL)\n(check-sat)",
       1, "unsupported logic"),
-    ("quantifier", "(set-logic ALL)\n(assert (forall ((p Bool)) p))\n(check-sat)",
-      2, "FORALL"),
+    ("bound-real", "(set-logic ALL)\n(assert (forall ((x Real)) true))\n(check-sat)",
+      2, "unsupported bound variable sort"),
+    ("quantifier-in-qf", "(set-logic QF_LIA)\n(assert (forall ((x Int)) (> x 0)))\n(check-sat)",
+      2, "quantifiers require"),
+    ("bound-array", "(set-logic ALL)\n(assert (exists ((a (Array Int Int))) true))\n(check-sat)",
+      2, "unsupported bound variable sort"),
+    ("quantified-ite", "(set-logic ALL)\n(assert (forall ((p Bool)) (ite p true false)))\n(check-sat)",
+      2, "ITE"),
+    ("quantifier-pattern", "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
+      3, "quantifier without annotations"),
+    ("out-of-scope", "(set-logic ALL)\n(assert (forall ((x Int)) (= x x)))\n(assert (= x 0))\n(check-sat)",
+      3, "x"),
     ("ite", "(set-logic ALL)\n(declare-const p Bool)\n(assert (ite p true false))\n(check-sat)",
       3, "ITE"),
     ("push", "(set-logic QF_UF)\n(push 1)\n(check-sat)",
@@ -191,7 +224,30 @@ private def checkRejectedQueries : IO Unit := do
     "(set-logic ALL)\n(assert (< 1.0 2.0))\n(check-sat)"
     2 "expected Bool or Int"
 
+/-- Reject dangling native variables even when names or already-visited terms match. -/
+private def checkBoundScopes : IO Unit := (do
+  let tm ← cvc5.TermManager.new
+  let int ← tm.getIntegerSort
+  let x ← tm.mkVar int "x"
+  let other ← tm.mkVar int "x"
+  let variables ← tm.mkTerm .VARIABLE_LIST #[x]
+  let body ← tm.mkTerm .EQUAL #[x, x]
+  let quantified ← tm.mkTerm .FORALL #[variables, body]
+  validateAssertion quantified #[]
+  -- The quantified occurrence is visited first; it must not validate its sibling.
+  let escaped ← tm.mkTerm .AND #[body, quantified]
+  let wrongIdentity ← tm.mkTerm .FORALL #[variables, ← tm.mkTerm .EQUAL #[x, other]]
+  for invalid in #[escaped, wrongIdentity] do
+    let error? : Option String ← try
+      validateAssertion invalid #[]
+      pure none
+    catch error => pure (some (toString error))
+    require (error?.any (fun (message : String) => message.contains "unbound variable"))
+      "validation accepted a variable outside its binding scope"
+  ).runIO
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkRejectedQueries
-  IO.println "Parser passed: Bool/Int queries, declaration identity, and rejection diagnostics"
+  checkBoundScopes
+  IO.println "Parser passed: Bool/Int queries, binding identity/scope, and rejection diagnostics"

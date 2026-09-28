@@ -9,13 +9,20 @@ Parse a restricted SMT-LIB script with cvc5 without solving it.
 
 Accept one Bool/Int query, with declarations, assertions, and optional metadata.
 Intercept `check-sat` and pass the validated query to a callback after reading
-the entire input. Report failures with the input name and command number.
+the entire input. Report failures with the input name and command number;
+CHC mode adds the query number and, for assertion validation, the clause number.
 
 The reconstruction imports register the handlers used by `Translate.lean`
 and the reconstruction tests to turn assertion terms into Lean propositions.
 -/
 
 namespace Smt2Lean.Backend
+
+/-- CHC mode additionally permits HORN; clause-shape validation is separate. -/
+inductive ParseMode where
+  | smt
+  | chc
+  deriving BEq
 
 /-- An SMT name and its native identity. No Lean name has been assigned yet. -/
 structure ParsedDeclaration where
@@ -38,23 +45,43 @@ private def isSupportedFunction (sort : cvc5.Sort) : cvc5.Env Bool := do
   let result ← ofExcept sort.getFunctionCodomainSort
   return !domains.isEmpty && domains.all isScalarSort && isScalarSort result
 
-/-- Check every node's sort, operator, and declaration identity. -/
+/-- Check sorts, operators, declarations, and bound-variable scope. -/
 def validateAssertion (root : cvc5.Term)
-    (declarations : Array ParsedDeclaration) : cvc5.Env Unit := do
+    (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool := true) : cvc5.Env Unit := do
   unless (← ofExcept root.getSort).isBoolean do
     throw (.unsupported "expected a Bool assertion")
-  let mut pending := #[root]
-  let mut visited : Std.HashSet cvc5.Term := {}
+  let mut pending : Array (cvc5.Term × Array cvc5.Term) := #[(root, #[])]
+  let mut visited : Std.HashSet (cvc5.Term × Array cvc5.Term) := {}
   while !pending.isEmpty do
-    let term := pending.back!
+    let (term, bound) := pending.back!
     pending := pending.pop
-    if visited.contains term then continue
-    visited := visited.insert term
+    -- A shared term must be checked again when its scope changes.
+    if visited.contains (term, bound) then continue
+    visited := visited.insert (term, bound)
     let sort ← ofExcept term.getSort
     unless isScalarSort sort do
       throw (.unsupported s!"expected Bool or Int, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if kind == .FORALL || kind == .EXISTS then
+      unless allowQuantifiers do
+        throw (.unsupported "quantifiers require a quantified logic or ALL")
+      unless children.size == 2 do
+        throw (.unsupported "expected a quantifier without annotations")
+      let variables := children[0]!
+      unless (← ofExcept variables.getKind) == .VARIABLE_LIST &&
+          !variables.getChildren.isEmpty do
+        throw (.unsupported "expected a nonempty quantifier variable list")
+      let mut scope := bound
+      for binder in variables.getChildren do
+        unless (← ofExcept binder.getKind) == .VARIABLE do
+          throw (.unsupported "expected a bound variable")
+        let variableSort ← ofExcept binder.getSort
+        unless isScalarSort variableSort do
+          throw (.unsupported s!"unsupported bound variable sort: {variableSort}; expected Bool or Int")
+        scope := scope.push binder
+      pending := pending.push (children[1]!, scope)
+      continue
     if kind == .APPLY_UF then
       let some function := children[0]?
         | throw (.unsupported "function application has no function")
@@ -73,13 +100,17 @@ def validateAssertion (root : cvc5.Term)
       unless sort == (← ofExcept signature.getFunctionCodomainSort) do
         throw (.unsupported s!"wrong result sort for {function}")
       -- Validate the arguments; the declared function is allowed only as the head.
-      pending := pending ++ arguments
+      pending := pending ++ arguments.map (·, bound)
       continue
     let validArity ← match kind with
       | .CONST_BOOLEAN | .CONST_INTEGER => pure children.isEmpty
       | .CONSTANT => do
         unless declarations.any (·.term == term) do
           throw (.unsupported s!"undeclared term: {term}")
+        pure children.isEmpty
+      | .VARIABLE => do
+        unless bound.contains term do
+          throw (.unsupported s!"unbound variable: {term}")
         pure children.isEmpty
       | .NOT | .NEG | .ABS => pure (children.size == 1)
       | .AND | .OR | .IMPLIES | .ADD | .SUB | .MULT => pure (children.size >= 2)
@@ -88,7 +119,7 @@ def validateAssertion (root : cvc5.Term)
       | _ => throw (.unsupported s!"unsupported operator: {kind}")
     unless validArity do
       throw (.unsupported s!"unsupported arity for {kind}: {children.size}")
-    pending := pending ++ children
+    pending := pending ++ children.map (·, bound)
 
 /-- These metadata fields never become assumptions or select a proof target. -/
 private def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do
@@ -105,32 +136,38 @@ private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
   unless response.isEmpty || response == "success" do
     throw (.error s!"{command.getCommandName}: {response}")
 
-private def commandError (name : String) (ordinal : Nat) : cvc5.Error → cvc5.Error
-  | .error message => .error s!"{name}: command {ordinal}: {message}"
-  | .recoverable message => .recoverable s!"{name}: command {ordinal}: {message}"
-  | .unsupported message => .unsupported s!"{name}: command {ordinal}: {message}"
-  | .option message => .option s!"{name}: command {ordinal}: {message}"
-  | .missingValue => .error s!"{name}: command {ordinal}: missing native value"
+/-- Add a location without changing the native error category. -/
+def errorWithContext (context : String) : cvc5.Error → cvc5.Error
+  | .error message => .error s!"{context}: {message}"
+  | .recoverable message => .recoverable s!"{context}: {message}"
+  | .unsupported message => .unsupported s!"{context}: {message}"
+  | .option message => .option s!"{context}: {message}"
+  | .missingValue => .error s!"{context}: missing native value"
 
 /--
 A higher-order function that parses and validates SMT-LIB commands without solving.
 Accepts supported Bool/Int declarations and assertions, metadata, and one `check-sat`.
 Only metadata and an optional final `exit` may follow the check.
 Calls `inspect` once with the declarations, assertions, and executed command names.
+HORN requires explicit CHC mode; this parser does not check Horn clause shape.
 -/
 def parseAndInspectQuery
     (input : String)
     (inspect : ParsedQuery → cvc5.Env Unit)
-    (name : String := "backend-smoke") : cvc5.Env Unit := do
+    (name : String := "backend-smoke")
+    (mode : ParseMode := .smt) : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
   let solver  ← cvc5.Solver.new tm
   let symbols ← cvc5.SymbolManager.new tm
   let parser  ← cvc5.InputParser.new solver (some symbols)
   parser.setStringInput input (name := name)
   let mut query : ParsedQuery := {}
+  let mut allowQuantifiers := true
   let mut checked := false
   let mut exited := false
   let mut ordinal := 1
+  let mut assertionNumber := 0
+  let context := if mode == .chc then s!"{name}: query 1" else name
   while true do
     let commandOrdinal := ordinal
     try
@@ -143,10 +180,13 @@ def parseAndInspectQuery
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
       match commandName with
       | "set-logic" =>
-        unless #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA", "ALL"].any
-            (fun logic => cmd.toString == s!"(set-logic {logic})") do
+        let supported := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
+            "UF", "LIA", "NIA", "UFLIA", "UFNIA", "ALL"].any
+            (fun logic => cmd.toString == s!"(set-logic {logic})")
+        unless supported || (mode == .chc && cmd.toString == "(set-logic HORN)") do
           throw (.unsupported s!"unsupported logic: {cmd}")
         invokeCommand cmd solver symbols
+        allowQuantifiers := !cmd.toString.startsWith "(set-logic QF_"
         query := { query with invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
         invokeCommand cmd solver symbols
@@ -164,11 +204,15 @@ def parseAndInspectQuery
           declarations := query.declarations.push { name := symbol, term }
           invoked := query.invoked.push commandName }
       | "assert" =>
-        invokeCommand cmd solver symbols
-        let assertions ← solver.getAssertions
-        let some term := assertions.back?
-          | throw (.error "assert command did not store a formula")
-        validateAssertion term query.declarations
+        assertionNumber := assertionNumber + 1
+        try
+          invokeCommand cmd solver symbols
+          let assertions ← solver.getAssertions
+          let some term := assertions.back?
+            | throw (.error "assert command did not store a formula")
+          validateAssertion term query.declarations allowQuantifiers
+        catch error =>
+          throw (if mode == .chc then errorWithContext s!"clause {assertionNumber}" error else error)
         query := { query with invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
       | "check-sat" =>
@@ -179,9 +223,9 @@ def parseAndInspectQuery
         exited := true
       | _ => throw (.unsupported s!"unsupported command: {commandName}")
       ordinal := ordinal + 1
-    catch error => throw (commandError name commandOrdinal error)
+    catch error => throw (errorWithContext s!"{context}: command {commandOrdinal}" error)
   unless checked do
-    throw (commandError name ordinal (.error "expected one check-sat"))
+    throw (errorWithContext s!"{context}: command {ordinal}" (.error "expected one check-sat"))
   inspect query
 
 end Smt2Lean.Backend

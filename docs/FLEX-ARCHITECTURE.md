@@ -120,6 +120,49 @@ small congruence contradiction now has reviewed output and a completed core Lean
 proof. The existing demo runner checks all three demos and their status variants;
 input quantifiers remain PR 6.
 
+PR 6 adds Bool/Int forall/exists. Scope validation follows native variable identity,
+and a local quantifier handler binds fresh Lean variables in lean-smt's term cache.
+Each nested scope keeps active variable bindings but rebuilds expression caches;
+leaving it restores the enclosing cache. This avoids upstream's name-based lookup
+capturing an outer variable beneath a same-named binder. Formula bodies still use
+the existing reconstructors. Explicit binder types in emitted source preserve
+unused existential witnesses. Quantifier patterns and unsupported binder sorts
+are rejected; HORN translation remains deferred to the CHC path.
+
+Task 7.1 adds explicit CHC parsing mode to the same backend. It additionally
+accepts HORN while retaining the supported sort/operator/scope checks. `testHorn`
+parses the unedited lh_sum_rec file and checks its declaration, three assertions,
+and non-query invocation trace. Horn clause-shape validation is still separate;
+the ordinary CLI keeps rejecting HORN until the CHC emitter is connected in PR 8.
+
+Task 7.2 adds `Chc.collectRelations`, `relationAtom?`, and `recognizeFact`. The small
+relation/atom records retain native identities, argument sorts, and ordered terms
+inside the parser callback. All declarations in this initial CHC profile must be
+Bool-valued relations over Bool/Int; global Int constants and Int-valued functions
+are rejected. Relation arguments may contain bound variables and theory terms,
+but no other relation occurrences. Bare facts are recognized; quantified clause
+extraction and rule validation follow in 7.3–7.4.
+
+Task 7.3 adds `Chc.extractClause`. Each extracted clause retains its one-based
+assertion number, leading universal variables with native sorts/identities,
+ordered implication premises, and a relation/false head. Nested leading forall
+groups are collected without renaming variables; chained implications are split
+along their consequents. Existentials and non-leading quantifiers are rejected.
+Premise conjunctions remain intact, and relation arguments retain their original
+expressions. These are intermediate records; premise validation remains 7.4.
+
+Tasks 7.4–7.5 add `Chc.validateQuery` and `Chc.parseAndInspectProblem`. Validation
+flattens only premise conjunctions, retaining source order, and classifies their
+leaves as positive relation atoms or relation-free Bool/Int guards. Relation-free
+disjunctions and negations remain intact; relations hidden in guards or arguments
+are rejected. The callback receives one complete `Problem` only after every
+declaration and clause passes. It retains native terms inside the parser lifetime.
+Errors identify the input and query, with clause numbers for clause validation and
+command numbers for parser failures. Tests cover the unedited lh_sum_rec (0/1/1
+relation premises), one combined twelve-clause fixture, status independence, and
+rejection of a bad later clause before inspection. The ordinary CLI still rejects
+HORN; CHC Lean output is PR 8.
+
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`
 lets seven parse; `lh_sets_neg` still fails on Z3's indexed array `map`. Input files

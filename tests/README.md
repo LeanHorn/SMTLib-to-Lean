@@ -1,17 +1,17 @@
 # Tests
 
-Run the Boolean, integer, and function demos from the repository root:
+Run all translation demos from the repository root:
 
 ```sh
 tests/translation/run-demo.sh
 ```
 
 The script builds the CLI, runs the reconstruction smoke test, and runs `cli.py`.
-The CLI checks compile seventeen generated files and their statement sections using
-Lean core. Boolean contradiction, integer bounds, and function congruence outputs,
+The CLI checks compile twenty-two generated files and their statement sections using
+Lean core. Boolean contradiction, integer bounds, function congruence, and quantified outputs,
 including their status variants, must match the `expected/Query.lean` in each
-fixture directory. All three README proofs compile with warnings treated as errors
-and no `sorryAx` dependency. The Boolean and function proofs have no axioms; the
+fixture directory. All four README proofs compile with warnings treated as errors
+and no `sorryAx` dependency. The Boolean, function, and quantifier proofs have no axioms; the
 integer proof uses core's `propext` through its order lemma. Edited templates and
 completed proofs survive attempted overwrites. The combined function/predicate
 fixture also compiles through the CLI. Python 3 is required.
@@ -28,12 +28,26 @@ The translator's own checks run from the repository root without solving in cvc5
 lake exe testParser          # tests/backend/Parser.lean
 lake exe testReconstruction  # tests/backend/Reconstruction.lean
 lake exe testTranslation     # tests/backend/Translation.lean
+lake exe testHorn            # tests/backend/Horn.lean
 ```
 
 `Parser.lean` checks accepted queries and rejection diagnostics.
+`Horn.lean` parses the unedited `chc/lh_sum_rec.smt2` in explicit CHC mode. It checks
+one typed declaration, three quantified assertions, and an invocation trace with
+no solver query. Unsupported terms/sorts and invalid command sequences still fail
+before inspection. It also recognizes relations and bare facts, checks native
+identity and bound Bool arguments, and rejects unsupported CHC declarations and
+relations nested inside arguments. Clause extraction checks assertion numbers,
+binder identities/sorts, premise order, and relation/false heads. Existential or
+non-leading quantifiers and unsupported heads are rejected. Validation flattens
+premise conjunctions in order, distinguishes relation calls from theory guards,
+and rejects hidden or negated relations. A bad later clause never reaches the
+validated-problem callback. Errors identify the file, query, and offending clause;
+parser errors retain command numbers. Status variants produce identical CHC structure.
+The CLI tests verify that HORN input is rejected without creating output.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
-contexts, and seventeen closed Bool/Int refutations against handwritten Lean propositions.
+contexts, and twenty-two closed Bool/Int refutations against handwritten Lean propositions.
 It also compares the printed statements with the original expressions and compiles
 each `Query.lean` using only Lean core. Statements have no axiom dependencies;
 only the following proof templates contain admissions. Existing proof work is
@@ -71,6 +85,31 @@ All generated test files go into temporary directories and are removed afterward
   across nested reconstructions and separate inputs with reused names.
 - `congruence.smt2`: the small contradiction `x = y` and `f(x) ≠ f(y)`.
 
+`translation/quantifiers/` keeps two queries:
+
+- `scopes.smt2`: alternating forall/exists, mixed Bool/Int binders, shadowing,
+  premise-only and unused variables, quoted names, and quantified Boolean arguments.
+  A `let` alias keeps an outer variable accessible under an inner binder with the
+  same name. This checks native identity rather than name-based lookup.
+- `quantified.smt2`: `∀ x, P x` together with `∃ x, ¬P x`, with a completed README proof.
+
+The parser test also constructs native terms with a dangling variable and a
+different variable with the same name. Both must fail scope validation, even when
+the same subterm was already accepted under a quantifier.
+
+`translation/chc/clauses.smt2` combines six relation declarations and twelve clauses:
+five bare facts, a quantified fact, five rules, and a bare false assertion. It
+covers mixed sorts, arithmetic, quoted names, unused relations/variables, chained
+implications, and shadowed leading binders. Tests preserve argument and premise
+order before and after flattening premise conjunctions. A nonlinear rule combines
+three relation premises with arithmetic, nested conjunctions, and Boolean guards;
+conjunctions inside a guard's `or` stay intact. The unedited lh_sum_rec fixture
+retains its three clauses with binder counts 3/5/3, heads k_1/k_1/false, and
+relation-premise counts 0/1/1 under absent/sat/unsat/unknown status metadata.
+Short invalid cases stay inline in `Horn.lean`. Separate checks distinguish a bound
+Bool from a same-named nullary relation and reject a different native symbol with
+the same printed name.
+
 The translation test compares each complete formula with a handwritten Lean target.
 Emitted absolute values use only core `if/then/else`; comparison chains retain
 every adjacent pair. The parser test also checks their native binary structure.
@@ -82,6 +121,9 @@ locations; invalid input must never reach the inspection callback.
 Div/mod remain rejected for zero and nonzero divisors, including inside supported
 arithmetic. Real, array, and bitvector signatures, higher-order logic, and incorrect
 application arities/types are also rejected.
+Quantifier patterns, unsupported binder sorts (even when unused), unsupported
+operators inside quantified bodies, and quantifiers in `QF_*` logics are rejected
+before file generation.
 
 ## `smt/`: verification conditions (8)
 

@@ -1,0 +1,31 @@
+; Relations, facts, and rules: ordered arguments, mixed sorts, shadowing, unused binders.
+(set-logic HORN)
+(declare-fun P (Int) Bool)
+(declare-fun R (Int Bool Int) Bool)
+(declare-fun done () Bool)
+(declare-const |True| Bool)
+(declare-fun |a b| (Bool Int) Bool)
+(declare-fun unused (Int Bool) Bool)
+(assert (P 0))
+(assert (R 7 (and true (not false)) (- 9 4)))
+(assert done)
+(assert |True|)
+(assert (|a b| (= 1 2) (+ 10 2)))
+; Quantified fact; retain both unused variables.
+(assert (forall ((x Int) (p Bool) (unused Int)) (P x)))
+; Nested and multi-operand implications retain premise order.
+(assert (forall ((x Int) (y Int) (b Bool))
+  (=> (P x) (=> (and (> y x) b) (R (+ x 1) b x)))))
+(assert (forall ((x Int)) (=> (> x 0) (P x) done)))
+; The outer x survives beneath the same-named inner binder through a let alias.
+(assert (forall ((x Int)) (let ((outer x))
+  (forall ((x Int) (flag Bool) (onlyBody Int) (unused Bool))
+    (=> (and (< outer x) flag (= onlyBody 7)) (R outer flag x))))))
+(assert (=> done false))
+(assert false)
+; Nonlinear rule: nested conjunctions, three relation premises, and intact theory guards.
+(assert (forall ((x Int) (y Int) (cond Bool))
+  (=> (and (P x) (and (> x 0) (P y) (or (and (< x 0) (> y 0)) (not cond)))
+           done (= cond (> (+ (* x y) (- x)) (abs y))) (not cond)) false)))
+(check-sat)
+(exit)

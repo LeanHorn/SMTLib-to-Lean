@@ -12,6 +12,8 @@ def render (refutation : Expr) : MetaM String := do
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true
       |>.setBool `pp.proofs true
+      -- Unused existential variables still need explicit types in emitted source.
+      |>.setBool `pp.funBinderTypes true
       -- Without annotations, a closed equality such as 1 = 2 defaults to Nat.
       |>.setBool `pp.numericTypes true
       |> (pp.maxSteps.set · 1000000)) do
