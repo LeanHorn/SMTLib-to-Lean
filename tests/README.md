@@ -18,9 +18,10 @@ lake exe testTranslation     # tests/backend/Translation.lean
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
 contexts, and eight closed refutations against handwritten Lean propositions.
-It also compares the printed statements with the original expressions, compiles
-the generated statements and proof templates using only Lean core, and checks that
-existing proof work is preserved. It reuses the three fixtures below.
+It also compares the printed statements with the original expressions and compiles
+each `Query.lean` using only Lean core. Statements have no axiom dependencies;
+only the following proof templates contain admissions. Existing proof work is
+preserved. The test reuses the three fixtures below.
 
 Check the CLI's exit codes, diagnostics, and output protection with:
 

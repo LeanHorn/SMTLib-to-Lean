@@ -74,10 +74,10 @@ connectives, closure, and independence from status metadata.
 
 Tasks 3.4–3.5 add `Smt2Lean/Emit.lean` and the CLI:
 `smt2lean <input.smt2> --out <new-directory>`. The emitter uses Lean's printer for
-`Statements.lean` and writes a separate `Proofs.lean` template with `sorry`, using
-only Lean core. Files are written only after the full query is validated and its
+one `Query.lean`: statements first, followed by proof templates with `sorry`, using
+only Lean core. The file is written only after the full query is validated and its
 statement is kernel-checked. Existing output paths are refused. Tests compare the
-printed propositions with the originals and compile both files independently of
+printed propositions with the originals and compile the file independently of
 the translator. The reviewed demo walkthrough remains task 3.6.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
@@ -161,7 +161,7 @@ Chc.Validate / Chc.Normalize
 LeanBridge / Theory / Emit
   input: QuerySnapshot or ChcProblem
   output: closed, named Lean Prop definitions, dependencies, source map,
-          and separately editable proof-template files
+          and editable proof templates following the statements in the same file
 
 FlexAdapter (in the output project, built with Flex's toolchain)
   input: a generated Prop declaration and expected relation/clause signature

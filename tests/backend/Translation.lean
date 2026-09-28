@@ -46,35 +46,36 @@ private def runQuery (env : Environment) (name input : String)
   ).runIO
 
 private def checkEmission (value : Expr) : MetaM Unit := do
-  let (statements, proofs) ← render value
+  let source ← render value
   unsafe enableInitializersExecution
-  let some env ← Elab.runFrontend statements
-      (({} : Options).setBool `Elab.async false) "Statements.lean" `Statements
-    | throwError "generated statement did not elaborate"
+  let some env ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throwError "generated file did not elaborate"
   let some (.defnInfo definition) := env.find? `Refutation
     | throwError "generated statement has no Refutation definition"
   checkEqual definition.value value
   unless (← withEnv env (collectAxioms `Refutation)).isEmpty do
     throwError "generated statement depends on axioms"
+  unless (← withEnv env (collectAxioms `refutation)).contains ``sorryAx do
+    throwError "expected an unfinished proof template"
   IO.FS.withTempDir fun temporary => do
     let output := temporary / "generated"
-    writeFiles output statements proofs
+    writeFile output source
     let lean := (← findSysroot) / "bin" / "lean"
-    for args in #[#["-o", "Statements.olean", "Statements.lean"], #["Proofs.lean"]] do
-      let result ← IO.Process.output {
-        cmd := lean.toString, args, cwd := some output
-        env := #[("LEAN_PATH", some output.toString)]
-      }
-      unless result.exitCode == 0 do
-        throwError "generated file failed to compile: {result.stdout}{result.stderr}"
+    let result ← IO.Process.output {
+      cmd := lean.toString, args := #["Query.lean"], cwd := some output
+      env := #[("LEAN_PATH", some output.toString)]
+    }
+    unless result.exitCode == 0 do
+      throwError "generated file failed to compile: {result.stdout}{result.stderr}"
     -- Protect proof work, even when a caller tries to write the same output again.
-    let edited := proofs ++ "\n-- User proof work.\n"
-    IO.FS.writeFile (output / "Proofs.lean") edited
+    let edited := source ++ "\n-- User proof work.\n"
+    IO.FS.writeFile (output / "Query.lean") edited
     let refused ← try
-      writeFiles output statements proofs
+      writeFile output source
       pure false
     catch _ => pure true
-    unless refused && (← IO.FS.readFile (output / "Proofs.lean")) == edited do
+    unless refused && (← IO.FS.readFile (output / "Query.lean")) == edited do
       throwError "existing proof work was overwritten"
 
 private def checkRefutation (query : BoolQuery) (expected : Expr) : MetaM Unit := do
@@ -110,4 +111,4 @@ def main : IO Unit := do
   runQuery env "unused declaration"
     (empty.replace "(check-sat)" "(declare-const unused Bool)\n(check-sat)") fun query =>
       checkRefutation query q(∀ _unused : Prop, True → False)
-  IO.println "Translation passed: 8 refutations and generated file pairs; existing proof work preserved"
+  IO.println "Translation passed: 8 refutations and generated files; existing proof work preserved"

@@ -26,7 +26,7 @@ contract is already present. The manifest work is deferred to PR 64.
 
 The first runnable command arrives in PR 3, integer input in PR 4, and an unedited
 existing CHC example in PR 8. These use the repository toolchain, ordinary generated
-Lean files, a separate proof template, and direct Lean checks. Implement only the
+Lean files with statements followed by proof templates, and direct Lean checks. Implement only the
 small parser/context/emitter pieces needed by each supported fragment, then extend
 the same path. Later architecture PRs consolidate these working pieces.
 
@@ -82,7 +82,7 @@ and broad framework design must not become prerequisites for the first translati
 ## Checkpoints
 
 - PR 3: one ordinary Boolean input becomes a closed Lean statement and editable
-  theorem, and both files elaborate with the repository toolchain.
+  theorem in one `Query.lean`, which elaborates with the repository toolchain.
 - PR 4: the same command translates integer queries.
 - PR 8: the unedited lh_sum_rec CHC becomes an existential Lean problem; all three
   clauses are preserved and the generated files elaborate.
@@ -137,9 +137,9 @@ metadata rather than guessing filenames.
 
       **Verified:** The callback reconstructs both the sort and term, checks the expected proposition, and synchronously installs `Reconstruction.assertion : Prop := True ∧ ¬False` through Lean's kernel. The definition has no axiom dependencies or unresolved variables/goals. The smoke test and all parser rejection checks pass on Lean 4.33.1, including after a clean build of all required Lean modules and the C++ binding (98 jobs for both executables), reusing only the pinned native cvc5 1.3.2 SDK. Root and example builds also pass. The executable enables interpreter support and loads the registered reconstructors into its Lean environment. No solver query, proof reconstruction, or source-file emission is performed.
 
-- [ ] **3. Translate one Boolean query end to end.** Replace the CLI stub with `smt2lean <input.smt2> --out <fresh-directory>`. Accept one flat query with Boolean constants/nullary declarations, assertions, true/false, not/and/or/implication/equality, and check-sat. Handle set-logic, status metadata, and exit explicitly. Use cvc5 for parsing/sorts and lean-smt reconstruction through a minimal local-variable map; intercept the check without solving. Emit `Statements.lean` with a closed refutation proposition and a separate `Proofs.lean` theorem containing `sorry`. Reject unsupported commands/terms or multiple checks before emitting a successful result.
+- [ ] **3. Translate one Boolean query end to end.** Replace the CLI stub with `smt2lean <input.smt2> --out <fresh-directory>`. Accept one flat query with Boolean constants/nullary declarations, assertions, true/false, not/and/or/implication/equality, and check-sat. Handle set-logic, status metadata, and exit explicitly. Use cvc5 for parsing/sorts and lean-smt reconstruction through a minimal local-variable map; intercept the check without solving. Emit one `Query.lean` with the closed refutation proposition first, followed by a proof template containing `sorry`. Reject unsupported commands/terms or multiple checks before emitting a successful result.
 
-   **Merge when:** An ordinary Boolean fixture translates from disk and both generated files elaborate using the repository toolchain. Changing sat/unsat/unknown metadata leaves the proposition unchanged. Unsupported input fails visibly, canonical statements contain no admissions, and an instrumented driver makes zero checkSat calls. No manifest, general IR framework, or standalone project generator is required.
+   **Merge when:** An ordinary Boolean fixture translates from disk and the generated file elaborates using the repository toolchain. Changing sat/unsat/unknown metadata leaves the proposition unchanged. Unsupported input fails visibly, canonical statements contain no admissions, and an instrumented driver makes zero checkSat calls. No manifest, general IR framework, or standalone project generator is required.
 
    Implement these six commits after PR 2, reviewing each before continuing:
 
@@ -161,17 +161,17 @@ metadata rather than guessing filenames.
 
       **Verified:** `defineRefutation` universally quantifies every declaration, including unused ones, and installs a safe `Refutation : Prop` definition through the synchronous Lean kernel API. Closure and axiom-dependency checks reject unresolved variables or admissions. `lake exe testTranslation` passes eight handwritten comparisons: the combined fixture, contradiction under four metadata variants, a single assertion, an empty query, and an empty query with an unused declaration. This step checks in-memory definitions; file emission is verified in 3.4 below. The propositions are not proved.
 
-   - [x] **3.4. Emit statement and proof-template files.** Add `Smt2Lean/Emit.lean` to render `Statements.lean` containing the closed definition and `Proofs.lean` importing it and declaring a theorem with `by sorry`. For this Boolean fragment the emitted code uses Lean core, without translator or cvc5 imports. Write only after parsing, validation, and reconstruction succeed; require a new output directory so existing proof work cannot be overwritten.
+   - [x] **3.4. Emit statements and proofs in one file.** Add `Smt2Lean/Emit.lean` to render `Query.lean` with a Statements section containing the closed definition, followed by a Proofs section declaring a theorem with `by sorry`. For this Boolean fragment the emitted code uses Lean core, without translator or cvc5 imports. Write only after parsing, validation, and reconstruction succeed; require a new output directory so existing proof work cannot be overwritten.
 
-      **Check:** Generate a temporary output pair, compile Statements to its `.olean`, then check Proofs with that directory on `LEAN_PATH`. The re-elaborated statement agrees with the in-memory target, and only the proof template contains an admission. Invalid input produces no generated files; an existing destination is refused unchanged.
+      **Check:** Generate a temporary `Query.lean` and compile it with Lean core. The re-elaborated statement agrees with the in-memory target and has no axiom dependencies; only the following proof template contains an admission. Invalid input produces no generated files; an existing destination is refused unchanged.
 
-      **Verified:** `Smt2Lean/Emit.lean` renders the checked expression with Lean's printer, rejecting truncated output, and exclusively creates a fresh directory for `Statements.lean` and `Proofs.lean`. `lake exe testTranslation` re-elaborates all eight statements using Lean core, compares them with the original expressions, checks for axiom dependencies, compiles both generated files with an isolated `LEAN_PATH`, and verifies that an attempted rewrite preserves edited proof work. Only the separate proof template contains `sorry`.
+      **Verified:** `Smt2Lean/Emit.lean` renders the checked expression with Lean's printer, rejecting truncated output, and exclusively creates a fresh directory for `Query.lean`. `lake exe testTranslation` re-elaborates all eight statements using Lean core, compares them with the original expressions, checks for axiom dependencies, compiles each generated file with an isolated `LEAN_PATH`, and verifies that an attempted rewrite preserves edited proof work. The Statements section remains axiom-free; only the following Proofs section contains `sorry`.
 
-   - [x] **3.5. Connect file translation to the CLI.** Replace `Main.lean`'s argument echo with `smt2lean <input.smt2> --out <fresh-directory>`, connecting file reading, the validated backend, reconstruction, and emission. Add `--help`; use exit 0 for generation, 2 for invalid arguments, and 1 for input/translation/output failures, with diagnostics on stderr. Report generated paths and that the theorem is unfinished; generation alone must not be reported as a proof or a completed external Lean check.
+   - [x] **3.5. Connect file translation to the CLI.** Replace `Main.lean`'s argument echo with `smt2lean <input.smt2> --out <fresh-directory>`, connecting file reading, the validated backend, reconstruction, and emission. Add `--help`; use exit 0 for generation, 2 for invalid arguments, and 1 for input/translation/output failures, with diagnostics on stderr. Report the generated path and that the theorem is unfinished; generation alone must not be reported as a proof or a completed external Lean check.
 
-      **Check:** `lake exe smt2lean tests/translation/bool/contradiction.smt2 --out <new-path>` generates both files. Missing files, bad arguments, unsupported input, and existing output directories return the documented failure status. This commit delivers the user-facing translation command.
+      **Check:** `lake exe smt2lean tests/translation/bool/contradiction.smt2 --out <new-path>` generates `Query.lean`. Missing files, bad arguments, unsupported input, and existing output directories return the documented failure status. This commit delivers the user-facing translation command.
 
-      **Verified:** The CLI connects file reading, complete query validation, reconstruction, and emission. `--help` exits 0; invalid arguments exit 2; input, translation, and output failures exit 1 on stderr. Successful generation reports both paths and an unfinished proof. `lake env python3 tests/cli.py` checks all three fixtures, missing files, invalid arguments, unsupported/malformed/repeated queries, existing directories/files/symlinks, and output failures. Invalid input creates no output directory; existing proof work remains unchanged.
+      **Verified:** The CLI connects file reading, complete query validation, reconstruction, and emission. `--help` exits 0; invalid arguments exit 2; input, translation, and output failures exit 1 on stderr. Successful generation reports the path and an unfinished proof. `lake env python3 tests/cli.py` checks all three fixtures, missing files, invalid arguments, unsupported/malformed/repeated queries, existing directories/files/symlinks, and output failures. Invalid input creates no output directory; existing proof work remains unchanged.
 
    - [ ] **3.6. Make the Boolean demo repeatable.** Add `tests/translation/run-bool.sh` to exercise the actual CLI and check generated files in fresh temporary directories with the repository's Lean toolchain. Reuse the fixtures/checks introduced above; add a reviewed expected output and a README walkthrough showing generation, Lean checking, and opening the theorem for editing. Keep the harness limited to these Boolean cases.
 
@@ -251,9 +251,9 @@ metadata rather than guessing filenames.
 
    **Merge when:** Two generations are byte-identical; colliding names produce distinct declarations.
 
-- [ ] **22. Preserve edited proof templates during regeneration.** Extend the separate statement/proof files already emitted by the CLI with stable theorem references and safe regeneration. Leave existing edited proofs intact; fail visibly on an incompatible obligation change until the later interactive workflow supports reconciliation. Keep definitions/runtime free of sorry.
+- [ ] **22. Preserve edited proof templates during regeneration.** Add stable theorem references and safe regeneration to the emitted statement and proof sections. Leave existing edited proofs intact; fail visibly on an incompatible obligation change until the later interactive workflow supports reconciliation. Keep definitions/runtime free of sorry.
 
-   **Merge when:** Regenerating an unchanged input preserves a manually edited proof file byte-for-byte; changed obligations cannot silently attach an old proof to a new statement, and holes occur only in designated theorem files.
+   **Merge when:** Regenerating an unchanged input preserves a manually edited proof section byte-for-byte; changed obligations cannot silently attach an old proof to a new statement, and holes occur only in designated proof templates.
 
 ### Complete the theories used by the current tests
 

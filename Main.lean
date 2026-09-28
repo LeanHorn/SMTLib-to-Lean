@@ -6,7 +6,7 @@ open Smt2Lean
 private def usage : String :=
   "Usage: smt2lean <input.smt2> --out <new-directory>\n" ++
   "       smt2lean --help\n\n" ++
-  "Translate one Boolean SMT-LIB query into Statements.lean and Proofs.lean.\n" ++
+  "Translate one Boolean SMT-LIB query into Query.lean: statements, then proofs.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++
   "The proof template contains sorry and must be completed in Lean."
 
@@ -16,15 +16,14 @@ private def translateFile (input output : System.FilePath) : IO Unit := do
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
   (Backend.parseAndInspectQuery text (name := input.toString) fun query => do
-    let translation : MetaM (String × String) := do
+    let translation : MetaM String := do
       Emit.render (← Translate.defineRefutation query)
-    let ((statements, proofs), _, _) ← translation.toIO
+    let (source, _, _) ← translation.toIO
       { fileName := input.toString, fileMap := default } { env }
-    Emit.writeFiles output statements proofs
+    Emit.writeFile output source
   ).runIO
-  IO.println s!"Generated {output / "Statements.lean"}"
-  IO.println s!"Generated {output / "Proofs.lean"}"
-  IO.println "Proof unfinished: replace sorry in Proofs.lean."
+  IO.println s!"Generated {output / "Query.lean"}"
+  IO.println "Proof unfinished: replace sorry in the Proofs section of Query.lean."
 
 def main (args : List String) : IO UInt32 := do
   match args with

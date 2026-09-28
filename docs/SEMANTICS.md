@@ -229,14 +229,15 @@ Canonical statement definitions and their semantic dependencies must not contain
 Theory laws belong in explicit admissibility assumptions or justified runtime
 semantics, not unchecked claims that a particular query is true.
 
-Separate editable theorem templates may contain unfinished proofs, for example:
+Editable theorem templates may follow the statements in the same file and contain
+unfinished proofs, for example:
 
 ```lean
 theorem ordinary_pending : OrdinaryContractExample.Refutation := by
   sorry
 ```
 
-Generated statements must not import unfinished proof templates. One admitted
+Generated statement definitions must not depend on unfinished proof templates. One admitted
 benchmark theorem must not be used to interpret or validate another query.
 Existing foundational axioms and any proof dependencies/trust settings must be
 distinguished from new query-specific assumptions when proof results are reported.

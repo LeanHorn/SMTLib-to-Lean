@@ -31,17 +31,17 @@ def main():
             output = tmp / name
             result = run(FIXTURES / f"{name}.smt2", "--out", output)
             assert "Proof unfinished" in result.stdout
-            assert sorted(p.name for p in output.iterdir()) == ["Proofs.lean", "Statements.lean"]
-            statement = (output / "Statements.lean").read_text()
-            assert "sorry" not in statement
-            proof = output / "Proofs.lean"
-            assert "by\n  sorry" in proof.read_text()
-            edited = proof.read_text() + "\n-- User proof work.\n"
-            proof.write_text(edited)
+            assert [p.name for p in output.iterdir()] == ["Query.lean"]
+            query = output / "Query.lean"
+            source = query.read_text()
+            statements, proofs = source.split("-- Proofs\n", 1)
+            assert "-- Statements" in statements and "def Refutation" in statements
+            assert "sorry" not in statements and "by\n  sorry" in proofs
+            edited = source + "\n-- User proof work.\n"
+            query.write_text(edited)
             result = run(FIXTURES / f"{name}.smt2", "--out", output, code=1)
             assert "output already exists" in result.stderr
-            assert proof.read_text() == edited
-            assert (output / "Statements.lean").read_text() == statement
+            assert query.read_text() == edited
 
         missing_output = tmp / "missing-output"
         run(tmp / "missing.smt2", "--out", missing_output, code=1)

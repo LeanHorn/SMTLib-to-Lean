@@ -10,13 +10,14 @@ From the repository root:
 lake exe smt2lean tests/translation/bool/contradiction.smt2 --out boolean-demo
 ```
 
-This creates `Statements.lean` with the closed `Refutation : Prop` definition and
-`Proofs.lean` with an unfinished theorem containing `by sorry`. The generated
-files use Lean core; they do not depend on cvc5 or this translator.
+This creates one `Query.lean` file: a **Statements** section with the closed
+`Refutation : Prop` definition, followed by a **Proofs** section with an unfinished
+theorem containing `by sorry`. The file uses Lean core, without cvc5 or translator
+dependencies.
 
 The output directory must be new, and its parent must exist. Existing proof work
 is never overwritten. The translator validates the whole input and kernel-checks
-the in-memory statement before writing files. It does not solve the query or
+the in-memory statement before writing the file. It does not solve the query or
 prove the theorem.
 
 Use `lake exe smt2lean --help` for usage. Exit codes are `0` for generation/help,
@@ -133,7 +134,8 @@ lake exe testTranslation
 ```
 
 This test also renders all eight cases, compares the re-elaborated statements with
-the original expressions, and compiles both generated files using only Lean core.
+the original expressions, and compiles each generated file using only Lean core.
+It checks that `Refutation` has no axiom dependencies and only its proof is admitted.
 
 `Smt2Lean.Translate.withAssertions` binds each SMT declaration to a fresh Lean
 `Prop` parameter and reconstructs the assertions using Lean-SMT. Names such as
