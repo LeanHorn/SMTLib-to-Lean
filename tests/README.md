@@ -1,17 +1,19 @@
 # Tests
 
-Run the Boolean demo checks from the repository root:
+Run the Boolean and integer demo checks from the repository root:
 
 ```sh
-tests/translation/run-bool.sh
+tests/translation/run-demo.sh
 ```
 
 The script builds the CLI, runs the reconstruction smoke test, and runs `cli.py`.
-The CLI checks compile nine
-generated files and their statement sections using Lean core, compare the
-contradiction and its status variants with `translation/bool/expected/Query.lean`,
-and check the README's completed contradiction proof without axioms. They also
-compile the integer literal, arithmetic, and bounds fixtures. Python 3 is required.
+The CLI checks compile twelve generated files and their statement sections using
+Lean core. Boolean contradiction and integer bounds outputs, including their
+status variants, must match `translation/bool/expected/Query.lean` and
+`translation/int/expected/Query.lean`. Both README proofs compile with warnings
+treated as errors and no `sorryAx` dependency. The Boolean proof has no axioms;
+the integer proof uses core's `propext` through its order lemma. Edited templates
+and completed proofs survive attempted overwrites. Python 3 is required.
 
 For the original LiquidHaskell (`lh_*`) and Flux (`flux_*`) queries:
 

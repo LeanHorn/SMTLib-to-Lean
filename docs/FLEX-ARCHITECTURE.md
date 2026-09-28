@@ -80,7 +80,7 @@ statement is kernel-checked. Existing output paths are refused. Tests compare th
 printed propositions with the originals and compile the file independently of
 the translator.
 
-Task 3.6 adds `tests/translation/run-bool.sh`, a checked-in expected `Query.lean`,
+Task 3.6 adds `tests/translation/run-demo.sh`, a checked-in expected `Query.lean`,
 and the README walkthrough. The script exercises the actual CLI, checks six
 generated queries (including status variants), and compiles both each full file
 and its statement section alone. It also completes the contradiction example's
@@ -98,6 +98,12 @@ chains into adjacent binary comparisons. Before printing, the emitter unfolds
 lean-smt's `Int.abs` to its core `if/then/else` definition. Combined fixtures check
 these mappings against handwritten formulas and compile the emitted files using
 only Lean core. Div/mod remain unsupported.
+
+Task 4.4 completes the integer demo: a reviewed bounds output, the supported
+operator/signature table, and a README proof replacing `sorry`. The existing
+runner is now `tests/translation/run-demo.sh`; it checks both Boolean and integer
+outputs across status metadata variants and compiles their completed proofs with
+warnings treated as errors. All generated test files are temporary.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

@@ -8,6 +8,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / ".lake/build/bin/smt2lean"
 FIXTURES = ROOT / "tests/translation/bool"
+INTEGERS = ROOT / "tests/translation/int"
 
 
 def run(*args, code=0):
@@ -52,7 +53,10 @@ def check_generated(lean, output):
 def main():
     prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
     lean = Path(prefix) / "bin/lean"
-    expected = (FIXTURES / "expected/Query.lean").read_text()
+    expected = {
+        "contradiction": (FIXTURES / "expected/Query.lean").read_text(),
+        "bounds": (INTEGERS / "expected/Query.lean").read_text(),
+    }
     assert "Usage:" in run("--help").stdout
     for args in [(), ("--unknown",), ("input.smt2",),
                  ("input.smt2", "--out", ""), ("input.smt2", "--out", "--help")]:
@@ -60,40 +64,51 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="smt2lean cli ") as temporary:
         tmp = Path(temporary)
-        for name in ["contradiction", "connectives", "empty"]:
+        inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty"]]
+        inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
+        for fixture in inputs:
+            name = fixture.stem
             output = tmp / name
-            result = run(FIXTURES / f"{name}.smt2", "--out", output)
+            result = run(fixture, "--out", output)
             assert "Proof unfinished" in result.stdout
             source = check_generated(lean, output)
-            if name == "contradiction":
-                assert source == expected, ("contradiction output changed", source)
+            if name in expected:
+                assert source == expected[name], (f"{name} output changed", source)
+            if name in ["literals", "arithmetic"]:
+                assert "340282366920938463463374607431768211457" in source
             query = output / "Query.lean"
             edited = source + "\n-- User proof work.\n"
             query.write_text(edited)
-            result = run(FIXTURES / f"{name}.smt2", "--out", output, code=1)
+            result = run(fixture, "--out", output, code=1)
             assert "output already exists" in result.stderr
             assert query.read_text() == edited
 
-        contradiction = (FIXTURES / "contradiction.smt2").read_text()
-        for status in ["sat", "unsat", "unknown"]:
-            source, output = tmp / f"{status}.smt2", tmp / status
-            source.write_text(f"(set-info :status {status})\n" + contradiction)
-            run(source, "--out", output)
-            assert check_generated(lean, output) == expected, f"{status} changed the target"
+        for fixture, proof in [
+            (FIXTURES / "contradiction.smt2", "  intro p h\n  exact h.2 h.1\n"),
+            (INTEGERS / "bounds.smt2", "  intro x h\n  exact Int.not_lt_of_ge h.1 h.2\n"),
+        ]:
+            name = fixture.stem
+            for status in ["sat", "unsat", "unknown"]:
+                source, output = tmp / f"{name}-{status}.smt2", tmp / f"{name}-{status}"
+                source.write_text(f"(set-info :status {status})\n" + fixture.read_text())
+                run(source, "--out", output)
+                assert check_generated(lean, output) == expected[name], f"{name}: {status} changed the target"
 
-        # Check the exact proof shown in the README, on the actual generated file.
-        completed = tmp / "contradiction/Query.lean"
-        completed.write_text(completed.read_text().replace(
-            "  sorry\n", "  intro p h\n  exact h.2 h.1\n"
-        ) + "\n#print axioms refutation\n")
-        assert "does not depend on any axioms" in check_lean(lean, completed, complete=True)
-
-        for name in ["literals", "arithmetic", "bounds"]:
-            output = tmp / name
-            run(ROOT / f"tests/translation/int/{name}.smt2", "--out", output)
-            source = check_generated(lean, output)
-            if name != "bounds":
-                assert "340282366920938463463374607431768211457" in source
+            # Replace the Proofs section exactly as in the README.
+            completed = tmp / name / "Query.lean"
+            statements = completed.read_text().split("-- Proofs\n", 1)[0]
+            finished = statements + "-- Proofs\n\ntheorem refutation : Refutation := by\n" + proof
+            completed.write_text(finished + "\n#print axioms refutation\n")
+            axioms = check_lean(lean, completed, complete=True)
+            assert "sorryAx" not in axioms, axioms
+            if name == "contradiction":
+                assert "does not depend on any axioms" in axioms
+            else:
+                # This core integer-order lemma uses propositional extensionality.
+                assert "depends on axioms: [propext]" in axioms
+            saved = completed.read_text()
+            run(fixture, "--out", completed.parent, code=1)
+            assert completed.read_text() == saved
 
         missing_output = tmp / "missing-output"
         run(tmp / "missing.smt2", "--out", missing_output, code=1)
@@ -128,7 +143,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: expected output, 9 standalone translations, metadata, and completed proof")
+    print("Demo passed: expected outputs, 12 standalone translations, metadata, and 2 completed proofs")
 
 
 if __name__ == "__main__":

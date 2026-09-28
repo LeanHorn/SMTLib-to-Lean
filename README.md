@@ -51,12 +51,12 @@ The supported Bool/Int fragment is listed below.
 Run the automated demo checks with Python 3 installed:
 
 ```sh
-tests/translation/run-bool.sh
+tests/translation/run-demo.sh
 ```
 
-The script builds the CLI, checks the expected output and metadata variants,
-compiles the generated statements and templates, and checks the completed proof
-above. It also checks rejection cases and overwrite protection, using temporary
+The script checks both the Boolean and integer demos: expected outputs, metadata
+variants, standalone statements and templates, and the completed proofs shown here.
+It also checks rejection cases and overwrite protection, using temporary
 directories that are removed afterwards.
 
 ## Translate integer queries
@@ -73,12 +73,34 @@ Lean `Int` parameters. Literals keep their exact values, including values beyond
 64 bits. The generated file still uses only Lean core, with statements followed
 by an unfinished proof. This example states `∀ x : Int, (x ≥ 0 ∧ x < 0) → False`.
 
-Supported integer operators are `+`, `-`, `*`, `abs`, `=`, `<`, `<=`, `>`, and `>=`.
-Arithmetic accepts two or more operands; unary `-` and `abs` accept one.
-Subtraction is left-associative, and comparison chains preserve every adjacent
-pair, following [SMT-LIB Ints](https://smt-lib.org/theories-Ints.shtml).
-The emitter expands `abs x` to `if x < 0 then -x else x`, keeping files independent
-of lean-smt. `div` and `mod` remain unsupported.
+Open `integer-demo/Query.lean` and compare it with the
+[expected output](tests/translation/int/expected/Query.lean).
+Replace the Proofs section with:
+
+```lean
+-- Proofs
+
+theorem refutation : Refutation := by
+  intro x h
+  exact Int.not_lt_of_ge h.1 h.2
+```
+
+Here `h.1` says `0 ≤ x`, which contradicts `h.2 : x < 0`. Run the same Lean
+command again; the proof now checks without `sorry`.
+
+The integer fragment follows [SMT-LIB Ints](https://smt-lib.org/theories-Ints.shtml):
+
+| SMT-LIB operator | Operands | Result | Lean meaning |
+| --- | --- | --- | --- |
+| Numeral | None | `Int` | Exact integer value |
+| Unary `-` | One `Int` | `Int` | `-x` |
+| `+`, `-`, `*` | Two or more `Int` | `Int` | Fold left; e.g. `(- x y z)` becomes `(x - y) - z` |
+| `abs` | One `Int` | `Int` | `if x < 0 then -x else x` |
+| `=` | Two or more of the same supported sort | `Bool` | Conjunction of adjacent equalities |
+| `<`, `<=`, `>`, `>=` | Two or more `Int` | `Bool` | Conjunction of adjacent comparisons |
+
+SMT `Bool` results become Lean propositions. All generated code uses Lean core;
+`div` and `mod` remain unsupported.
 
 The combined [arithmetic fixture](tests/translation/int/arithmetic.smt2) covers
 these operators, nested absolute values, large integers, and comparison chains.
@@ -214,5 +236,5 @@ A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
 kernel-checked and has no axiom dependencies. This checks its type, not its truth.
 
-Tasks 3.1–3.6 complete the Boolean demo above. PR 4 extends it to integers; see the
+PRs 3 and 4 provide the Boolean and integer demos above. Functions are next; see the
 [implementation plan](docs/PR-PLAN.md).
