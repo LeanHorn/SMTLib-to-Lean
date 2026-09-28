@@ -9,8 +9,8 @@ Accept one Boolean query, with declarations, assertions, and optional metadata.
 Intercept `check-sat` and pass the validated query to a callback after reading
 the entire input. Report failures with the input name and command number.
 
-The reconstruction imports register the handlers used by `tests/backend/Reconstruction.lean`
-to translate assertion terms into Lean propositions.
+The reconstruction imports register the handlers used by `Translate.lean`
+and the reconstruction tests to turn assertion terms into Lean propositions.
 -/
 
 namespace Smt2Lean.Backend
@@ -26,8 +26,8 @@ structure BoolQuery where
   assertions : Array cvc5.Term := #[]
   invoked : Array String := #[]
 
-/-- Check every node, including operands of Boolean equality. -/
-private def validateBooleanTerm (root : cvc5.Term)
+/-- Check every node's sort, operator, and declaration identity. -/
+def validateBooleanTerm (root : cvc5.Term)
     (declarations : Array BoolDeclaration) : cvc5.Env Unit := do
   let mut pending := #[root]
   let mut visited : Std.HashSet cvc5.Term := {}
@@ -47,7 +47,9 @@ private def validateBooleanTerm (root : cvc5.Term)
           throw (.unsupported s!"undeclared Boolean term: {term}")
         pure children.isEmpty
       | .NOT => pure (children.size == 1)
-      | .AND | .OR | .IMPLIES | .EQUAL => pure (children.size >= 2)
+      | .AND | .OR | .IMPLIES => pure (children.size >= 2)
+      -- cvc5 expands chained equality into a conjunction of binary equalities.
+      | .EQUAL => pure (children.size == 2)
       | _ => throw (.unsupported s!"unsupported Boolean operator: {kind}")
     unless validArity do
       throw (.unsupported s!"unsupported arity for {kind}: {children.size}")

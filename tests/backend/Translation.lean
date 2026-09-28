@@ -1,0 +1,79 @@
+import Smt2Lean.Translate
+
+open Lean Meta Qq
+open Smt2Lean.Backend Smt2Lean.Translate
+
+private def checkEqual (actual expected : Expr) : MetaM Unit := do
+  unless ← isDefEq actual expected do
+    throwError "expected {expected}, got {actual}"
+
+private def checkConnectives (query : BoolQuery) : MetaM Unit :=
+  withAssertions query fun parameters assertions => do
+    let #[t, a, p, q, r, _] := parameters
+      | throwError "expected six declaration parameters"
+    let t : Q(Prop) := t
+    let a : Q(Prop) := a
+    let p : Q(Prop) := p
+    let q : Q(Prop) := q
+    let r : Q(Prop) := r
+    let expected : Array Expr := #[
+      t, q($t = $a), q(True), q(¬False), q($p ∧ $q ∧ $r),
+      q(¬$p ∨ $q ∨ $r), q($p → $q → $r), q(($p = $q) ∧ ($q = $r)), q($a = $p)
+    ]
+    unless assertions.size == expected.size do
+      throwError "wrong assertion count"
+    for actual in assertions, wanted in expected do
+      checkEqual actual wanted
+    -- A second reconstruction must use its own variables, even in this same context.
+    withAssertions query fun other values => do
+      unless other[0]! != t && values[0]! == other[0]! do
+        throwError "reconstructions shared a variable"
+
+private def checkUnmapped (query : BoolQuery) : MetaM Unit := do
+  let error? ← try
+    withAssertions { query with declarations := #[] } fun _ _ => pure ()
+    pure none
+  catch error => pure (some error)
+  let some error := error? | throwError "an unmapped SMT name was accepted"
+  unless (← error.toMessageData.toString).contains "undeclared Boolean term" do
+    throw error
+
+private def runQuery (env : Environment) (name input : String)
+    (check : BoolQuery → MetaM Unit) : IO Unit :=
+  (parseAndInspectQuery input (name := name) fun query => do
+    discard <| (check query).toIO { fileName := name, fileMap := default } { env }
+  ).runIO
+
+private def checkRefutation (query : BoolQuery) (expected : Expr) : MetaM Unit := do
+  let value ← defineRefutation query
+  checkEqual value expected
+  let .defnInfo definition ← getConstInfo `Refutation
+    | throwError "expected a definition named Refutation"
+  checkEqual definition.type q(Prop)
+  checkEqual definition.value value
+
+def main : IO Unit := do
+  initSearchPath (← findSysroot)
+  unsafe enableInitializersExecution
+  let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
+  let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
+  runQuery env "connectives" input fun query => do
+    checkConnectives query
+    checkUnmapped query
+    checkRefutation query q(∀ (t a p q r _unused : Prop),
+      (t ∧ t = a ∧ True ∧ ¬False ∧ (p ∧ q ∧ r) ∧ (¬p ∨ q ∨ r) ∧
+        (p → q → r) ∧ (p = q ∧ q = r) ∧ a = p) → False)
+  let contradiction ← IO.FS.readFile "tests/translation/bool/contradiction.smt2"
+  for status in #["", "sat", "unsat", "unknown"] do
+    let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
+    runQuery env s!"contradiction ({status})" (metadata ++ contradiction) fun query =>
+      checkRefutation query q(∀ p : Prop, (p ∧ ¬p) → False)
+  runQuery env "single assertion" (contradiction.replace "(assert (not p))" "") fun query =>
+    checkRefutation query q(∀ p : Prop, p → False)
+  let empty ← IO.FS.readFile "tests/translation/bool/empty.smt2"
+  runQuery env "empty" empty fun query =>
+    checkRefutation query q(True → False)
+  runQuery env "unused declaration"
+    (empty.replace "(check-sat)" "(declare-const unused Bool)\n(check-sat)") fun query =>
+      checkRefutation query q(∀ _unused : Prop, True → False)
+  IO.println "Translation passed: Boolean reconstruction and 8 kernel-checked refutations"

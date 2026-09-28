@@ -27,3 +27,8 @@ supportInterpreter = true
 [[lean_exe]]
 name = "testParser"
 root = "tests.backend.Parser"
+
+[[lean_exe]]
+name = "testTranslation"
+root = "tests.backend.Translation"
+supportInterpreter = true

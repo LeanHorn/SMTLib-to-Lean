@@ -80,7 +80,7 @@ Task 3.1 extends the backend to accept one Boolean query. Run its fixtures with:
 lake exe testParser
 ```
 
-Both test modules live in `tests/backend/`. The parser test checks accepted inputs,
+The test modules live in `tests/backend/`. The parser test checks accepted inputs,
 malformed input, and unsupported features; the reconstruction test checks the Lean
 expression and its kernel validation.
 
@@ -102,5 +102,29 @@ Unsupported input is rejected before `inspect` runs, including content after
 `check-sat` or `exit`. Errors include the input name and command number. cvc5 may
 print a warning when no logic is supplied; the Boolean validation still applies.
 
-The main `smt2lean` CLI remains a stub. Variable reconstruction and generated Lean
-files follow in tasks 3.2–3.6; see the [implementation plan](docs/PR-PLAN.md).
+## Boolean translation
+
+Tasks 3.2–3.3 reconstruct Boolean assertions and kernel-check a closed refutation
+definition in memory. Run:
+
+```sh
+lake exe testTranslation
+```
+
+`Smt2Lean.Translate.withAssertions` binds each SMT declaration to a fresh Lean
+`Prop` parameter and reconstructs the assertions using Lean-SMT. Names such as
+`|True|` stay variables. Unmapped terms fail, and each query has its own caches.
+
+`defineRefutation` closes over all parameters and installs `Refutation : Prop`.
+For assertions `p` and `(not p)`, its body is:
+
+```lean
+∀ p : Prop, (p ∧ ¬p) → False
+```
+
+A single assertion gives `∀ p : Prop, p → False`; no assertions give
+`True → False`. Status metadata never changes the target. Every definition is
+kernel-checked and has no axiom dependencies. This checks its type, not its truth.
+
+The main `smt2lean` CLI remains a stub. File generation and the CLI follow in
+tasks 3.4–3.6; see the [implementation plan](docs/PR-PLAN.md).

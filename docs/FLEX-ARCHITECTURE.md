@@ -63,8 +63,15 @@ Task 3.1 extends the driver with Boolean declarations, supported metadata, and
 `exit`. Its callback receives declaration names/native identities, assertions,
 and an invocation trace only after the full input passes validation. The
 `testParser` executable checks supported and rejected fixtures with input names
-and command numbers in diagnostics. Variable reconstruction and generated Lean
-files remain tasks 3.2–3.6.
+and command numbers in diagnostics.
+
+Tasks 3.2–3.3 add `Smt2Lean/Translate.lean`: `withAssertions` creates fresh `Prop`
+parameters, explicitly maps SMT names, and reconstructs assertions with fresh
+Lean-SMT caches. `defineRefutation` builds `∀ parameters, (assertions) → False`,
+using `True` for no assertions, and installs a kernel-checked, axiom-free
+`Refutation : Prop` definition in memory. `testTranslation` checks names,
+connectives, closure, and independence from status metadata. File generation and
+the CLI remain tasks 3.4–3.6.
 
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`

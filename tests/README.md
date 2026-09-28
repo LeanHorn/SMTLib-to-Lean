@@ -11,10 +11,14 @@ The translator's own checks run from the repository root without solving in cvc5
 ```sh
 lake exe testParser          # tests/backend/Parser.lean
 lake exe testReconstruction  # tests/backend/Reconstruction.lean
+lake exe testTranslation     # tests/backend/Translation.lean
 ```
 
 `Parser.lean` checks accepted queries and rejection diagnostics.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
+`Translation.lean` checks variable binding, connectives, independent reconstruction
+contexts, and eight closed refutations against handwritten Lean propositions.
+It reuses the same three fixtures below, including metadata and empty-query variants.
 
 `translation/bool/` keeps three reusable queries:
 
