@@ -289,15 +289,14 @@ Unsupported input is rejected before `inspect` runs, including content after
 `check-sat` or `exit`. Errors include the input name and command number. cvc5 may
 print a warning when no logic is supplied; the same term validation still applies.
 
-## CHC clause extraction
+## CHC validation
 
 ```sh
 lake exe testHorn
 ```
 
-This parses the unedited `tests/chc/lh_sum_rec.smt2` in explicit CHC mode:
-one declaration, three quantified assertions, and no solver query. It also checks
-the combined [clause fixture](tests/translation/chc/clauses.smt2).
+This validates the unedited `tests/chc/lh_sum_rec.smt2` and the combined
+[clause fixture](tests/translation/chc/clauses.smt2), without a solver query.
 
 `Smt2Lean.Chc` recognizes Bool-valued relations over Bool/Int and bare facts such
 as `(P 0)` or a nullary `done`. It retains native symbol identities, argument
@@ -312,9 +311,37 @@ the three clauses have 3/5/3 binders and heads `k_1`, `k_1`, and `false`.
 Existential clauses, quantifiers below the leading binders, and unsupported heads
 are rejected.
 
-Conjunctions in premises remain intact. Classifying and validating those premises
-as relation calls or theory guards follows in 7.4. The CLI still rejects HORN
-input; CHC Lean output follows in PR 8.
+`parseAndInspectProblem` parses the complete input and calls `inspect` once with a
+validated `Problem`: all declared relations and all clauses. It uses `validateQuery`
+to flatten premise conjunctions in order and classify each premise as a positive
+relation call or a relation-free Bool/Int formula (a theory guard). Native terms
+must stay inside the callback. A bad later clause rejects the entire problem.
+
+The supported rule shape is:
+
+```smt2
+(forall ((x Int) (cond Bool))
+  (=> (and (P x) (> x 0) (not cond)) (Q (+ x 1))))
+```
+
+Leading binders and premises may be absent; the head may instead be `false`.
+Chained implications and any number of positive relation premises are accepted.
+Guards support Bool/Int literals and variables, `not`, `and`, `or`, `=>`, `=`,
+`+`, `-`, `*`, `abs`, and comparisons. Guard disjunctions and negations stay intact:
+`(not cond)` is valid for a bound Bool, while `(not (P x))` is rejected. Relations
+inside equality, disjunction, or another relation's arguments are also rejected.
+Other theories/operators remain unsupported.
+
+For lh_sum_rec, validation yields one guarded fact, one recursive rule, and one
+false-head clause, with 0/1/1 relation premises. Status metadata does not change
+the result. Clause validation errors identify the file, query 1, and one-based
+assertion number; parser errors also identify the command. For example:
+
+```text
+example.smt2: query 1: clause 3: CHC relation inside a theory guard: (P x)
+```
+
+The CLI still rejects HORN input; CHC Lean output follows in PR 8.
 
 ## Translation checks
 

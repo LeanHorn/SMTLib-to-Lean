@@ -39,8 +39,11 @@ before inspection. It also recognizes relations and bare facts, checks native
 identity and bound Bool arguments, and rejects unsupported CHC declarations and
 relations nested inside arguments. Clause extraction checks assertion numbers,
 binder identities/sorts, premise order, and relation/false heads. Existential or
-non-leading quantifiers and unsupported heads are rejected. Premise classification
-and validation remain for 7.4.
+non-leading quantifiers and unsupported heads are rejected. Validation flattens
+premise conjunctions in order, distinguishes relation calls from theory guards,
+and rejects hidden or negated relations. A bad later clause never reaches the
+validated-problem callback. Errors identify the file, query, and offending clause;
+parser errors retain command numbers. Status variants produce identical CHC structure.
 The CLI tests verify that HORN input is rejected without creating output.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
@@ -94,12 +97,15 @@ The parser test also constructs native terms with a dangling variable and a
 different variable with the same name. Both must fail scope validation, even when
 the same subterm was already accepted under a quantifier.
 
-`translation/chc/clauses.smt2` combines six relation declarations and eleven clauses:
-five bare facts, a quantified fact, four rules, and a bare false assertion. It
+`translation/chc/clauses.smt2` combines six relation declarations and twelve clauses:
+five bare facts, a quantified fact, five rules, and a bare false assertion. It
 covers mixed sorts, arithmetic, quoted names, unused relations/variables, chained
 implications, and shadowed leading binders. Tests preserve argument and premise
-order, including conjunctions awaiting validation in 7.4. The unedited lh_sum_rec
-fixture retains its three clauses with binder counts 3/5/3 and heads k_1/k_1/false.
+order before and after flattening premise conjunctions. A nonlinear rule combines
+three relation premises with arithmetic, nested conjunctions, and Boolean guards;
+conjunctions inside a guard's `or` stay intact. The unedited lh_sum_rec fixture
+retains its three clauses with binder counts 3/5/3, heads k_1/k_1/false, and
+relation-premise counts 0/1/1 under absent/sat/unsat/unknown status metadata.
 Short invalid cases stay inline in `Horn.lean`. Separate checks distinguish a bound
 Bool from a same-named nullary relation and reject a different native symbol with
 the same printed name.

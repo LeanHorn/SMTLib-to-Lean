@@ -23,5 +23,9 @@
     (=> (and (< outer x) flag (= onlyBody 7)) (R outer flag x))))))
 (assert (=> done false))
 (assert false)
+; Nonlinear rule: nested conjunctions, three relation premises, and intact theory guards.
+(assert (forall ((x Int) (y Int) (cond Bool))
+  (=> (and (P x) (and (> x 0) (P y) (or (and (< x 0) (> y 0)) (not cond)))
+           done (= cond (> (+ (* x y) (- x)) (abs y))) (not cond)) false)))
 (check-sat)
 (exit)

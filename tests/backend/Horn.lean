@@ -19,7 +19,8 @@ private def checkRejected (name input : String) (ordinal : Nat) (reason : String
   | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
   | .error error =>
     let message := toString error
-    require (message.contains s!"{name}: command {ordinal}:" && message.contains reason)
+    let context := if mode == .chc then s!"{name}: query 1" else name
+    require (message.contains s!"{context}: command {ordinal}:" && message.contains reason)
       s!"{name}: wrong diagnostic: {message}"
 
 private def checkParser : IO Unit := do
@@ -84,14 +85,14 @@ private def checkClauses : IO Unit := do
     for relation in relations, declaration in query.declarations do
       require (relation.term == declaration.term) "relation identity changed"
     let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
-    require (clauses.map (·.assertionNumber) == (List.range 11).toArray.map (· + 1))
+    require (clauses.map (·.assertionNumber) == (List.range 12).toArray.map (· + 1))
       "wrong clause count or source assertion numbers"
-    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0])
+    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3])
       "wrong binder counts"
-    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0])
+    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 1])
       "wrong premise counts"
     require (clauses.map (headName ∘ (·.head)) ==
-      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false"])
+      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false"])
       "wrong clause heads"
     let facts ← (query.assertions.extract 0 5).mapM (recognizeFact relations)
     require (facts.map (·.relation.term) == (query.declarations.extract 0 5).map (·.term))
@@ -152,7 +153,8 @@ private def checkRejectedFacts : IO Unit := do
 
 private def checkBoundData : IO Unit := do
   let input := "(set-logic HORN)\n(declare-const p Bool)\n(declare-fun R (Bool) Bool)\n" ++
-    "(assert (forall ((p Bool)) (R p)))\n(check-sat)"
+    "(assert (forall ((p Bool)) (R p)))\n" ++
+    "(assert (forall ((p Bool)) (=> (not p) (R p))))\n(check-sat)"
   (parseAndInspectQuery input (mode := .chc) fun query => do
     let relations ← collectRelations query.declarations
     let quantified := query.assertions[0]!
@@ -163,6 +165,13 @@ private def checkBoundData : IO Unit := do
       "bound Bool argument lost its identity"
     require ((← relationAtom? relations bound).isNone)
       "bound Bool variable was mistaken for the nullary relation named p"
+    let problem ← validateQuery query
+    let some clause := problem.clauses[1]? | throw (.error "missing bound Bool guard")
+    let #[.guard guard] := clause.premises | throw (.error "not p should be a theory guard")
+    let #[binder] := clause.binders | throw (.error "missing bound p")
+    let some global := relations[0]? | throw (.error "missing global p")
+    require (guard[0]! == binder.term && binder.term != global.term)
+      "bound Bool guard was confused with a global relation"
   ).runIO
 
 private def checkRejectedClauses : IO Unit := do
@@ -195,6 +204,90 @@ private def checkNativeIdentity : IO Unit :=
     require (declared != other) "expected distinct native symbols"
     discard <| recognizeFact relations other
 
+private def relationCount (clause : Clause Premise) : Nat :=
+  clause.premises.foldl (fun n premise => match premise with
+    | .relation _ => n + 1
+    | .guard _ => n) 0
+
+private def premiseText : Premise → String
+  | .relation atom => s!"relation {atom.relation.name} {atom.arguments.map toString}"
+  | .guard term => s!"guard {term}"
+
+/-- Compare structure across metadata variants without retaining native terms. -/
+private def snapshot (problem : Problem) : String :=
+  toString (problem.relations.map (fun r => (r.name, r.argumentSorts.map toString)),
+    problem.clauses.map fun c => (c.assertionNumber,
+      c.binders.map (fun b => (toString b.term, toString b.sort)),
+      c.premises.map premiseText, match c.head with
+        | .relation a => (a.relation.name, a.arguments.map toString)
+        | .falsity => ("false", #[])))
+
+private def checkProblems : IO Unit := do
+  let path := "tests/chc/lh_sum_rec.smt2"
+  let input ← IO.FS.readFile path
+  let reference ← IO.mkRef (none : Option String)
+  for metadata in #["(set-info :status sat)", "(set-info :status unsat)",
+      "(set-info :status unknown)", ""] do
+    let calls ← IO.mkRef 0
+    (parseAndInspectProblem (input.replace "(set-info :status sat)" metadata) (name := path)
+      fun problem => do
+        calls.modify (· + 1)
+        require (problem.relations.map (·.name) == #["k_1"] &&
+          problem.clauses.map (·.binders.size) == #[3, 5, 3] &&
+          problem.clauses.map (headName ∘ (·.head)) == #["k_1", "k_1", "false"])
+          "validated lh_sum_rec lost relations, binders, or heads"
+        require (problem.clauses.map relationCount == #[0, 1, 1] &&
+          problem.clauses.map (·.premises.size) == #[3, 5, 5])
+          "expected a guarded fact, recursive rule, and false-head rule"
+        match ← reference.get with
+        | none => reference.set (some (snapshot problem))
+        | some expected => require (snapshot problem == expected) "metadata changed the CHC problem"
+    ).runIO
+    require ((← calls.get) == 1) "expected one validated problem"
+  let path := "tests/translation/chc/clauses.smt2"
+  (parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
+    require (problem.relations.size == 6 && problem.clauses.size == 12)
+      "validated fixture lost declarations or clauses"
+    require (problem.clauses.map relationCount == #[0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 3])
+      "wrong relation-premise counts"
+    require (problem.clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 3, 2, 3, 1, 0, 7])
+      "wrong flattened premise counts"
+    let some clause := problem.clauses[11]? | throw (.error "missing nonlinear rule")
+    require (clause.premises.map premiseText == #[
+      "relation P #[x]", "guard (> x 0)", "relation P #[y]",
+      "guard (or (and (< x 0) (> y 0)) (not cond))", "relation done #[]",
+      "guard (= cond (> (+ (* x y) (- x)) (abs y)))", "guard (not cond)"])
+      "premises were reordered, dropped, or flattened inside a theory guard"
+  ).runIO
+
+private def checkRejectedProblems : IO Unit := do
+  for (name, assertion, reason) in #[
+    ("negated-relation", "(=> (not (P x)) done)", "inside a theory guard"),
+    ("negated-nullary", "(=> (not done) (P x))", "inside a theory guard"),
+    ("relation-equality", "(=> (= (P x) cond) done)", "inside a theory guard"),
+    ("relation-disjunction", "(=> (or (> x 0) (P x)) done)", "inside a theory guard"),
+    ("relation-implication", "(=> (=> cond (P x)) done)", "inside a theory guard"),
+    ("relation-under-negations", "(=> (not (not (P x))) done)", "inside a theory guard"),
+    ("relation-argument", "(=> (R x (P x) x) done)", "inside a relation argument"),
+    ("unsupported-guard", "(=> (> (div x 2) 0) done)", "unsupported operator"),
+    ("unsupported-head-argument", "(P (mod x 2))", "unsupported operator"),
+    ("existential", "(exists ((y Int)) (P y))", "leading forall"),
+    ("disjunctive-head", "(=> (P x) (or (P x) done))", "as CHC head")
+  ] do
+    let path := s!"tests/{name}.smt2"
+    -- A later bad assertion must reject the entire problem before its callback.
+    let input := "(set-logic HORN)\n(declare-fun P (Int) Bool)\n" ++
+      "(declare-fun R (Int Bool Int) Bool)\n(declare-const done Bool)\n" ++
+      s!"(assert (P 0))\n(assert done)\n(assert (forall ((x Int) (cond Bool)) {assertion}))\n(check-sat)"
+    let inspected ← IO.mkRef false
+    match ← (parseAndInspectProblem input (fun _ => inspected.set true) (name := path)).run with
+    | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
+    | .error error =>
+      let message := toString error
+      require (message.contains s!"{path}: query 1:" && message.contains "clause 3:" &&
+        message.contains reason) s!"{name}: wrong diagnostic: {message}"
+    require (!(← inspected.get)) s!"{name}: returned a partial problem"
+
 def main : IO Unit := do
   checkParser
   checkClauses
@@ -202,5 +295,7 @@ def main : IO Unit := do
   checkBoundData
   checkRejectedClauses
   checkNativeIdentity
-  IO.println "Horn extraction passed: lh_sum_rec (3 clauses) and combined fixture (11 clauses)"
-  IO.println "No solver query invoked. Premise validation follows in 7.4."
+  checkProblems
+  checkRejectedProblems
+  IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (12 clauses)"
+  IO.println "Metadata, clause diagnostics, and whole-problem rejection passed; no solver query invoked."

@@ -9,7 +9,8 @@ Parse a restricted SMT-LIB script with cvc5 without solving it.
 
 Accept one Bool/Int query, with declarations, assertions, and optional metadata.
 Intercept `check-sat` and pass the validated query to a callback after reading
-the entire input. Report failures with the input name and command number.
+the entire input. Report failures with the input name and command number;
+CHC mode adds the query number and, for assertion validation, the clause number.
 
 The reconstruction imports register the handlers used by `Translate.lean`
 and the reconstruction tests to turn assertion terms into Lean propositions.
@@ -135,12 +136,13 @@ private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
   unless response.isEmpty || response == "success" do
     throw (.error s!"{command.getCommandName}: {response}")
 
-private def commandError (name : String) (ordinal : Nat) : cvc5.Error → cvc5.Error
-  | .error message => .error s!"{name}: command {ordinal}: {message}"
-  | .recoverable message => .recoverable s!"{name}: command {ordinal}: {message}"
-  | .unsupported message => .unsupported s!"{name}: command {ordinal}: {message}"
-  | .option message => .option s!"{name}: command {ordinal}: {message}"
-  | .missingValue => .error s!"{name}: command {ordinal}: missing native value"
+/-- Add a location without changing the native error category. -/
+def errorWithContext (context : String) : cvc5.Error → cvc5.Error
+  | .error message => .error s!"{context}: {message}"
+  | .recoverable message => .recoverable s!"{context}: {message}"
+  | .unsupported message => .unsupported s!"{context}: {message}"
+  | .option message => .option s!"{context}: {message}"
+  | .missingValue => .error s!"{context}: missing native value"
 
 /--
 A higher-order function that parses and validates SMT-LIB commands without solving.
@@ -164,6 +166,8 @@ def parseAndInspectQuery
   let mut checked := false
   let mut exited := false
   let mut ordinal := 1
+  let mut assertionNumber := 0
+  let context := if mode == .chc then s!"{name}: query 1" else name
   while true do
     let commandOrdinal := ordinal
     try
@@ -200,11 +204,15 @@ def parseAndInspectQuery
           declarations := query.declarations.push { name := symbol, term }
           invoked := query.invoked.push commandName }
       | "assert" =>
-        invokeCommand cmd solver symbols
-        let assertions ← solver.getAssertions
-        let some term := assertions.back?
-          | throw (.error "assert command did not store a formula")
-        validateAssertion term query.declarations allowQuantifiers
+        assertionNumber := assertionNumber + 1
+        try
+          invokeCommand cmd solver symbols
+          let assertions ← solver.getAssertions
+          let some term := assertions.back?
+            | throw (.error "assert command did not store a formula")
+          validateAssertion term query.declarations allowQuantifiers
+        catch error =>
+          throw (if mode == .chc then errorWithContext s!"clause {assertionNumber}" error else error)
         query := { query with invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
       | "check-sat" =>
@@ -215,9 +223,9 @@ def parseAndInspectQuery
         exited := true
       | _ => throw (.unsupported s!"unsupported command: {commandName}")
       ordinal := ordinal + 1
-    catch error => throw (commandError name commandOrdinal error)
+    catch error => throw (errorWithContext s!"{context}: command {commandOrdinal}" error)
   unless checked do
-    throw (commandError name ordinal (.error "expected one check-sat"))
+    throw (errorWithContext s!"{context}: command {ordinal}" (.error "expected one check-sat"))
   inspect query
 
 end Smt2Lean.Backend

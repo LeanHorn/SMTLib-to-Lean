@@ -151,6 +151,18 @@ along their consequents. Existentials and non-leading quantifiers are rejected.
 Premise conjunctions remain intact, and relation arguments retain their original
 expressions. These are intermediate records; premise validation remains 7.4.
 
+Tasks 7.4–7.5 add `Chc.validateQuery` and `Chc.parseAndInspectProblem`. Validation
+flattens only premise conjunctions, retaining source order, and classifies their
+leaves as positive relation atoms or relation-free Bool/Int guards. Relation-free
+disjunctions and negations remain intact; relations hidden in guards or arguments
+are rejected. The callback receives one complete `Problem` only after every
+declaration and clause passes. It retains native terms inside the parser lifetime.
+Errors identify the input and query, with clause numbers for clause validation and
+command numbers for parser failures. Tests cover the unedited lh_sum_rec (0/1/1
+relation premises), one combined twelve-clause fixture, status independence, and
+rejection of a bad later clause before inspection. The ordinary CLI still rejects
+HORN; CHC Lean output is PR 8.
+
 For ordinary `tests/smt`, all eight unmodified files hit a cvc5 name collision at
 the user-declared `set.card`. Diagnostic in-memory renaming plus `--force-logic=ALL`
 lets seven parse; `lh_sets_neg` still fails on Z3's indexed array `map`. Input files
