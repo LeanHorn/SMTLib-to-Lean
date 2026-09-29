@@ -59,6 +59,11 @@ proposition and kernel-checked after closing its relation parameters. Checks cov
 unused variables/relations, shadowed binders, mixed sorts, nullary relations,
 multiple premises, false heads, and isolation between nested reconstructions.
 An unmapped relation named `True` must fail instead of resolving to Lean's builtin.
+Complete CHC problems are compared with handwritten existential propositions,
+including both fixtures, empty inputs, unused relations, nullary facts, and
+inconsistent clauses. Absent/sat/unsat/unknown status variants of lh_sum_rec keep
+the same target. All ten `Problem` definitions are closed, kernel-checked, and
+free of axioms.
 CHC reconstruction is currently in memory; it does not yet produce a Lean file.
 
 Run the CLI/demo checks without rebuilding the smoke test:

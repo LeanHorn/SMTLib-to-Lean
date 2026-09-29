@@ -118,16 +118,10 @@ def withClauses [Inhabited α] (problem : Chc.Problem)
       catch error => throwError "CHC clause {clause.assertionNumber}: {error.toMessageData}"
     inspect parameters clauses
 
-/--
-Define `Refutation : Prop := ∀ parameters, (assertions) → False` in the Lean environment.
-An empty assertion set means `True`. Kernel-check the definition, without proving it.
--/
-def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM Expr := do
-  let value ← withAssertions query fun parameters assertions => do
-    let body ← mkArrow (mkAndN assertions.toList) q(False)
-    mkForallFVars parameters body (usedOnly := false)
+/-- Install a closed, axiom-free proposition after the kernel checks its type. -/
+private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   if value.hasFVar || value.hasLooseBVars || value.hasMVar then
-    throwError "refutation contains unresolved variables"
+    throwError "{name} contains unresolved variables"
   let declaration : Declaration := .defnDecl {
     name
     levelParams := []
@@ -139,10 +133,30 @@ def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM 
   -- Check synchronously so a kernel failure cannot be reported as success.
   let checkedEnv ← ofExceptKernelException <|
     (← getEnv).addDeclCore 0 1000 declaration none
-  setEnv checkedEnv
-  let axioms ← collectAxioms name
+  let axioms ← withEnv checkedEnv (collectAxioms name)
   unless axioms.isEmpty do
-    throwError "refutation depends on axioms: {axioms}"
+    throwError "{name} depends on axioms: {axioms}"
+  setEnv checkedEnv
   return value
+
+/--
+Define `Refutation : Prop := ∀ parameters, (assertions) → False` in the Lean environment.
+An empty assertion set means `True`. Kernel-check the definition, without proving it.
+-/
+def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM Expr := do
+  let value ← withAssertions query fun parameters assertions => do
+    let body ← mkArrow (mkAndN assertions.toList) q(False)
+    mkForallFVars parameters body (usedOnly := false)
+  defineProposition name value
+
+/--
+Define `Problem : Prop := ∃ relations, clause₁ ∧ … ∧ clauseₙ` for validated CHCs.
+Retain unused relations; no clauses means `True`. Check the definition without proving it.
+-/
+def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr := do
+  let value ← withClauses problem fun parameters clauses => do
+    parameters.foldrM (init := mkAndN clauses.toList) fun parameter body => do
+      mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
+  defineProposition name value
 
 end Smt2Lean.Translate

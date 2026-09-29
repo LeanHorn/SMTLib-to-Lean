@@ -353,6 +353,13 @@ false heads become Lean `False`.
 combined fixture with handwritten Lean propositions and kernel-checks each clause
 after closing its relation parameters. These checks do not prove the clauses.
 
+`Smt2Lean.Translate.defineProblem` combines those clauses into a closed
+`Problem : Prop := ∃ relations, clause₁ ∧ … ∧ clauseₙ` definition in memory.
+It retains unused and nullary relations; an empty conjunction is `True`. The
+definition is kernel-checked and has no axiom dependencies. This checks its type,
+not whether suitable relation interpretations exist. Status metadata never
+changes the proposition.
+
 ## Translation checks
 
 The translator reconstructs assertions and kernel-checks a closed refutation

@@ -104,14 +104,15 @@ private def checkClauseValues (parameters actual expected : Array Expr) : MetaM 
       throwError "clause did not close over its relation parameters"
     checkWithKernel closed
 
-private def runProblem (env : Environment) (path : String)
+private def runProblem (env : Environment) (name input : String)
     (check : Smt2Lean.Chc.Problem → MetaM Unit) : IO Unit := do
-  (Smt2Lean.Chc.parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
-    discard <| (check problem).toIO { fileName := path, fileMap := default } { env }
+  (Smt2Lean.Chc.parseAndInspectProblem input (name := name) fun problem => do
+    discard <| (check problem).toIO { fileName := name, fileMap := default } { env }
   ).runIO
 
 private def checkHornReconstruction (env : Environment) : IO Unit := do
-  runProblem env "tests/chc/lh_sum_rec.smt2" fun problem =>
+  let path := "tests/chc/lh_sum_rec.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
     withClauses problem fun parameters clauses => do
       let #[k] := parameters | throwError "expected one relation parameter"
       let k : Q(Int → Prop) := k
@@ -123,7 +124,8 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
         q(∀ (r : Int) (ok1 v : Prop),
           $k r → (ok1 = (0 ≤ r)) → (v = (0 ≤ r)) → v = ok1 → ¬v → False)
       ]
-  runProblem env "tests/translation/chc/clauses.smt2" fun problem => do
+  let path := "tests/translation/chc/clauses.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem => do
     withClauses problem fun parameters clauses => do
       let #[p, r, done, namedTrue, quoted, unused] := parameters
         | throwError "expected six relation parameters"
@@ -162,11 +164,67 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
       throw error
   IO.println "CHC reconstruction passed: 15 clauses match handwritten Lean propositions"
 
+private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr) : MetaM Unit := do
+  let value ← defineProblem problem
+  if value.hasFVar || value.hasMVar || value.hasLooseBVars then
+    throwError "Problem contains unresolved variables"
+  checkEqual value expected
+  let .defnInfo definition ← getConstInfo `Problem
+    | throwError "expected a definition named Problem"
+  checkEqual definition.type q(Prop)
+  checkEqual definition.value value
+  unless (← collectAxioms `Problem).isEmpty do
+    throwError "Problem depends on axioms"
+
+private def checkHornProblems (env : Environment) : IO Unit := do
+  let path := "tests/chc/lh_sum_rec.smt2"
+  let input ← IO.FS.readFile path
+  let expected := q(∃ k : Int → Prop,
+    (∀ (n : Int) (cond : Prop) (vv : Int),
+      (cond = (n ≤ 0)) → cond → vv = 0 → k vv) ∧
+    (∀ (n : Int) (cond : Prop) (n1 t1 v : Int),
+      (cond = (n ≤ 0)) → ¬cond → n1 = n - 1 → k t1 → v = n + t1 → k v) ∧
+    (∀ (r : Int) (ok1 v : Prop),
+      k r → (ok1 = (0 ≤ r)) → (v = (0 ≤ r)) → v = ok1 → ¬v → False))
+  for status in #["", "sat", "unsat", "unknown"] do
+    let metadata := if status.isEmpty then "" else s!"(set-info :status {status})"
+    runProblem env s!"{path} ({status})" (input.replace "(set-info :status sat)" metadata)
+      fun problem => checkProblem problem expected
+  let path := "tests/translation/chc/clauses.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem q(∃ (p : Int → Prop) (r : Int → Prop → Int → Prop)
+      (done namedTrue : Prop) (quoted : Prop → Int → Prop) (_unused : Int → Prop → Prop),
+      p 0 ∧ r 7 (True ∧ ¬False) (9 - 4) ∧ done ∧ namedTrue ∧
+      quoted ((1 : Int) = 2) (10 + 2) ∧
+      (∀ (x : Int) (_p : Prop) (_unused : Int), p x) ∧
+      (∀ (x y : Int) (b : Prop), p x → y > x → b → r (x + 1) b x) ∧
+      (∀ x : Int, x > 0 → p x → done) ∧
+      (∀ (outer inner : Int) (flag : Prop) (onlyBody : Int) (_unused : Prop),
+        outer < inner → flag → onlyBody = 7 → r outer flag inner) ∧
+      (done → False) ∧ False ∧
+      (∀ (x y : Int) (cond : Prop), p x → x > 0 → p y →
+        ((x < 0 ∧ y > 0) ∨ ¬cond) → done →
+        (cond = (x * y + -x > Int.abs y)) → ¬cond → False))
+  let cases : Array (String × String × Expr) := #[
+    ("empty", "", q(True)),
+    ("unused relations", "(declare-const p Bool)\n(declare-fun R (Int Bool) Bool)",
+      q(∃ (_p : Prop) (_r : Int → Prop → Prop), True)),
+    ("nullary fact", "(declare-const p Bool)\n(assert p)", q(∃ p : Prop, p)),
+    ("bare false", "(assert false)", q(False)),
+    ("nullary contradiction", "(declare-const p Bool)\n(assert p)\n(assert (=> p false))",
+      q(∃ p : Prop, p ∧ (p → False)))
+  ]
+  for (name, body, expected) in cases do
+    runProblem env name ("(set-logic HORN)\n" ++ body ++ "\n(check-sat)")
+      fun problem => checkProblem problem expected
+  IO.println "CHC problems passed: 10 complete propositions, kernel checked without axioms"
+
 def main : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
   checkHornReconstruction env
+  checkHornProblems env
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
   runQuery env "connectives" input fun query => do
     checkConnectives query
