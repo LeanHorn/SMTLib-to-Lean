@@ -341,7 +341,7 @@ assertion number; parser errors also identify the command. For example:
 example.smt2: query 1: clause 3: CHC relation inside a theory guard: (P x)
 ```
 
-The CLI still rejects HORN input; CHC Lean output follows in PR 8.
+The CLI still rejects HORN input; CHC Lean output is not yet available.
 
 ## Translation checks
 
@@ -377,6 +377,3 @@ For assertions `p` and `(not p)`, its body is:
 A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
 kernel-checked and has no axiom dependencies. This checks its type, not its truth.
-
-PRs 3–6 provide the demos above. Next is PR 7: integer Horn-clause validation.
-See the [implementation plan](docs/PR-PLAN.md).
