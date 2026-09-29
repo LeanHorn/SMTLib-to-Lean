@@ -12,6 +12,7 @@ FIXTURES = ROOT / "tests/translation/bool"
 INTEGERS = ROOT / "tests/translation/int"
 FUNCTIONS = ROOT / "tests/translation/functions"
 QUANTIFIERS = ROOT / "tests/translation/quantifiers"
+BINDINGS = ROOT / "tests/translation/bindings"
 CHC = ROOT / "tests/translation/chc"
 
 
@@ -86,6 +87,7 @@ def main():
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
         inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified"]]
+        inputs += [BINDINGS / "simultaneous.smt2"]
         for fixture in inputs:
             name = fixture.stem
             output = tmp / name
@@ -230,6 +232,8 @@ def main():
             "(set-logic ALL)\n(assert (exists ((p Bool)) (= (ite p 1 (div 1 0)) 1)))\n(check-sat)",
             "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
             "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
+            "(set-logic QF_LIA)\n(assert (let ((x 1) (y x)) (= y 1)))\n(check-sat)",
+            "(set-logic QF_UF)\n(assert (let ((p true) (q p)) q))\n(check-sat)",
             "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
@@ -285,7 +289,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: 27 SMT and 6 CHC standalone translations, source locations, and 4 completed proofs")
+    print("Demo passed: 28 SMT and 6 CHC standalone translations, source locations, and 4 completed proofs")
 
 
 if __name__ == "__main__":

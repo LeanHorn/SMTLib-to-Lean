@@ -7,7 +7,7 @@ tests/translation/run-demo.sh
 ```
 
 The script builds the CLI, runs the source-reader and reconstruction tests, and runs `cli.py`.
-The CLI checks compile twenty-seven SMT files, six CHC files, and their statement sections using
+The CLI checks compile twenty-eight SMT files, six CHC files, and their statement sections using
 Lean core. Boolean contradiction, integer bounds, function congruence, quantified,
 and lh_sum_rec outputs must match their `expected/Query.lean`. Status variants
 must match after removing source comments, since inserting metadata can move
@@ -66,7 +66,8 @@ It checks all 28 truth assignments for xor with two, three, and four operands
 against odd parity, plus four integer distinct cases, using kernel-checked proofs.
 Eight Boolean ite truth cases and four integer ite cases check branch selection,
 negative/large values, and nesting.
-These cases and a quantified function-argument example bring the total to 24 refutations.
+These cases, a quantified function-argument example, and simultaneous let bindings
+bring the total to 25 refutations.
 It also compares the printed statements with the original expressions and compiles
 each `Query.lean` and its isolated statement section using only Lean core.
 Used xor/distinct helpers must appear exactly once before the query statement.
@@ -128,6 +129,14 @@ All generated test files go into temporary directories and are removed afterward
   parameters, and Bool/Int conditional arguments. Tests check argument order, missing mappings, and fresh parameters
   across nested reconstructions and separate inputs with reused names.
 - `congruence.smt2`: the small contradiction `x = y` and `f(x) ≠ f(y)`.
+
+`translation/bindings/simultaneous.smt2` combines five Bool/Int let assertions:
+outer-name references, reversed binding order, compound right-hand sides, and
+shadowing that changes a name's sort. The parser checks native outer-variable
+identities; translation compares each assertion and the complete refutation with
+handwritten expansions. The generated file and its isolated statement compile
+using Lean core. Parser rejection cases cover undeclared earlier/later siblings
+and Boolean siblings; CLI checks also verify rejection without creating output.
 
 `translation/quantifiers/` keeps two queries:
 

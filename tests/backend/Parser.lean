@@ -94,6 +94,18 @@ private def checkAcceptedQueries : IO Unit := do
   let bounds ← IO.FS.readFile "tests/translation/int/bounds.smt2"
   checkAccepted "bounds.smt2" bounds #["x"] 2
     #["set-logic", "declare-fun", "assert", "assert"]
+  let bindings ← IO.FS.readFile "tests/translation/bindings/simultaneous.smt2"
+  checkAccepted "simultaneous.smt2" bindings #["x", "p"] 5
+    (#["set-logic", "declare-fun", "declare-fun"] ++ Array.replicate 5 "assert")
+    fun query => do
+      let #[x, p] := query.declarations | throw (.error "expected two declarations")
+      require (query.assertions[0]![0]! == x.term && query.assertions[1]! == query.assertions[0]!)
+        "let binding order changed the outer Int reference"
+      require (query.assertions[2]![0]! == p.term)
+        "let binding captured the outer Bool reference"
+      let swapped := query.assertions[4]!
+      require (swapped[0]! == p.term && swapped[1]![0]! == x.term)
+        "simultaneous bindings lost their outer identities across sorts"
   let functions ← IO.FS.readFile "tests/translation/functions/applications.smt2"
   for logic in #["QF_UFLIA", "QF_UFNIA", "ALL"] do
     checkAccepted s!"applications.smt2 ({logic})"
@@ -172,6 +184,12 @@ private def checkRejectedQueries : IO Unit := do
       3, "quantifier without annotations"),
     ("out-of-scope", "(set-logic ALL)\n(assert (forall ((x Int)) (= x x)))\n(assert (= x 0))\n(check-sat)",
       3, "x"),
+    ("let-sibling-int", "(set-logic QF_LIA)\n(assert (let ((x 1) (y x)) (= y 1)))\n(check-sat)",
+      2, "not declared"),
+    ("let-sibling-bool", "(set-logic QF_UF)\n(assert (let ((p true) (q p)) q))\n(check-sat)",
+      2, "not declared"),
+    ("let-forward-sibling", "(set-logic QF_LIA)\n(assert (let ((y x) (x 1)) (= y 1)))\n(check-sat)",
+      2, "not declared"),
     ("ite-condition", "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
       2, "condition"),
     ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",

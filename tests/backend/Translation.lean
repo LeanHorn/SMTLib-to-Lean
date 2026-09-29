@@ -158,6 +158,23 @@ private def checkRefutation (query : ParsedQuery) (expected : Expr)
   checkAxioms `Refutation usesClassical
   checkEmission value (origin := query.source) (assertions := query.assertionSources)
 
+/-- Compare each let expansion independently, so contradictory assertions cannot hide mistakes. -/
+private def checkSimultaneousBindings (env : Environment) : IO Unit := do
+  let path := "tests/translation/bindings/simultaneous.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    withAssertions query fun parameters assertions => do
+      let #[x, p] := parameters | throwError "let bindings became query parameters"
+      let x : Q(Int) := x
+      let p : Q(Prop) := p
+      let expected : Array Expr := #[q($x = 1), q($x = 1), q($p = False),
+        q(($x + 1 = $x) ∧ ((¬$p) = $p)), q($p = ($x > 0))]
+      unless assertions.size == expected.size do throwError "wrong let assertion count"
+      for actual in assertions, wanted in expected do
+        checkEqual actual wanted
+    checkRefutation query q(∀ (x : Int) (p : Prop),
+      (x = 1 ∧ x = 1 ∧ p = False ∧ ((x + 1 = x) ∧ ((¬p) = p)) ∧ p = (x > 0)) → False)
+  IO.println "Simultaneous let passed: 5 Bool/Int assertions match handwritten expansions and standalone output"
+
 private def checkClauseValues (parameters actual expected : Array Expr) : MetaM Unit := do
   unless actual.size == expected.size do throwError "wrong reconstructed clause count"
   for value in actual, wanted in expected do
@@ -370,6 +387,7 @@ def main : IO Unit := do
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
   checkAxiomRejection
   checkOperatorSemantics env
+  checkSimultaneousBindings env
   checkHornReconstruction env
   checkHornProblems env
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
@@ -483,4 +501,4 @@ def main : IO Unit := do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
     runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
-  IO.println "Translation passed: 24 refutations and generated files; existing proof work preserved"
+  IO.println "Translation passed: 25 refutations and generated files; existing proof work preserved"

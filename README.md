@@ -137,6 +137,30 @@ SMT `Bool` results become Lean propositions. All generated code uses Lean core;
 The combined [arithmetic fixture](tests/translation/int/arithmetic.smt2) covers
 these operators, nested absolute values, large integers, and comparison chains.
 
+## Translate simultaneous let bindings
+
+`let` gives expressions local names. Every binding expression uses the outer
+scope; the new names are available together in the body. For a declared Int `x`:
+
+```smt2
+(assert (let ((x 1) (y x)) (= y x)))
+```
+
+This asserts `outer_x = 1`: `y` receives the original `x`. Without an outer
+declaration for `x`, the reference in `(y x)` is rejected. cvc5 expands the bindings
+before Lean reconstruction, so the output contains the expanded proposition.
+
+Run the combined Bool/Int example from the repository root, choosing a new output directory:
+
+```sh
+lake exe smt2lean tests/translation/bindings/simultaneous.smt2 --out let-demo
+lake env lean let-demo/Query.lean
+```
+
+The fixture covers binding order, shadowing, compound binding expressions, and
+local names whose sorts differ from the outer declarations. The `sorry` warning
+is expected for the unfinished proof template.
+
 ## Translate functions and predicates
 
 Functions can take any mixture of `Bool` and `Int` arguments and return either
@@ -304,6 +328,7 @@ Supported inputs:
   nested calls and compound Boolean arguments. Bool results are Lean propositions.
 - Boolean literals and `not`, `and`, `or`, `xor`, and `=>`.
 - `ite` with a Boolean condition and two Bool branches or two Int branches.
+- Simultaneous `let` bindings over Bool/Int expressions, expanded by cvc5.
 - `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
 - Integer literals, unary `-`, and `=`/`distinct` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
