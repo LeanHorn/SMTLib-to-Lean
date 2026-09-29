@@ -85,14 +85,14 @@ private def checkClauses : IO Unit := do
     for relation in relations, declaration in query.declarations do
       require (relation.term == declaration.term) "relation identity changed"
     let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
-    require (clauses.map (·.assertionNumber) == (List.range 14).toArray.map (· + 1))
+    require (clauses.map (·.assertionNumber) == (List.range 16).toArray.map (· + 1))
       "wrong clause count or source assertion numbers"
-    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3, 4, 4])
+    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3, 4, 4, 2, 4])
       "wrong binder counts"
-    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 1, 1, 1])
+    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 1, 1, 1, 1, 1])
       "wrong premise counts"
     require (clauses.map (headName ∘ (·.head)) ==
-      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false", "R", "R"])
+      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false", "R", "R", "R", "R"])
       "wrong clause heads"
     let facts ← (query.assertions.extract 0 5).mapM (recognizeFact relations)
     require (facts.map (·.relation.term) == (query.declarations.extract 0 5).map (·.term))
@@ -123,6 +123,17 @@ private def checkClauses : IO Unit := do
     require (shadowed.premises[0]![2]![0]! == onlyBody.term &&
       (← ofExcept unused.term.getSymbol) == "unused")
       "premise-only or unused binder changed"
+    let some nested := clauses[15]? | throw (.error "missing let/quantifier clause")
+    let #[outerX, outerB, innerX, innerB] := nested.binders
+      | throw (.error "let expansion lost leading binders")
+    require (outerX.term != innerX.term && outerB.term != innerB.term)
+      "let aliases collapsed shadowed Bool/Int binders"
+    let .relation head := nested.head | throw (.error "expected a relation head")
+    require (head.arguments[0]![0]! == innerX.term &&
+      head.arguments[1]! == outerB.term && head.arguments[2]! == outerX.term)
+      "let expansion captured a head argument"
+    require (nested.premises[0]![2]!.getChildren == #[innerB.term, outerB.term])
+      "let expansion captured a guard variable"
   ).runIO
 
 private def expectError (name reason : String) (action : cvc5.Env Unit) : IO Unit := do
@@ -246,11 +257,11 @@ private def checkProblems : IO Unit := do
     require ((← calls.get) == 1) "expected one validated problem"
   let path := "tests/translation/chc/clauses.smt2"
   (parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
-    require (problem.relations.size == 6 && problem.clauses.size == 14)
+    require (problem.relations.size == 6 && problem.clauses.size == 16)
       "validated fixture lost declarations or clauses"
-    require (problem.clauses.map relationCount == #[0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 3, 1, 1])
+    require (problem.clauses.map relationCount == #[0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 3, 1, 1, 1, 1])
       "wrong relation-premise counts"
-    require (problem.clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 3, 2, 3, 1, 0, 7, 4, 2])
+    require (problem.clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 3, 2, 3, 1, 0, 7, 4, 2, 3, 3])
       "wrong flattened premise counts"
     let some clause := problem.clauses[11]? | throw (.error "missing nonlinear rule")
     require (clause.premises.map premiseText == #[
@@ -279,6 +290,11 @@ private def checkRejectedProblems : IO Unit := do
     ("relation-distinct-argument", "(R x (distinct cond (P x)) x)", "inside a relation argument"),
     ("unsupported-guard", "(=> (> (div x 2) 0) done)", "unsupported operator"),
     ("unsupported-head-argument", "(P (mod x 2))", "unsupported operator"),
+    ("let-unsupported-guard", "(let ((half (div x 2))) (=> (> half 0) done))", "unsupported operator"),
+    ("let-unsupported-head", "(let ((rest (mod x 2))) (P rest))", "unsupported operator"),
+    ("let-hidden-relation", "(let ((guard (not (P x)))) (=> guard done))", "inside a theory guard"),
+    ("let-hidden-argument", "(let ((arg (P x))) (R x arg x))", "inside a relation argument"),
+    ("let-hidden-quantifier", "(let ((guard (exists ((y Int)) (= x y)))) (=> guard (P x)))", "leading forall"),
     ("existential", "(exists ((y Int)) (P y))", "leading forall"),
     ("disjunctive-head", "(=> (P x) (or (P x) done))", "as CHC head")
   ] do
@@ -305,5 +321,5 @@ def main : IO Unit := do
   checkNativeIdentity
   checkProblems
   checkRejectedProblems
-  IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (14 clauses)"
+  IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (16 clauses)"
   IO.println "Metadata, clause diagnostics, and whole-problem rejection passed; no solver query invoked."

@@ -55,7 +55,7 @@ absent/sat/unsat/unknown status metadata. The same clauses under `ALL` or no log
 produce `Refutation`; HORN text in comments, names, and metadata cannot select
 CHC mode. Empty HORN input also translates. Invalid CHC declarations, later
 clauses/operators, missing checks, and malformed tails fail with source context
-and create no output. The combined fourteen-clause CHC fixture also compiles through
+and create no output. The combined sixteen-clause CHC fixture also compiles through
 the CLI. Source checks cover multiline commands, quoted text, CRLF input, and
 filenames containing newlines. Moving the input changes only source comments.
 Edited CHC proof work survives attempted overwrites.
@@ -66,7 +66,7 @@ It checks all 28 truth assignments for xor with two, three, and four operands
 against odd parity, plus four integer distinct cases, using kernel-checked proofs.
 Eight Boolean ite truth cases and four integer ite cases check branch selection,
 negative/large values, and nesting.
-These cases, a quantified function-argument example, and simultaneous let bindings
+These cases, a quantified function-argument example, and the combined let fixture
 bring the total to 25 refutations.
 It also compares the printed statements with the original expressions and compiles
 each `Query.lean` and its isolated statement section using only Lean core.
@@ -80,7 +80,7 @@ forbidden, including through another definition. Only proof templates contain
 admissions in generated output. Existing proof work is
 preserved. The tests reuse the combined fixtures below.
 
-The translation test also reconstructs all seventeen CHC clauses from lh_sum_rec
+The translation test also reconstructs all nineteen CHC clauses from lh_sum_rec
 and the combined CHC fixture. Each clause is compared with a handwritten Lean
 proposition and kernel-checked after closing its relation parameters. Checks cover
 unused variables/relations, shadowed binders, mixed sorts, nullary relations,
@@ -130,13 +130,16 @@ All generated test files go into temporary directories and are removed afterward
   across nested reconstructions and separate inputs with reused names.
 - `congruence.smt2`: the small contradiction `x = y` and `f(x) ≠ f(y)`.
 
-`translation/bindings/simultaneous.smt2` combines five Bool/Int let assertions:
+`translation/bindings/simultaneous.smt2` combines nine Bool/Int let assertions:
 outer-name references, reversed binding order, compound right-hand sides, and
-shadowing that changes a name's sort. The parser checks native outer-variable
+shadowing that changes a name's sort, plus nested lets, repeated expressions,
+aliases beneath shadowed quantifiers, and restoration of outer scopes.
+The parser checks native outer-variable
 identities; translation compares each assertion and the complete refutation with
 handwritten expansions. The generated file and its isolated statement compile
 using Lean core. Parser rejection cases cover undeclared earlier/later siblings
-and Boolean siblings; CLI checks also verify rejection without creating output.
+and Boolean siblings, escaping local names, and unsupported div/mod in expanded
+binding values or bodies; CLI checks also verify rejection without creating output.
 
 `translation/quantifiers/` keeps two queries:
 
@@ -156,8 +159,8 @@ the same subterm was already accepted under a quantifier.
 one existential relation and all three original clauses, followed by an unfinished
 proof. Its source comments identify the original query and clause ranges.
 
-`translation/chc/clauses.smt2` combines six relation declarations and fourteen clauses:
-five bare facts, a quantified fact, seven rules, and a bare false assertion. It
+`translation/chc/clauses.smt2` combines six relation declarations and sixteen clauses:
+five bare facts, a quantified fact, nine rules, and a bare false assertion. It
 covers mixed sorts, arithmetic, quoted names, unused relations/variables, chained
 implications, and shadowed leading binders. Tests preserve argument and premise
 order before and after flattening premise conjunctions. A nonlinear rule combines
@@ -166,6 +169,12 @@ conjunctions inside a guard's `or` stay intact. Another rule combines xor and
 Bool/Int distinct guards with nested operators in a relation argument.
 Conditional guards and both Bool/Int conditional relation arguments are included;
 relations and nested quantifiers hidden inside conditions remain rejected.
+Two let-based rules cover nested scopes, relation aliases, theory guards, repeated
+head expressions, and saved Bool/Int variables beneath shadowed leading binders.
+Their expansions match handwritten clauses and the complete Lean problem.
+Rejection cases ensure let aliases cannot hide unsupported arithmetic, relations
+inside guards or arguments, or non-leading quantifiers. CLI checks retain the
+offending clause location and create no output for invalid expanded clauses.
 The unedited lh_sum_rec fixture
 retains its three clauses with binder counts 3/5/3, heads k_1/k_1/false, and
 relation-premise counts 0/1/1 under absent/sat/unsat/unknown status metadata.

@@ -159,7 +159,7 @@ private def checkRefutation (query : ParsedQuery) (expected : Expr)
   checkEmission value (origin := query.source) (assertions := query.assertionSources)
 
 /-- Compare each let expansion independently, so contradictory assertions cannot hide mistakes. -/
-private def checkSimultaneousBindings (env : Environment) : IO Unit := do
+private def checkLetBindings (env : Environment) : IO Unit := do
   let path := "tests/translation/bindings/simultaneous.smt2"
   runQuery env path (← IO.FS.readFile path) fun query => do
     withAssertions query fun parameters assertions => do
@@ -167,13 +167,21 @@ private def checkSimultaneousBindings (env : Environment) : IO Unit := do
       let x : Q(Int) := x
       let p : Q(Prop) := p
       let expected : Array Expr := #[q($x = 1), q($x = 1), q($p = False),
-        q(($x + 1 = $x) ∧ ((¬$p) = $p)), q($p = ($x > 0))]
+        q(($x + 1 = $x) ∧ ((¬$p) = $p)), q($p = ($x > 0)),
+        q((($x + 1) + ($x + 1) = $x + 2) ∧ ((¬$p) = $p)),
+        q(∀ (a : Int) (b : Prop), (a + 1 = $x) ∧ ((¬b) = $p)),
+        q(∀ (a : Int) (b : Prop), (∃ (c : Int) (d : Prop), c = a ∧ d = b) ∧ a = a ∧ b = b),
+        q((True = ((1 : Int) > 0)) ∧ (False = ((2 : Int) > 0)) ∧ ($p = ($x > 0)))]
       unless assertions.size == expected.size do throwError "wrong let assertion count"
       for actual in assertions, wanted in expected do
         checkEqual actual wanted
     checkRefutation query q(∀ (x : Int) (p : Prop),
-      (x = 1 ∧ x = 1 ∧ p = False ∧ ((x + 1 = x) ∧ ((¬p) = p)) ∧ p = (x > 0)) → False)
-  IO.println "Simultaneous let passed: 5 Bool/Int assertions match handwritten expansions and standalone output"
+      (x = 1 ∧ x = 1 ∧ p = False ∧ ((x + 1 = x) ∧ ((¬p) = p)) ∧ p = (x > 0) ∧
+        (((x + 1) + (x + 1) = x + 2) ∧ ((¬p) = p)) ∧
+        (∀ (a : Int) (b : Prop), (a + 1 = x) ∧ ((¬b) = p)) ∧
+        (∀ (a : Int) (b : Prop), (∃ (c : Int) (d : Prop), c = a ∧ d = b) ∧ a = a ∧ b = b) ∧
+        ((True = ((1 : Int) > 0)) ∧ (False = ((2 : Int) > 0)) ∧ (p = (x > 0)))) → False)
+  IO.println "Let bindings passed: 9 Bool/Int assertions match handwritten expansions and standalone output"
 
 private def checkClauseValues (parameters actual expected : Array Expr) : MetaM Unit := do
   unless actual.size == expected.size do throwError "wrong reconstructed clause count"
@@ -298,7 +306,10 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
         q(∀ (x y : Int) (b c : Prop), $p x → exclusive b c →
           (x ≠ y ∧ x ≠ 0 ∧ y ≠ 0) → b ≠ c → $r x (exclusive b (x ≠ y)) y),
         q(∀ (x y : Int) (b c : Prop), $p x → (if b then x < y else x = y) →
-          $r (if b then x else y) (if c then b else x < y) (if x < y then x + 1 else y))
+          $r (if b then x else y) (if c then b else x < y) (if x < y then x + 1 else y)),
+        q(∀ (x : Int) (b : Prop), $p x → x + 1 > x → ¬b → $r ((x + 1) + (x + 1)) b x),
+        q(∀ (outerX : Int) (outerB : Prop) (innerX : Int) (innerB : Prop),
+          $p outerX → innerX + 1 > outerX → innerB = outerB → $r (innerX + 1) outerB outerX)
       ]
       -- Nested calls must allocate their own relations and clause variables.
       withClauses problem fun fresh values => do
@@ -318,7 +329,7 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
     let some source := fact.source | throwError "missing clause source"
     unless message.contains s!"{source.context true}: clause 4:" do
       throwError "CHC reconstruction error lost its source: {message}"
-  IO.println "CHC reconstruction passed: 17 clauses match handwritten Lean propositions"
+  IO.println "CHC reconstruction passed: 19 clauses match handwritten Lean propositions"
 
 private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr)
     (usesClassical : Bool := false) : MetaM Unit := do
@@ -366,7 +377,10 @@ private def checkHornProblems (env : Environment) : IO Unit := do
       (∀ (x y : Int) (b c : Prop), p x → exclusive b c →
         (x ≠ y ∧ x ≠ 0 ∧ y ≠ 0) → b ≠ c → r x (exclusive b (x ≠ y)) y) ∧
       (∀ (x y : Int) (b c : Prop), p x → (if b then x < y else x = y) →
-        r (if b then x else y) (if c then b else x < y) (if x < y then x + 1 else y)))
+        r (if b then x else y) (if c then b else x < y) (if x < y then x + 1 else y)) ∧
+      (∀ (x : Int) (b : Prop), p x → x + 1 > x → ¬b → r ((x + 1) + (x + 1)) b x) ∧
+      (∀ (outerX : Int) (outerB : Prop) (innerX : Int) (innerB : Prop),
+        p outerX → innerX + 1 > outerX → innerB = outerB → r (innerX + 1) outerB outerX))
   let cases : Array (String × String × Expr) := #[
     ("empty", "", q(True)),
     ("unused relations", "(declare-const p Bool)\n(declare-fun R (Int Bool) Bool)",
@@ -387,7 +401,7 @@ def main : IO Unit := do
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
   checkAxiomRejection
   checkOperatorSemantics env
-  checkSimultaneousBindings env
+  checkLetBindings env
   checkHornReconstruction env
   checkHornProblems env
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"

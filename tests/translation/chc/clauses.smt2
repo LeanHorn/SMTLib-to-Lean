@@ -35,5 +35,16 @@
 (assert (forall ((x Int) (y Int) (b Bool) (c Bool))
   (=> (and (P x) (ite b (< x y) (= x y)))
       (R (ite b x y) (ite c b (< x y)) (ite (< x y) (+ x 1) y)))))
+; Nested lets retain a relation premise, guards, and repeated head arguments.
+(assert (forall ((x Int) (b Bool))
+  (let ((next (+ x 1)) (old b) (state (P x)))
+    (let ((x next) (b (not old)) (previous x))
+      (=> (and state (> x previous) b) (R (+ x x) old previous))))))
+; Let aliases preserve outer Bool/Int binders beneath shadowed leading quantifiers.
+(assert (forall ((x Int) (b Bool))
+  (let ((savedX x) (savedB b))
+    (forall ((x Int) (b Bool))
+      (let ((next (+ x 1)) (ok (= b savedB)))
+        (=> (and (P savedX) (> next savedX) ok) (R next savedB savedX)))))))
 (check-sat)
 (exit)

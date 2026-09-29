@@ -137,7 +137,7 @@ SMT `Bool` results become Lean propositions. All generated code uses Lean core;
 The combined [arithmetic fixture](tests/translation/int/arithmetic.smt2) covers
 these operators, nested absolute values, large integers, and comparison chains.
 
-## Translate simultaneous let bindings
+## Translate let bindings
 
 `let` gives expressions local names. Every binding expression uses the outer
 scope; the new names are available together in the body. For a declared Int `x`:
@@ -157,9 +157,12 @@ lake exe smt2lean tests/translation/bindings/simultaneous.smt2 --out let-demo
 lake env lean let-demo/Query.lean
 ```
 
-The fixture covers binding order, shadowing, compound binding expressions, and
-local names whose sorts differ from the outer declarations. The `sorry` warning
-is expected for the unfinished proof template.
+The fixture covers simultaneous and nested bindings, repeated expressions,
+quantifier shadowing, scope restoration, and local names that change sort.
+The [CHC fixture](tests/translation/chc/clauses.smt2) also uses let aliases in
+relation premises, guards, and relation arguments. Expanded terms retain the
+same operator and CHC restrictions. The `sorry` warning is expected for the
+unfinished proof template.
 
 ## Translate functions and predicates
 
@@ -328,7 +331,7 @@ Supported inputs:
   nested calls and compound Boolean arguments. Bool results are Lean propositions.
 - Boolean literals and `not`, `and`, `or`, `xor`, and `=>`.
 - `ite` with a Boolean condition and two Bool branches or two Int branches.
-- Simultaneous `let` bindings over Bool/Int expressions, expanded by cvc5.
+- Simultaneous and nested `let` bindings over Bool/Int expressions, expanded by cvc5.
 - `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
 - Integer literals, unary `-`, and `=`/`distinct` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
@@ -383,7 +386,7 @@ The `sorry` warning is expected. Typechecking verifies the generated statement;
 the proof that satisfying relations exist remains unfinished. Status metadata
 does not change this target. This command does not run Flex.
 
-The combined fixture exercises fourteen clauses, including nonlinear and conditional guards,
+The combined fixture exercises sixteen clauses, including nonlinear and conditional guards,
 nullary relations, multiple relation premises, and shadowed binders:
 
 ```sh
@@ -458,7 +461,7 @@ clause propositions to a callback. Native identities preserve shadowed bindings;
 unused variables and relations are retained. Facts have no added premise, and
 false heads become Lean `False`.
 
-`lake exe testTranslation` compares all seventeen clauses from lh_sum_rec and the
+`lake exe testTranslation` compares all nineteen clauses from lh_sum_rec and the
 combined fixture with handwritten Lean propositions and kernel-checks each clause
 after closing its relation parameters. These checks do not prove the clauses.
 

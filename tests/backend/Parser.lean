@@ -95,8 +95,8 @@ private def checkAcceptedQueries : IO Unit := do
   checkAccepted "bounds.smt2" bounds #["x"] 2
     #["set-logic", "declare-fun", "assert", "assert"]
   let bindings ← IO.FS.readFile "tests/translation/bindings/simultaneous.smt2"
-  checkAccepted "simultaneous.smt2" bindings #["x", "p"] 5
-    (#["set-logic", "declare-fun", "declare-fun"] ++ Array.replicate 5 "assert")
+  checkAccepted "simultaneous.smt2" bindings #["x", "p"] 9
+    (#["set-logic", "declare-fun", "declare-fun"] ++ Array.replicate 9 "assert")
     fun query => do
       let #[x, p] := query.declarations | throw (.error "expected two declarations")
       require (query.assertions[0]![0]! == x.term && query.assertions[1]! == query.assertions[0]!)
@@ -190,6 +190,12 @@ private def checkRejectedQueries : IO Unit := do
       2, "not declared"),
     ("let-forward-sibling", "(set-logic QF_LIA)\n(assert (let ((y x) (x 1)) (= y 1)))\n(check-sat)",
       2, "not declared"),
+    ("let-out-of-scope", "(set-logic QF_LIA)\n(assert (let ((local 1)) (= local 1)))\n(assert (= local 0))\n(check-sat)",
+      3, "not declared"),
+    ("let-unsupported-value", "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (div x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
+      3, "INTS_DIVISION"),
+    ("let-unsupported-body", "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (mod next 2) 0)))\n(check-sat)",
+      3, "INTS_MODULUS"),
     ("ite-condition", "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
       2, "condition"),
     ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",

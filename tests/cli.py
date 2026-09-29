@@ -157,7 +157,7 @@ def main():
         output = tmp / "combined-chc"
         run(CHC / "clauses.smt2", "--out", output)
         combined = check_generated(lean, output, goal="Problem")
-        assert combined.count("(clause ") == 14
+        assert combined.count("(clause ") == 16
 
         query = horn_output / "Query.lean"
         edited = horn_source + "\n-- User CHC proof work.\n"
@@ -205,6 +205,12 @@ def main():
             ("later-operator", horn_prefix +
              "(assert (forall ((x Int)) (=> (= (div x 2) 0) (P x))))\n(check-sat)",
              "4:1: query 1: command 4: clause 2:", "unsupported operator"),
+            ("let-operator", horn_prefix +
+             "(assert (forall ((x Int)) (let ((half (div x 2))) (=> (= half 0) (P x)))))\n(check-sat)",
+             "4:1: query 1: command 4: clause 2:", "unsupported operator"),
+            ("let-relation", horn_prefix +
+             "(assert (forall ((x Int)) (let ((hidden (not (P x)))) (=> hidden (P x)))))\n(check-sat)",
+             "4:1: query 1: command 4: clause 2:", "CHC relation inside a theory guard"),
             ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
              "2:1: query 1: command 2:", "unsupported CHC declaration"),
             ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
@@ -234,6 +240,8 @@ def main():
             "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
             "(set-logic QF_LIA)\n(assert (let ((x 1) (y x)) (= y 1)))\n(check-sat)",
             "(set-logic QF_UF)\n(assert (let ((p true) (q p)) q))\n(check-sat)",
+            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (div x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
+            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (mod next 2) 0)))\n(check-sat)",
             "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
