@@ -4,10 +4,21 @@ namespace Smt2Lean.Emit
 
 open Lean Meta
 
+/-- Select the proposition and proof template to emit. -/
+inductive GoalKind where
+  | refutation
+  | problem
+
 /-- Render one file with statements first, followed by unfinished proofs. -/
-def render (refutation : Expr) : MetaM String := do
+def render (value : Expr) (kind : GoalKind := .refutation) : MetaM String := do
+  let (definitionName, theoremName, description, proofTarget) := match kind with
+    | .refutation => ("Refutation", "refutation",
+        "No interpretation satisfies all assertions of the SMT query.", "the query's refutation")
+    | .problem => ("Problem", "problem",
+        "There are relation interpretations satisfying every Horn clause.",
+        "the existence of satisfying relations")
   -- lean-smt's Int.abs is not in Lean core; emit its if/then/else definition.
-  let refutation ← deltaExpand refutation (· == ``Int.abs)
+  let value ← deltaExpand value (· == ``Int.abs)
   let body ← withOptions (fun options => options
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true
@@ -17,15 +28,15 @@ def render (refutation : Expr) : MetaM String := do
       -- Without annotations, a closed equality such as 1 = 2 defaults to Nat.
       |>.setBool `pp.numericTypes true
       |> (pp.maxSteps.set · 1000000)) do
-    return (← ppExpr refutation).pretty
+    return (← ppExpr value).pretty
   if body.contains "⋯" then
-    throwError "refutation is too large to print completely"
+    throwError "proposition is too large to print completely"
   let statements := "import Init\n\n-- Statements\n\n" ++
-    "/-- No interpretation satisfies all assertions of the SMT query. -/\n" ++
-    "def Refutation : Prop :=\n  " ++ body.replace "\n" "\n  " ++ "\n"
+    s!"/-- {description} -/\n" ++
+    s!"def {definitionName} : Prop :=\n  " ++ body.replace "\n" "\n  " ++ "\n"
   let proofs := "\n-- Proofs\n\n" ++
-    "-- Unfinished proof: replace sorry to establish the query's refutation.\n" ++
-    "theorem refutation : Refutation := by\n  sorry\n"
+    s!"-- Unfinished proof: replace sorry to establish {proofTarget}.\n" ++
+    s!"theorem {theoremName} : {definitionName} := by\n  sorry\n"
   return statements ++ proofs
 
 /-- Write Query.lean in a new directory. Existing destinations are refused. -/

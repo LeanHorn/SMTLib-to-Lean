@@ -49,8 +49,9 @@ The CLI tests verify that HORN input is rejected without creating output.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
 contexts, and twenty-two closed Bool/Int refutations against handwritten Lean propositions.
 It also compares the printed statements with the original expressions and compiles
-each `Query.lean` using only Lean core. Statements have no axiom dependencies;
-only the following proof templates contain admissions. Existing proof work is
+each `Query.lean` and its isolated statement section using only Lean core.
+Statements have no axiom dependencies; only the following proof templates contain
+admissions. Existing proof work is
 preserved. The tests reuse the combined fixtures below.
 
 The translation test also reconstructs all fifteen CHC clauses from lh_sum_rec
@@ -63,8 +64,10 @@ Complete CHC problems are compared with handwritten existential propositions,
 including both fixtures, empty inputs, unused relations, nullary facts, and
 inconsistent clauses. Absent/sat/unsat/unknown status variants of lh_sum_rec keep
 the same target. All ten `Problem` definitions are closed, kernel-checked, and
-free of axioms.
-CHC reconstruction is currently in memory; it does not yet produce a Lean file.
+free of axioms. The emitter writes each CHC case to one temporary `Query.lean`
+with Statements before Proofs. The complete file and isolated statements compile
+using only Lean core; only the `problem` theorem depends on `sorryAx`. Edited files
+survive attempted overwrites. CLI integration for HORN input is still pending.
 
 Run the CLI/demo checks without rebuilding the smoke test:
 

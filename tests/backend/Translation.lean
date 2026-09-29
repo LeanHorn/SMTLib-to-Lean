@@ -53,29 +53,50 @@ private def runQuery (env : Environment) (name input : String)
     discard <| (check query).toIO { fileName := name, fileMap := default } { env }
   ).runIO
 
-private def checkEmission (value : Expr) : MetaM Unit := do
-  let source ← render value
+private def checkEmission (value : Expr) (kind : GoalKind := .refutation) : MetaM Unit := do
+  let (definitionName, theoremName) := match kind with
+    | .refutation => (`Refutation, `refutation)
+    | .problem => (`Problem, `problem)
+  let source ← render value kind
+  let [statements, proofs] := source.splitOn "-- Proofs\n"
+    | throwError "expected one Statements section followed by Proofs"
+  unless statements.startsWith "import Init\n\n-- Statements\n\n" &&
+      proofs.contains s!"theorem {theoremName} : {definitionName} := by\n  sorry\n" do
+    throwError "wrong statement/proof layout"
   unsafe enableInitializersExecution
   let some env ← Elab.runFrontend source
       (({} : Options).setBool `Elab.async false) "Query.lean" `Query
     | throwError "generated file did not elaborate"
-  let some (.defnInfo definition) := env.find? `Refutation
-    | throwError "generated statement has no Refutation definition"
+  let some (.defnInfo definition) := env.find? definitionName
+    | throwError "generated statement has no {definitionName} definition"
+  checkEqual definition.type q(Prop)
   checkEqual definition.value value
-  unless (← withEnv env (collectAxioms `Refutation)).isEmpty do
+  unless (← withEnv env (collectAxioms definitionName)).isEmpty do
     throwError "generated statement depends on axioms"
-  unless (← withEnv env (collectAxioms `refutation)).contains ``sorryAx do
+  let some (.thmInfo proof) := env.find? theoremName
+    | throwError "generated file has no {theoremName} theorem"
+  unless proof.type == mkConst definitionName do
+    throwError "proof template has the wrong target"
+  let axioms ← withEnv env (collectAxioms theoremName)
+  unless axioms.size == 1 && axioms.contains ``sorryAx do
     throwError "expected an unfinished proof template"
   IO.FS.withTempDir fun temporary => do
     let output := temporary / "generated"
     writeFile output source
+    let #[entry] ← output.readDir
+      | throwError "expected exactly one generated Query.lean"
+    unless entry.fileName == "Query.lean" do
+      throwError "expected exactly one generated Query.lean"
+    -- Check the statement independently, without the admitted theorem.
+    IO.FS.writeFile (temporary / "StatementsOnly.lean") statements
     let lean := (← findSysroot) / "bin" / "lean"
-    let result ← IO.Process.output {
-      cmd := lean.toString, args := #["Query.lean"], cwd := some output
-      env := #[("LEAN_PATH", some output.toString)]
-    }
-    unless result.exitCode == 0 do
-      throwError "generated file failed to compile: {result.stdout}{result.stderr}"
+    for (directory, file) in #[(output, "Query.lean"), (temporary, "StatementsOnly.lean")] do
+      let result ← IO.Process.output {
+        cmd := lean.toString, args := #[file], cwd := some directory
+        env := #[("LEAN_PATH", some directory.toString)]
+      }
+      unless result.exitCode == 0 do
+        throwError "{file} failed to compile: {result.stdout}{result.stderr}"
     -- Protect proof work, even when a caller tries to write the same output again.
     let edited := source ++ "\n-- User proof work.\n"
     IO.FS.writeFile (output / "Query.lean") edited
@@ -175,6 +196,7 @@ private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr) : Me
   checkEqual definition.value value
   unless (← collectAxioms `Problem).isEmpty do
     throwError "Problem depends on axioms"
+  checkEmission value (kind := .problem)
 
 private def checkHornProblems (env : Environment) : IO Unit := do
   let path := "tests/chc/lh_sum_rec.smt2"
@@ -217,7 +239,7 @@ private def checkHornProblems (env : Environment) : IO Unit := do
   for (name, body, expected) in cases do
     runProblem env name ("(set-logic HORN)\n" ++ body ++ "\n(check-sat)")
       fun problem => checkProblem problem expected
-  IO.println "CHC problems passed: 10 complete propositions, kernel checked without axioms"
+  IO.println "CHC problems passed: 10 complete propositions and standalone files; statements axiom-free, proofs admitted"
 
 def main : IO Unit := do
   initSearchPath (← findSysroot)

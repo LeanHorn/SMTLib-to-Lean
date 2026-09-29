@@ -341,7 +341,8 @@ assertion number; parser errors also identify the command. For example:
 example.smt2: query 1: clause 3: CHC relation inside a theory guard: (P x)
 ```
 
-The CLI still rejects HORN input; CHC Lean output is not yet available.
+The CLI still rejects HORN input; CHC files can currently be generated through
+the Lean API.
 
 `Smt2Lean.Translate.withClauses` reconstructs validated CHCs in memory as
 `∀ variables, premise₁ → … → head`. It passes fresh relation parameters and the
@@ -360,6 +361,12 @@ definition is kernel-checked and has no axiom dependencies. This checks its type
 not whether suitable relation interpretations exist. Status metadata never
 changes the proposition.
 
+`Smt2Lean.Emit.render value (kind := .problem)` renders that proposition as
+`def Problem : Prop := ...` in Statements, followed by
+`theorem problem : Problem := by sorry` in Proofs. `Emit.writeFile` writes both
+sections to one `Query.lean` in a new directory and refuses existing destinations.
+The output imports only Lean core. The default emitter target is the SMT refutation.
+
 ## Translation checks
 
 The translator reconstructs assertions and kernel-checks a closed refutation
@@ -369,9 +376,10 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders twenty-two cases, compares the re-elaborated statements with
-the original expressions, and compiles each generated file using only Lean core.
-It checks that `Refutation` has no axiom dependencies and only its proof is admitted.
+This test also renders twenty-two SMT cases and ten CHC cases, compares the
+re-elaborated statements with the original expressions, and compiles each complete
+file and its isolated statement section using only Lean core. `Refutation` and
+`Problem` have no axiom dependencies; only their proof templates are admitted.
 
 `Smt2Lean.Translate.withAssertions` binds each SMT declaration to a fresh Lean
 parameter of its reconstructed type and reconstructs the assertions using Lean-SMT.
