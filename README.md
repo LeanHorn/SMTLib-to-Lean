@@ -204,6 +204,32 @@ CHC helpers expand before Horn validation. Only declared relations become
 existential parameters; helper predicates add none. The expanded clauses must
 still satisfy the supported Horn shape. Both demos have unfinished `sorry` proofs.
 
+## Named assertions
+
+`:named` gives a closed term a reusable name. For a declared Int `x`:
+
+```smt2
+(assert (! (> x 0) :named positive))
+(assert (not positive))
+```
+
+The Lean assertions are `x > 0` and `¬(x > 0)`. The name adds no parameter;
+its body is expanded, including references to earlier `define-fun` definitions.
+Generated source comments retain each label and its command location, including
+quoted labels and different names for the same formula. Errors include those labels.
+
+```sh
+lake exe smt2lean tests/translation/bindings/named.smt2 --out named-demo
+lake env lean named-demo/Query.lean
+```
+
+Named Int subterms and later references within the same command also work.
+Every named body is validated, even when a surrounding `let` discards it.
+Names must be fresh. The pinned cvc5 parser rejects naming inside binders;
+place `:named` around the whole quantified assertion instead. Annotated CHC
+clauses follow the same rules and still undergo Horn validation after expansion.
+Other term annotations, including quantifier hints, remain unsupported.
+
 ## Translate functions and predicates
 
 Functions can take any mixture of `Bool` and `Int` arguments and return either
@@ -373,6 +399,7 @@ Supported inputs:
 - `ite` with a Boolean condition and two Bool branches or two Int branches.
 - Simultaneous and nested `let` bindings over Bool/Int expressions, expanded by cvc5.
 - Nonrecursive Bool/Int `define-fun`, expanded before reconstruction and CHC validation.
+- `:named` assertions and closed subterms, with reusable bindings and preserved source labels.
 - `define-sort` aliases and parameterized aliases resolving to Bool/Int.
 - `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
 - Integer literals, unary `-`, and `=`/`distinct` over either supported sort.

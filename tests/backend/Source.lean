@@ -62,4 +62,16 @@ def main : IO Unit := do
       if input == "(assert\n true" then
         require (error.position.line == 2 && error.position.column == 6)
           "unterminated command did not identify EOF"
+  for (input, expected) in #[
+    ("(assert (! true :named ; :named fake\n |a :named (;)|))", #["a :named (;)"]),
+    ("(assert (! (! true :named inner) :named outer :named |also|))", #["inner", "outer", "also"]),
+    ("(assert |:named|)", #[]),
+    ("(set-info :source \":named fake \"\" :unknown\")", #[])
+  ] do
+    let (commands, _) ← readAll input
+    let command ← match commands[0]!.withNames with
+      | .ok command => pure command
+      | .error message => throw (IO.userError message)
+    require (command.source.names == expected && command.text == input)
+      "named annotations changed text or lost labels"
   IO.println "Source reader passed: exact bytes, quoting, UTF-8, line endings, and malformed input"

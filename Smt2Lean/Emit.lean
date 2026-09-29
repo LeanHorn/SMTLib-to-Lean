@@ -11,9 +11,9 @@ inductive GoalKind where
 
 private def sourceComment (label : String) (source : Source.Ref) : String :=
   let span := source.span
-  -- Quote the filename so a newline in a path cannot escape the Lean comment.
+  -- Quote filenames and names so newlines cannot escape the Lean comment.
   s!"-- Source: {reprStr source.file}:{span.start.line}:{span.start.column}-" ++
-  s!"{span.stop.line}:{span.stop.column} ({label}, command {source.number})\n"
+  s!"{span.stop.line}:{span.stop.column} ({label}, command {source.number}){source.namedContext}\n"
 
 private def printExpr (value : Expr) : MetaM String := do
   let body ← withOptions (fun options => options

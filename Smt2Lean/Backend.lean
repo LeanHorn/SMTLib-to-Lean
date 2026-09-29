@@ -146,6 +146,17 @@ private def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
   query.declarations ++ query.definitions.map fun d =>
     { name := d.symbol.toString, term := d.symbol, source := some d.source }
 
+/-- cvc5 binds named terms directly to their bodies. Check even bodies erased by let. -/
+private def validateNamedTerms (names : Array String) (solver : cvc5.Solver)
+    (symbols : cvc5.SymbolManager) (query : ParsedQuery) (allowQuantifiers : Bool)
+    : cvc5.Env Unit := do
+  if names.isEmpty then return
+  let parser ← cvc5.InputParser.new solver (some symbols)
+  for name in names do
+    parser.setStringInput s!"|{name}|"
+    let body ← parser.nextTerm
+    validateTerm body (knownTerms query) allowQuantifiers
+
 /-- cvc5 stores each define-fun as `symbol = body`, using a lambda for parameters. -/
 private def readDefinition (equation : cvc5.Term) (source : Source.Ref)
     (query : ParsedQuery) (tm : cvc5.TermManager) (allowQuantifiers : Bool)
@@ -233,6 +244,11 @@ def parseAndInspectQuery
       file := name, number := reader.number
       span := { start := reader.position, stop := reader.position } }
     let context := (command?.map (·.source) |>.getD eof).context isChc
+    let command? ← command?.mapM fun command => do
+      match command.withNames with
+      | .ok command => pure command
+      | .error message => throw (errorWithContext context (.unsupported message))
+    let context := (command?.map (·.source) |>.getD eof).context isChc
     try
       let cmd ← parser.nextCommand
       if cmd.isNull then
@@ -272,6 +288,7 @@ def parseAndInspectQuery
           declarations := query.declarations.push { name := symbol, term, source := some command.source }
           invoked := query.invoked.push commandName }
       | "define-fun" =>
+        validateNamedTerms command.source.names solver symbols query allowQuantifiers
         invokeCommand cmd solver symbols
         let assertions ← solver.getAssertions
         unless assertions.size == nativeCount + 1 do
@@ -288,6 +305,7 @@ def parseAndInspectQuery
       | "assert" =>
         assertionNumber := assertionNumber + 1
         try
+          validateNamedTerms command.source.names solver symbols query allowQuantifiers
           invokeCommand cmd solver symbols
           let assertions ← solver.getAssertions
           unless assertions.size == nativeCount + 1 do

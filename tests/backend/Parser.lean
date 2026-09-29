@@ -34,7 +34,7 @@ private def checkRejected (name input : String) (ordinal : Nat) (reason : String
   | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
   | .error error =>
     let message := toString error
-    require (message.contains s!"{name}:" && message.contains s!": command {ordinal}:")
+    require (message.contains s!"{name}:" && (message.contains s!": command {ordinal}:" || message.contains s!": command {ordinal} (:named "))
       s!"{name}: wrong error location: {message}"
     require (message.contains reason) s!"{name}: wrong rejection reason: {message}"
 
@@ -215,6 +215,43 @@ private def checkDefinitions : IO Unit := do
     "(set-logic QF_LIA) (define-fun f () Bool (forall ((x Int)) (= x x))) (check-sat)"
     2 "quantifiers require"
 
+private def checkNamedAssertions : IO Unit := do
+  let path := "tests/translation/bindings/named.smt2"
+  checkAccepted path (← IO.FS.readFile path) #["x", "p"] 7
+    (#["set-logic", "declare-fun", "declare-fun", "define-fun"] ++ Array.replicate 7 "assert")
+    fun query => do
+      require (query.assertionSources.map (·.names) == #[#["positive"], #[], #["same body"],
+        #["left (;):named", "right"], #[], #["next value"], #["line\nname", "also"]])
+        "labels were lost, merged, or parsed inside quoted text"
+      require (query.assertions[0]! == query.assertions[1]![0]! &&
+        query.assertions[0]! == query.assertions[2]!) "named reference changed its body"
+      require (query.definitions.size == 1) "native named bindings became artificial definitions"
+  let invalid := "(set-logic ALL)\n  (assert (! (= (div 1 0) 0) :named |bad body|))\n(check-sat)"
+  match ← (parseAndInspectQuery invalid (fun _ => throw (.error "invalid query reached inspect"))
+      (name := "named-error.smt2")).run with
+  | .error (.unsupported message) =>
+    require (message.contains "named-error.smt2:2:3: command 2 (:named \"bad body\"):")
+      s!"parser error lost its label: {message}"
+  | _ => throw (IO.userError "expected named-body rejection")
+  checkAccepted "named definition body"
+    "(set-logic ALL) (define-fun f () Int (! (+ 1 2) :named three)) (assert (= f three)) (check-sat)"
+    #[] 1 #["set-logic", "define-fun", "assert"]
+  for (name, body, ordinal, reason) in #[
+    ("duplicate", "(assert (! true :named a)) (assert (! false :named a))", 3, "previously declared"),
+    ("declared", "(declare-const p Bool) (assert (! true :named p))", 3, "previously declared"),
+    ("defined", "(define-fun p () Bool true) (assert (! false :named p))", 3, "previously declared"),
+    ("declare-named", "(assert (! true :named a)) (declare-const a Bool)", 3, "already been defined"),
+    ("self", "(assert (! a :named a))", 2, "not declared"),
+    ("forward", "(assert (and a (! true :named a)))", 2, "not declared"),
+    ("open", "(assert (forall ((x Int)) (! (> x 0) :named bad)))", 2, "Cannot name a term in a binder"),
+    ("operator", "(assert (! (= (div 1 0) 0) :named bad))", 2, "INTS_DIVISION"),
+    ("discarded", "(assert (let ((ignored (! (div 1 0) :named bad))) true))", 2, "INTS_DIVISION"),
+    ("discarded-sort", "(assert (let ((ignored (! 1.0 :named bad))) true))", 2, "expected Bool or Int"),
+    ("unknown-attribute", "(assert (! true :unknown (:named fake)))", 2, "unsupported annotation"),
+    ("after-check", "(check-sat) (assert (! true :named later))", 3, "after check-sat")
+  ] do
+    checkRejected s!"named-{name}" s!"(set-logic ALL)\n{body}\n(check-sat)" ordinal reason
+
 private def checkRejectedQueries : IO Unit := do
   -- Each invalid script needs its own parse: the first error stops validation.
   let rejected : Array (String × String × Nat × String) := #[
@@ -249,7 +286,7 @@ private def checkRejectedQueries : IO Unit := do
     ("ite-unsupported-branch", "(set-logic ALL)\n(assert (forall ((p Bool)) (= (ite p 1 (div 1 0)) 1)))\n(check-sat)",
       2, "INTS_DIVISION"),
     ("quantifier-pattern", "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
-      3, "quantifier without annotations"),
+      3, "unsupported annotation: :pattern"),
     ("out-of-scope", "(set-logic ALL)\n(assert (forall ((x Int)) (= x x)))\n(assert (= x 0))\n(check-sat)",
       3, "x"),
     ("let-sibling-int", "(set-logic QF_LIA)\n(assert (let ((x 1) (y x)) (= y 1)))\n(check-sat)",
@@ -406,6 +443,7 @@ def main : IO Unit := do
   checkAcceptedQueries
   checkRejectedQueries
   checkDefinitions
+  checkNamedAssertions
   checkBoundScopes
   checkSourceLocations
   IO.println "Parser passed: Bool/Int queries, binding identity/scope, and rejection diagnostics"

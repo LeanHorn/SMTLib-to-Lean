@@ -87,13 +87,17 @@ def main():
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
         inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified"]]
-        inputs += [BINDINGS / "simultaneous.smt2", BINDINGS / "definitions.smt2"]
+        inputs += [BINDINGS / name for name in ["simultaneous.smt2", "definitions.smt2", "named.smt2"]]
         for fixture in inputs:
             name = fixture.stem
             output = tmp / name
             result = run(fixture, "--out", output)
             assert "Proof unfinished" in result.stdout
             source = check_generated(lean, output)
+            if name == "named":
+                assert '(:named "positive")' in source and '(:named "same body")' in source
+                assert '(:named "line\\nname", "also")' in source
+                assert "\nname" not in source
             if name in expected:
                 assert source == expected[name], (f"{name} output changed", source)
             if name in ["literals", "arithmetic"]:
@@ -163,6 +167,7 @@ def main():
         run(CHC / "definitions.smt2", "--out", output)
         generated = check_generated(lean, output, goal="Problem")
         assert generated.count("(clause ") == 3
+        assert all(f'(:named "{name}")' in generated for name in ["entry clause", "step", "safety"])
 
         query = horn_output / "Query.lean"
         edited = horn_source + "\n-- User CHC proof work.\n"
@@ -227,6 +232,9 @@ def main():
             ("unused-definition", horn_prefix +
              "(define-fun bad () Int (div 1 0))\n(check-sat)",
              "4:1: query 1: command 4:", "INTS_DIVISION"),
+            ("named-clause", horn_prefix +
+             '(assert (! (forall ((x Int)) (=> (not (P x)) false)) :named |bad clause|))\n(check-sat)',
+             '4:1: query 1: command 4 (:named "bad clause"): clause 2:', "CHC relation inside a theory guard"),
             ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
              "2:1: query 1: command 2:", "unsupported CHC declaration"),
             ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
@@ -236,7 +244,9 @@ def main():
             source, output = tmp / f"horn-{name}.smt2", tmp / f"horn-{name}"
             source.write_text(text)
             result = run(source, "--out", output, code=1)
-            assert f"{source}:{location}" in result.stderr, result.stderr
+            # cvc5 renders its diagnostic message as an escaped string.
+            escaped_location = location.replace('"', '\\"')
+            assert f"{source}:{escaped_location}" in result.stderr, result.stderr
             assert reason in result.stderr, result.stderr
             assert not output.exists()
 
@@ -289,6 +299,10 @@ def main():
              "3:3: command 2:", "unsupported operator"),
             ("definition-source", "; λ\n(set-logic ALL)\n  (define-fun bad ((x Int)) Int\n    (div x 2))\n(check-sat)",
              "3:3: command 2:", "INTS_DIVISION"),
+            ("named-source", '(set-logic ALL)\n  (assert (! (= (div 1 0) 0) :named |bad body|))\n(check-sat)',
+             '2:3: command 2 (:named "bad body"):', "INTS_DIVISION"),
+            ("unused-named-source", '(set-logic ALL)\n  (assert (let ((ignored (! (div 1 0) :named |unused body|))) true))\n(check-sat)',
+             '2:3: command 2 (:named "unused body"):', "INTS_DIVISION"),
             ("alias-source", "(set-logic ALL)\n  (define-sort Bad () Real)\n(check-sat)",
              "2:3: command 2:", "unsupported sort alias"),
             ("bad-string", '(set-logic QF_UF)\n(set-info :source "unfinished',
@@ -299,7 +313,9 @@ def main():
             source, output = tmp / f"{name}.smt2", tmp / name
             source.write_text(text)
             result = run(source, "--out", output, code=1)
-            assert f"{source}:{location}" in result.stderr, result.stderr
+            # cvc5 renders its diagnostic message as an escaped string.
+            escaped_location = location.replace('"', '\\"')
+            assert f"{source}:{escaped_location}" in result.stderr, result.stderr
             assert reason in result.stderr and not output.exists(), result.stderr
 
         # Existing empty directories, files, and symlinks must also be refused.
@@ -317,7 +333,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: 29 SMT and 7 CHC standalone translations, source locations, and 4 completed proofs")
+    print("Demo passed: 30 SMT and 7 CHC standalone translations, source locations, and 4 completed proofs")
 
 
 if __name__ == "__main__":

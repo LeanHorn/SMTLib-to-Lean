@@ -18,11 +18,17 @@ structure Ref where
   file : String
   number : Nat
   span : Span
+  /-- Names introduced by :named annotations in this command. -/
+  names : Array String := #[]
   deriving BEq, Inhabited, Repr
+
+def Ref.namedContext (ref : Ref) : String :=
+  if ref.names.isEmpty then "" else
+    " (:named " ++ String.intercalate ", " (ref.names.toList.map reprStr) ++ ")"
 
 def Ref.context (ref : Ref) (chc : Bool := false) : String :=
   s!"{ref.file}:{ref.span.start.line}:{ref.span.start.column}: " ++
-  (if chc then "query 1: " else "") ++ s!"command {ref.number}"
+  (if chc then "query 1: " else "") ++ s!"command {ref.number}" ++ ref.namedContext
 
 structure Command where
   source : Ref
@@ -56,6 +62,54 @@ private def Reader.advance (reader : Reader input) : Reader input := Id.run do
 private inductive Mode where
   | normal | comment | string | quoted
   deriving BEq
+
+/-- Read lexemes only; preserve quoted text and skip comments. No term parsing. -/
+private def tokens (input : String) : Array String := Id.run do
+  let mut cursor := input.startPos
+  let mut result := #[]
+  while cursor != input.endPos do
+    let c := cursor.get!
+    if c.isWhitespace then
+      cursor := cursor.next!
+      continue
+    if c == ';' then
+      while cursor != input.endPos && cursor.get! != '\n' && cursor.get! != '\r' do
+        cursor := cursor.next!
+      continue
+    let start := cursor
+    cursor := cursor.next!
+    if c == '|' || c == '"' then
+      while cursor != input.endPos do
+        let next := cursor.get!
+        cursor := cursor.next!
+        if next == c then
+          if c == '"' && cursor != input.endPos && cursor.get! == '"' then
+            cursor := cursor.next!
+          else break
+    else if c != '(' && c != ')' then
+      while cursor != input.endPos && !cursor.get!.isWhitespace &&
+          !['(', ')', ';', '|', '"'].contains cursor.get! do
+        cursor := cursor.next!
+    result := result.push (String.extract start cursor)
+  return result
+
+/-- Recover labels before cvc5 erases annotations and merges equal named terms. -/
+def Command.withNames (command : Command) : Except String Command := do
+  let parts := tokens command.text
+  unless #["assert", "define-fun", "define-const"].contains (parts[1]?.getD "") do
+    return command
+  let mut names := #[]
+  for i in [:parts.size] do
+    let part := parts[i]!
+    if part == ":named" then
+      let some symbol := parts[i + 1]?
+        | throw "expected a symbol after :named"
+      -- Native parsing checks symbol syntax, freshness, and whether the body is closed.
+      names := names.push (if symbol.startsWith "|" then
+        ((symbol.drop 1).dropEnd 1).toString else symbol)
+    else if part.startsWith ":" then
+      throw s!"unsupported annotation: {part}"
+  return { command with source := { command.source with names } }
 
 /--
 Read one complete command, preserving its bytes. This only finds boundaries;

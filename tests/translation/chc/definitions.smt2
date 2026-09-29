@@ -13,7 +13,7 @@
 (define-fun rule ((x I) (b B)) B
   (let ((enabled (premise x))) (=> enabled (head x b))))
 (define-fun bad ((x I) (b B)) B (and (R x b) (> x 10) b))
-(assert initial)
-(assert (forall ((x I) (b (Id B))) (rule x b)))
-(assert (forall ((x I) (b B)) (=> (bad x b) false)))
+(assert (! initial :named |entry clause|))
+(assert (! (forall ((x I) (b (Id B))) (=> |entry clause| (rule x b))) :named step))
+(assert (! (forall ((x I) (b B)) (=> (bad x b) false)) :named safety))
 (check-sat)
