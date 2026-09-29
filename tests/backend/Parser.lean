@@ -39,8 +39,8 @@ private def checkRejected (name input : String) (ordinal : Nat) (reason : String
     require (message.contains reason) s!"{name}: wrong rejection reason: {message}"
 
 private def checkConnectives (name input : String) : IO Unit :=
-  checkAccepted name input #["True", "a b", "p", "q", "r", "unused"] 9
-    (#["set-logic"] ++ Array.replicate 6 "declare-fun" ++ Array.replicate 9 "assert")
+  checkAccepted name input #["True", "a b", "p", "q", "r", "unused"] 14
+    (#["set-logic"] ++ Array.replicate 6 "declare-fun" ++ Array.replicate 14 "assert")
     fun query => do
       require (query.assertions[0]? == query.declarations[0]?.map (·.term))
         s!"{name}: |True| must refer to the declared variable, not the Boolean literal"
@@ -81,8 +81,8 @@ private def checkAcceptedQueries : IO Unit := do
         require ((← ofExcept flag.term.getSort).isBoolean)
           "expected a Bool declaration"
   let arithmetic ← IO.FS.readFile "tests/translation/int/arithmetic.smt2"
-  checkAccepted "arithmetic.smt2" arithmetic #["x", "y", "z", "p"] 9
-    (#["set-logic"] ++ Array.replicate 4 "declare-fun" ++ Array.replicate 9 "assert")
+  checkAccepted "arithmetic.smt2" arithmetic #["x", "y", "z", "p"] 12
+    (#["set-logic"] ++ Array.replicate 4 "declare-fun" ++ Array.replicate 12 "assert")
     fun query => do
       let chainGroups := query.assertions.back![1]!.getChildren
       require (chainGroups.size == 4) "expected all four comparison chains"
@@ -182,8 +182,14 @@ private def checkRejectedQueries : IO Unit := do
       1, "unsupported logic"),
     ("logic", "(set-logic QF_LRA)\n(assert true)\n(check-sat)",
       1, "unsupported logic"),
-    ("xor", "(set-logic QF_UF)\n(declare-const p Bool)\n(assert (xor p true))\n(check-sat)",
-      3, "XOR"),
+    ("xor-sort", "(set-logic ALL)\n(assert (xor true 1))\n(check-sat)",
+      2, "Boolean subexpression"),
+    ("distinct-mixed", "(set-logic ALL)\n(assert (distinct true 1))\n(check-sat)",
+      2, "type"),
+    ("distinct-real", "(set-logic ALL)\n(assert (distinct 1.0 2.0))\n(check-sat)",
+      2, "expected Bool or Int"),
+    ("distinct-bv", "(set-logic ALL)\n(assert (distinct #b00 #b01))\n(check-sat)",
+      2, "expected Bool or Int"),
     ("real-equality", "(set-logic ALL)\n(assert (= 1.0 2.0))\n(check-sat)",
       2, "expected Bool or Int"),
     ("assuming", "(set-logic QF_UF)\n(check-sat-assuming ())",
@@ -217,6 +223,10 @@ private def checkRejectedQueries : IO Unit := do
   ]
   for (name, input, ordinal, reason) in rejected do
     checkRejected s!"reject-{name}" input ordinal reason
+  for (term, kind) in #[("(xor)", "XOR"), ("(xor true)", "XOR"),
+      ("(distinct)", "DISTINCT"), ("(distinct 1)", "DISTINCT")] do
+    checkRejected s!"reject-arity-{term}"
+      s!"(set-logic ALL)\n(assert {term})\n(check-sat)" 2 s!"invalid kind '{kind}'"
   -- Registering lean-smt's integer handlers must not enable unaudited operators.
   for (term, kind) in #[("(div x 2)", "INTS_DIVISION"), ("(mod x 2)", "INTS_MODULUS"),
       ("(div x 0)", "INTS_DIVISION"), ("(mod x 0)", "INTS_MODULUS")] do

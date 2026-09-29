@@ -13,6 +13,10 @@
 (assert (= (+ 340282366920938463463374607431768211457 (- 1))
            340282366920938463463374607431768211456))
 (assert (= (- 10 3 2) 5))
+; Pairwise inequality, including a repeated nonadjacent operand.
+(assert (distinct x y))
+(assert (distinct x y z 7))
+(assert (not (distinct x y x)))
 (assert (=> p (and (< x y z (+ x 1))
                    (<= x y z (+ x 2))
                    (> x y z (- x 1))

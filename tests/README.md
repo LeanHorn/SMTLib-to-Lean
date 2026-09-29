@@ -61,14 +61,17 @@ filenames containing newlines. Moving the input changes only source comments.
 Edited CHC proof work survives attempted overwrites.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
-contexts, and twenty-two closed Bool/Int refutations against handwritten Lean propositions.
+contexts, and closed Bool/Int refutations against handwritten Lean propositions.
+It checks all 28 truth assignments for xor with two, three, and four operands
+against odd parity, plus four integer distinct cases, using kernel-checked proofs.
+These cases and a quantified function-argument example bring the total to 24 refutations.
 It also compares the printed statements with the original expressions and compiles
 each `Query.lean` and its isolated statement section using only Lean core.
 Statements have no axiom dependencies; only the following proof templates contain
 admissions. Existing proof work is
 preserved. The tests reuse the combined fixtures below.
 
-The translation test also reconstructs all fifteen CHC clauses from lh_sum_rec
+The translation test also reconstructs all sixteen CHC clauses from lh_sum_rec
 and the combined CHC fixture. Each clause is compared with a handwritten Lean
 proposition and kernel-checked after closing its relation parameters. Checks cover
 unused variables/relations, shadowed binders, mixed sorts, nullary relations,
@@ -96,7 +99,8 @@ All generated test files go into temporary directories and are removed afterward
 
 - `contradiction.smt2`: the smallest demo, `p` and `not p`.
 - `connectives.smt2`: all supported connectives, both declaration forms, quoted
-  names, an unused declaration, metadata, and exit in one query.
+  names, an unused declaration, metadata, and exit in one query. Includes xor
+  with two to four operands and Boolean distinct, including three operands.
 - `empty.smt2`: a query with no assertions.
 
 `translation/int/` keeps three reusable queries:
@@ -104,7 +108,8 @@ All generated test files go into temporary directories and are removed afterward
 - `literals.smt2`: mixed Bool/Int declarations, quoted names, unused parameters,
   chained equality, unary minus, zero, and integers beyond 64 bits.
 - `arithmetic.smt2`: operand order, nonlinear multiplication, nested negation/abs,
-  absolute value at negative/zero/positive inputs, and all four comparison chains.
+  absolute value at negative/zero/positive inputs, all four comparison chains,
+  and pairwise distinct with a repeated nonadjacent operand.
 - `bounds.smt2`: the small contradiction `x ≥ 0` and `x < 0`.
 
 `translation/functions/` keeps two queries:
@@ -131,13 +136,15 @@ the same subterm was already accepted under a quantifier.
 one existential relation and all three original clauses, followed by an unfinished
 proof. Its source comments identify the original query and clause ranges.
 
-`translation/chc/clauses.smt2` combines six relation declarations and twelve clauses:
-five bare facts, a quantified fact, five rules, and a bare false assertion. It
+`translation/chc/clauses.smt2` combines six relation declarations and thirteen clauses:
+five bare facts, a quantified fact, six rules, and a bare false assertion. It
 covers mixed sorts, arithmetic, quoted names, unused relations/variables, chained
 implications, and shadowed leading binders. Tests preserve argument and premise
 order before and after flattening premise conjunctions. A nonlinear rule combines
 three relation premises with arithmetic, nested conjunctions, and Boolean guards;
-conjunctions inside a guard's `or` stay intact. The unedited lh_sum_rec fixture
+conjunctions inside a guard's `or` stay intact. Another rule combines xor and
+Bool/Int distinct guards with nested operators in a relation argument.
+The unedited lh_sum_rec fixture
 retains its three clauses with binder counts 3/5/3, heads k_1/k_1/false, and
 relation-premise counts 0/1/1 under absent/sat/unsat/unknown status metadata.
 Short invalid cases stay inline in `Horn.lean`. Separate checks distinguish a bound

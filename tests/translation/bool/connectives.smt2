@@ -25,6 +25,13 @@
 (assert (=> p q r))
 (assert (= p q r))
 (assert (= |a b| p))
+; xor means odd parity, including when all three operands are true.
+(assert (xor p (not q)))
+(assert (xor p q r))
+(assert (not (xor p q r true)))
+; Bool distinct compares every pair; three Boolean values cannot all differ.
+(assert (distinct p false))
+(assert (not (distinct p q r)))
 (check-sat)
 (set-info :status unknown)
 (exit)

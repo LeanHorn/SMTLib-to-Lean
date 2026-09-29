@@ -155,7 +155,7 @@ def main():
         output = tmp / "combined-chc"
         run(CHC / "clauses.smt2", "--out", output)
         combined = check_generated(lean, output, goal="Problem")
-        assert combined.count("(clause ") == 12
+        assert combined.count("(clause ") == 13
 
         query = horn_output / "Query.lean"
         edited = horn_source + "\n-- User CHC proof work.\n"

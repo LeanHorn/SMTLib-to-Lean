@@ -85,14 +85,14 @@ private def checkClauses : IO Unit := do
     for relation in relations, declaration in query.declarations do
       require (relation.term == declaration.term) "relation identity changed"
     let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
-    require (clauses.map (·.assertionNumber) == (List.range 12).toArray.map (· + 1))
+    require (clauses.map (·.assertionNumber) == (List.range 13).toArray.map (· + 1))
       "wrong clause count or source assertion numbers"
-    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3])
+    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3, 4])
       "wrong binder counts"
-    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 1])
+    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 1, 1])
       "wrong premise counts"
     require (clauses.map (headName ∘ (·.head)) ==
-      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false"])
+      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false", "R"])
       "wrong clause heads"
     let facts ← (query.assertions.extract 0 5).mapM (recognizeFact relations)
     require (facts.map (·.relation.term) == (query.declarations.extract 0 5).map (·.term))
@@ -246,11 +246,11 @@ private def checkProblems : IO Unit := do
     require ((← calls.get) == 1) "expected one validated problem"
   let path := "tests/translation/chc/clauses.smt2"
   (parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
-    require (problem.relations.size == 6 && problem.clauses.size == 12)
+    require (problem.relations.size == 6 && problem.clauses.size == 13)
       "validated fixture lost declarations or clauses"
-    require (problem.clauses.map relationCount == #[0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 3])
+    require (problem.clauses.map relationCount == #[0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 3, 1])
       "wrong relation-premise counts"
-    require (problem.clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 3, 2, 3, 1, 0, 7])
+    require (problem.clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 3, 2, 3, 1, 0, 7, 4])
       "wrong flattened premise counts"
     let some clause := problem.clauses[11]? | throw (.error "missing nonlinear rule")
     require (clause.premises.map premiseText == #[
@@ -265,10 +265,14 @@ private def checkRejectedProblems : IO Unit := do
     ("negated-relation", "(=> (not (P x)) done)", "inside a theory guard"),
     ("negated-nullary", "(=> (not done) (P x))", "inside a theory guard"),
     ("relation-equality", "(=> (= (P x) cond) done)", "inside a theory guard"),
+    ("relation-xor", "(=> (xor cond (P x)) done)", "inside a theory guard"),
+    ("relation-distinct", "(=> (distinct cond (P x)) done)", "inside a theory guard"),
     ("relation-disjunction", "(=> (or (> x 0) (P x)) done)", "inside a theory guard"),
     ("relation-implication", "(=> (=> cond (P x)) done)", "inside a theory guard"),
     ("relation-under-negations", "(=> (not (not (P x))) done)", "inside a theory guard"),
     ("relation-argument", "(=> (R x (P x) x) done)", "inside a relation argument"),
+    ("relation-xor-argument", "(R x (xor cond (P x)) x)", "inside a relation argument"),
+    ("relation-distinct-argument", "(R x (distinct cond (P x)) x)", "inside a relation argument"),
     ("unsupported-guard", "(=> (> (div x 2) 0) done)", "unsupported operator"),
     ("unsupported-head-argument", "(P (mod x 2))", "unsupported operator"),
     ("existential", "(exists ((y Int)) (P y))", "leading forall"),
@@ -297,5 +301,5 @@ def main : IO Unit := do
   checkNativeIdentity
   checkProblems
   checkRejectedProblems
-  IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (12 clauses)"
+  IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (13 clauses)"
   IO.println "Metadata, clause diagnostics, and whole-problem rejection passed; no solver query invoked."

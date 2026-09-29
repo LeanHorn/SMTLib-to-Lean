@@ -4,6 +4,8 @@ import Lean.Elab.Frontend
 open Lean Meta Qq
 open Smt2Lean.Backend Smt2Lean.Translate Smt2Lean.Emit
 
+local notation "exclusive" => (fun p q : Prop => (p ∧ ¬q) ∨ (¬p ∧ q))
+
 private def checkEqual (actual expected : Expr) : MetaM Unit := do
   unless ← isDefEq actual expected do
     throwError "expected {expected}, got {actual}"
@@ -19,7 +21,10 @@ private def checkConnectives (query : ParsedQuery) : MetaM Unit :=
     let r : Q(Prop) := r
     let expected : Array Expr := #[
       t, q($t = $a), q(True), q(¬False), q($p ∧ $q ∧ $r),
-      q(¬$p ∨ $q ∨ $r), q($p → $q → $r), q(($p = $q) ∧ ($q = $r)), q($a = $p)
+      q(¬$p ∨ $q ∨ $r), q($p → $q → $r), q(($p = $q) ∧ ($q = $r)), q($a = $p),
+      q(exclusive $p (¬$q)), q(exclusive (exclusive $p $q) $r),
+      q(¬exclusive (exclusive (exclusive $p $q) $r) True),
+      q($p ≠ False), q(¬($p ≠ $q ∧ $p ≠ $r ∧ $q ≠ $r))
     ]
     unless assertions.size == expected.size do
       throwError "wrong assertion count"
@@ -131,6 +136,38 @@ private def checkClauseValues (parameters actual expected : Array Expr) : MetaM 
       throwError "clause did not close over its relation parameters"
     checkWithKernel closed
 
+/-- Check xor against odd parity, independently of its chosen Lean encoding. -/
+private def checkOperatorSemantics (env : Environment) : IO Unit := do
+  let mut cases : Array (String × Bool) := #[]
+  for arity in [2:5] do
+    for mask in [:2 ^ arity] do
+      let bits := (List.range arity).map (fun i => mask.testBit i)
+      let operands := String.intercalate " " (bits.map fun b => if b then "true" else "false")
+      cases := cases.push (s!"(xor {operands})", bits.count true % 2 == 1)
+  cases := cases ++ #[("(distinct 1 2)", true), ("(distinct 1 2 3 4)", true),
+    ("(distinct 1 2 1)", false), ("(distinct 1 2 3 1)", false)]
+  let input := "(set-logic ALL)\n" ++
+    String.join (cases.toList.map fun (term, _) => s!"(assert {term})\n") ++ "(check-sat)"
+  runQuery env "operator truth cases" input fun query => do
+    withAssertions query fun parameters assertions => do
+      unless parameters.isEmpty && assertions.size == cases.size do
+        throwError "wrong truth-case count or unexpected parameters"
+      for actual in assertions, (term, expected) in cases do
+        let actual : Q(Prop) := actual
+        let proof ← mkDecideProof (if expected then actual else q(¬$actual))
+        try checkWithKernel proof
+        catch _ => throwError "wrong truth value for {term}: expected {expected}"
+    checkEmission (← defineRefutation query) (origin := query.source)
+      (assertions := query.assertionSources)
+  runQuery env "quantified operators"
+    "(set-logic ALL)\n(declare-fun f (Bool) Int)\n\
+     (assert (forall ((b Bool) (c Bool) (x Int) (y Int))\
+       (=> (xor b c) (distinct (f (xor b c)) x y))))\n(check-sat)" fun query =>
+      checkRefutation query q(∀ f : Prop → Int,
+        (∀ (b c : Prop) (x y : Int), exclusive b c →
+          (f (exclusive b c) ≠ x ∧ f (exclusive b c) ≠ y ∧ x ≠ y)) → False)
+  IO.println "Operator semantics passed: 28 xor truth cases, 4 integer distinct cases, and quantified arguments"
+
 private def runProblem (env : Environment) (name input : String)
     (check : Smt2Lean.Chc.Problem → MetaM Unit) : IO Unit := do
   (Smt2Lean.Chc.parseAndInspectProblem input (name := name) fun problem => do
@@ -173,7 +210,9 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
         q($done → False), q(False),
         q(∀ (x y : Int) (cond : Prop), $p x → x > 0 → $p y →
           ((x < 0 ∧ y > 0) ∨ ¬cond) → $done →
-          (cond = (x * y + -x > Int.abs y)) → ¬cond → False)
+          (cond = (x * y + -x > Int.abs y)) → ¬cond → False),
+        q(∀ (x y : Int) (b c : Prop), $p x → exclusive b c →
+          (x ≠ y ∧ x ≠ 0 ∧ y ≠ 0) → b ≠ c → $r x (exclusive b (x ≠ y)) y)
       ]
       -- Nested calls must allocate their own relations and clause variables.
       withClauses problem fun fresh values => do
@@ -193,7 +232,7 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
     let some source := fact.source | throwError "missing clause source"
     unless message.contains s!"{source.context true}: clause 4:" do
       throwError "CHC reconstruction error lost its source: {message}"
-  IO.println "CHC reconstruction passed: 15 clauses match handwritten Lean propositions"
+  IO.println "CHC reconstruction passed: 16 clauses match handwritten Lean propositions"
 
 private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr) : MetaM Unit := do
   let value ← defineProblem problem
@@ -237,7 +276,9 @@ private def checkHornProblems (env : Environment) : IO Unit := do
       (done → False) ∧ False ∧
       (∀ (x y : Int) (cond : Prop), p x → x > 0 → p y →
         ((x < 0 ∧ y > 0) ∨ ¬cond) → done →
-        (cond = (x * y + -x > Int.abs y)) → ¬cond → False))
+        (cond = (x * y + -x > Int.abs y)) → ¬cond → False) ∧
+      (∀ (x y : Int) (b c : Prop), p x → exclusive b c →
+        (x ≠ y ∧ x ≠ 0 ∧ y ≠ 0) → b ≠ c → r x (exclusive b (x ≠ y)) y))
   let cases : Array (String × String × Expr) := #[
     ("empty", "", q(True)),
     ("unused relations", "(declare-const p Bool)\n(declare-fun R (Int Bool) Bool)",
@@ -256,6 +297,7 @@ def main : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
+  checkOperatorSemantics env
   checkHornReconstruction env
   checkHornProblems env
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
@@ -264,7 +306,10 @@ def main : IO Unit := do
     checkUnmapped query
     checkRefutation query q(∀ (t a p q r _unused : Prop),
       (t ∧ t = a ∧ True ∧ ¬False ∧ (p ∧ q ∧ r) ∧ (¬p ∨ q ∨ r) ∧
-        (p → q → r) ∧ (p = q ∧ q = r) ∧ a = p) → False)
+        (p → q → r) ∧ (p = q ∧ q = r) ∧ a = p ∧
+        exclusive p (¬q) ∧ exclusive (exclusive p q) r ∧
+        ¬exclusive (exclusive (exclusive p q) r) True ∧
+        p ≠ False ∧ ¬(p ≠ q ∧ p ≠ r ∧ q ≠ r)) → False)
   let contradiction ← IO.FS.readFile "tests/translation/bool/contradiction.smt2"
   for status in #["", "sat", "unsat", "unknown"] do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
@@ -302,6 +347,8 @@ def main : IO Unit := do
           (340282366920938463463374607431768211457 : Int) + -1 =
             340282366920938463463374607431768211456 ∧
           (10 : Int) - 3 - 2 = 5 ∧
+          x ≠ y ∧ (x ≠ y ∧ x ≠ z ∧ x ≠ 7 ∧ y ≠ z ∧ y ≠ 7 ∧ z ≠ 7) ∧
+          ¬(x ≠ y ∧ x ≠ x ∧ y ≠ x) ∧
           (p → (x < y ∧ y < z ∧ z < x + 1) ∧
                (x ≤ y ∧ y ≤ z ∧ z ≤ x + 2) ∧
                (x > y ∧ y > z ∧ z > x - 1) ∧
@@ -354,4 +401,4 @@ def main : IO Unit := do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
     runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
-  IO.println "Translation passed: 22 refutations and generated files; existing proof work preserved"
+  IO.println "Translation passed: 24 refutations and generated files; existing proof work preserved"

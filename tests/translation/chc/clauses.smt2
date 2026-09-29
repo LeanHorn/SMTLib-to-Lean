@@ -27,5 +27,9 @@
 (assert (forall ((x Int) (y Int) (cond Bool))
   (=> (and (P x) (and (> x 0) (P y) (or (and (< x 0) (> y 0)) (not cond)))
            done (= cond (> (+ (* x y) (- x)) (abs y))) (not cond)) false)))
+; xor and distinct are theory guards and may also occur in relation arguments.
+(assert (forall ((x Int) (y Int) (b Bool) (c Bool))
+  (=> (and (P x) (xor b c) (distinct x y 0) (distinct b c))
+      (R x (xor b (distinct x y)) y))))
 (check-sat)
 (exit)

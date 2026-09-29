@@ -23,6 +23,15 @@ private def checkPropositions (values : Array Expr) (state : Smt.Reconstruct.Sta
     unless ← isProp value do
       throwError "reconstructed assertion is not a proposition: {value}"
 
+/-- Use core connectives instead of lean-smt's separate XOr inductive type. -/
+@[smt_term_reconstruct] private def reconstructXor : Smt.TermReconstructor := fun term => do
+  unless (← ofExcept term.getKind) == .XOR do return none
+  let mut value : Q(Prop) ← Smt.Reconstruct.reconstructTerm term[0]!
+  for child in term.getChildren[1:] do
+    let right : Q(Prop) ← Smt.Reconstruct.reconstructTerm child
+    value := q(($value ∧ ¬$right) ∨ (¬$value ∧ $right))
+  return value
+
 /-- Bind by native identity so shadowed names cannot capture an outer variable. -/
 @[smt_term_reconstruct] private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
   let kind ← ofExcept term.getKind

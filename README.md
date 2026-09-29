@@ -48,6 +48,13 @@ Use `lake exe smt2lean --help` for usage. Exit codes are `0` for generation/help
 `2` for invalid arguments, and `1` for input, translation, or output errors.
 The supported Bool/Int fragment is listed below.
 
+Boolean operators follow [SMT-LIB Core](https://smt-lib.org/theories-Core.shtml).
+`xor` accepts two or more Boolean operands and means an odd number are true.
+`distinct` accepts two or more Bool operands or two or more Int operands and
+compares every pair. Both work inside quantified formulas and CHC theory guards.
+For example, `(distinct x y z)` becomes `x ≠ y ∧ x ≠ z ∧ y ≠ z`.
+Generated xor expressions use ordinary `∧`, `∨`, and `¬`, keeping output in Lean core.
+
 Run the automated demo checks with Python 3 installed:
 
 ```sh
@@ -99,6 +106,7 @@ The integer fragment follows [SMT-LIB Ints](https://smt-lib.org/theories-Ints.sh
 | `+`, `-`, `*` | Two or more `Int` | `Int` | Fold left; e.g. `(- x y z)` becomes `(x - y) - z` |
 | `abs` | One `Int` | `Int` | `if x < 0 then -x else x` |
 | `=` | Two or more of the same supported sort | `Bool` | Conjunction of adjacent equalities |
+| `distinct` | Two or more of the same supported sort | `Bool` | Conjunction of all pairwise inequalities |
 | `<`, `<=`, `>`, `>=` | Two or more `Int` | `Bool` | Conjunction of adjacent comparisons |
 
 SMT `Bool` results become Lean propositions. All generated code uses Lean core;
@@ -272,9 +280,9 @@ Supported inputs:
 - Nullary `Bool` or `Int` declarations, using `declare-const` or `declare-fun`.
 - Functions with one or more `Bool`/`Int` arguments and either result sort, including
   nested calls and compound Boolean arguments. Bool results are Lean propositions.
-- Boolean literals and `not`, `and`, `or`, and `=>`.
+- Boolean literals and `not`, `and`, `or`, `xor`, and `=>`.
 - `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
-- Integer literals, unary `-`, and `=` over either supported sort.
+- Integer literals, unary `-`, and `=`/`distinct` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
 - No `set-logic`, or an initial `UF`, `LIA`, `NIA`, `UFLIA`, `UFNIA`, their `QF_` forms, or `ALL`.
   Every term is validated; accepting a logic does not enable all its operators.
@@ -327,7 +335,7 @@ The `sorry` warning is expected. Typechecking verifies the generated statement;
 the proof that satisfying relations exist remains unfinished. Status metadata
 does not change this target. This command does not run Flex.
 
-The combined fixture exercises twelve clauses, including nonlinear guards,
+The combined fixture exercises thirteen clauses, including nonlinear guards,
 nullary relations, multiple relation premises, and shadowed binders:
 
 ```sh
@@ -375,10 +383,10 @@ The supported rule shape is:
 
 Leading binders and premises may be absent; the head may instead be `false`.
 Chained implications and any number of positive relation premises are accepted.
-Guards support Bool/Int literals and variables, `not`, `and`, `or`, `=>`, `=`,
+Guards support Bool/Int literals and variables, `not`, `and`, `or`, `xor`, `=>`, `=`, `distinct`,
 `+`, `-`, `*`, `abs`, and comparisons. Guard disjunctions and negations stay intact:
 `(not cond)` is valid for a bound Bool, while `(not (P x))` is rejected. Relations
-inside equality, disjunction, or another relation's arguments are also rejected.
+inside equality, distinct, xor, disjunction, or another relation's arguments are also rejected.
 Other theories/operators remain unsupported.
 
 For lh_sum_rec, validation yields one guarded fact, one recursive rule, and one
@@ -402,7 +410,7 @@ clause propositions to a callback. Native identities preserve shadowed bindings;
 unused variables and relations are retained. Facts have no added premise, and
 false heads become Lean `False`.
 
-`lake exe testTranslation` compares all fifteen clauses from lh_sum_rec and the
+`lake exe testTranslation` compares all sixteen clauses from lh_sum_rec and the
 combined fixture with handwritten Lean propositions and kernel-checks each clause
 after closing its relation parameters. These checks do not prove the clauses.
 
@@ -428,7 +436,7 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders twenty-two SMT cases and ten CHC cases, compares the
+This test also renders twenty-four SMT cases and ten CHC cases, compares the
 re-elaborated statements with the original expressions, and compiles each complete
 file and its isolated statement section using only Lean core. `Refutation` and
 `Problem` have no axiom dependencies; only their proof templates are admitted.
