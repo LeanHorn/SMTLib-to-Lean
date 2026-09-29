@@ -31,24 +31,30 @@ inductive Premise where
 structure Clause (α : Type := cvc5.Term) where
   /-- One-based position in the source assertions. -/
   assertionNumber : Nat
+  source : Option Source.Ref := none
   binders : Array Binder
   premises : Array α
   head : ClauseHead
 
 /-- All declarations and clauses have passed validation. Keep native terms in the callback. -/
 structure Problem where
+  source : Option Source.Ref := none
   relations : Array Relation
   clauses : Array (Clause Premise)
 
 /-- Collect every declared relation, including unused ones. Use within the parser callback. -/
 def collectRelations (declarations : Array ParsedDeclaration) : cvc5.Env (Array Relation) :=
   declarations.mapM fun declaration => do
-    let sort ← ofExcept declaration.term.getSort
-    let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
-    let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
-    unless result.isBoolean && arguments.all (fun s => s.isBoolean || s.isInteger) do
-      throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over Bool/Int, got {sort}")
-    return { toParsedDeclaration := declaration, argumentSorts := arguments }
+    try
+      let sort ← ofExcept declaration.term.getSort
+      let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
+      let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
+      unless result.isBoolean && arguments.all (fun s => s.isBoolean || s.isInteger) do
+        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over Bool/Int, got {sort}")
+      return { toParsedDeclaration := declaration, argumentSorts := arguments }
+    catch error =>
+      throw (declaration.source.map (fun source => errorWithContext (source.context true) error)
+        |>.getD error)
 
 /-- Arguments and guards may use clause variables and theory terms, but no declared relations. -/
 private def checkRelationFree (terms : Array cvc5.Term) (context : String) : cvc5.Env Unit := do
@@ -111,7 +117,7 @@ Input must already be parsed and scope-checked. Keep native terms in the callbac
 Conjunctions in premises stay intact here; `validateQuery` flattens and classifies them.
 -/
 def extractClause (relations : Array Relation) (assertionNumber : Nat)
-    (assertion : cvc5.Term) : cvc5.Env Clause := do
+    (assertion : cvc5.Term) (source : Option Source.Ref := none) : cvc5.Env Clause := do
   let mut binders := #[]
   let mut body := assertion
   while (← ofExcept body.getKind) == .FORALL do
@@ -133,7 +139,7 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
     let some atom ← relationAtom? relations body
       | throw (.unsupported s!"expected a relation or false as CHC head, got {body}")
     pure (ClauseHead.relation atom)
-  return { assertionNumber, binders, premises, head }
+  return { assertionNumber, source, binders, premises, head }
 
 /-- Flatten only premise conjunctions, keeping source order and other formulas intact. -/
 private def validatePremises (relations : Array Relation) (terms : Array cvc5.Term)
@@ -154,21 +160,22 @@ private def validatePremises (relations : Array Relation) (terms : Array cvc5.Te
 
 /-- Validate every clause of an already parsed/scope-checked query before returning a problem. -/
 def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Problem := do
-  let context := s!"{name}: query 1"
-  let relations ← try collectRelations query.declarations
-    catch error => throw (errorWithContext context error)
+  let relations ← collectRelations query.declarations
   let clauses : Array (Clause Premise) ← query.assertions.mapIdxM fun i assertion => do
+    let source := query.assertionSources[i]?
+    let context := source.map (·.context true) |>.getD s!"{name}: query 1"
     try
-      let clause ← extractClause relations (i + 1) assertion
+      let clause ← extractClause relations (i + 1) assertion source
       let premises ← validatePremises relations clause.premises
       return {
         assertionNumber := clause.assertionNumber
+        source
         binders := clause.binders
         premises
         head := clause.head
       }
     catch error => throw (errorWithContext s!"{context}: clause {i + 1}" error)
-  return { relations, clauses }
+  return { source := query.source, relations, clauses }
 
 /-- Parse and validate the whole CHC input, then inspect it once without solving. -/
 def parseAndInspectProblem (input : String) (inspect : Problem → cvc5.Env Unit)

@@ -1,4 +1,5 @@
 import cvc5
+import Smt2Lean.Source
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
 import Smt.Reconstruct.Int
@@ -29,12 +30,16 @@ inductive ParseMode where
 structure ParsedDeclaration where
   name : String
   term : cvc5.Term
+  source : Option Source.Ref := none
 
 /-- One validated query. Use native terms only inside `inspect`. -/
 structure ParsedQuery where
   logic : Option String := none
+  source : Option Source.Ref := none
+  commands : Array Source.Command := #[]
   declarations : Array ParsedDeclaration := #[]
   assertions : Array cvc5.Term := #[]
+  assertionSources : Array Source.Ref := #[]
   invoked : Array String := #[]
 
 private def isScalarSort (sort : cvc5.Sort) : Bool :=
@@ -167,15 +172,29 @@ def parseAndInspectQuery
   let mut allowQuantifiers := true
   let mut checked := false
   let mut exited := false
-  let mut ordinal := 1
+  let mut reader : Source.Reader input := {}
   let mut assertionNumber := 0
   while true do
-    let commandOrdinal := ordinal
     let isChc := mode == .chc || query.logic == some "HORN"
-    let context := if isChc then s!"{name}: query 1" else name
+    let (command?, rest) ← match reader.next name with
+      | .ok result => pure result
+      | .error error =>
+        let source : Source.Ref := {
+          file := name, number := reader.number
+          span := { start := error.position, stop := error.position } }
+        throw (errorWithContext (source.context isChc) (.error error.message))
+    reader := rest
+    let eof : Source.Ref := {
+      file := name, number := reader.number
+      span := { start := reader.position, stop := reader.position } }
+    let context := (command?.map (·.source) |>.getD eof).context isChc
     try
       let cmd ← parser.nextCommand
-      if cmd.isNull then break
+      if cmd.isNull then
+        unless command?.isNone do throw (.error "source reader and cvc5 command streams disagree")
+        break
+      let some command := command?
+        | throw (.error "source reader and cvc5 command streams disagree")
       let commandName := cmd.getCommandName
       if exited then
         throw (.unsupported s!"unexpected command after exit: {commandName}")
@@ -205,7 +224,7 @@ def parseAndInspectQuery
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")
         query := { query with
-          declarations := query.declarations.push { name := symbol, term }
+          declarations := query.declarations.push { name := symbol, term, source := some command.source }
           invoked := query.invoked.push commandName }
       | "assert" =>
         assertionNumber := assertionNumber + 1
@@ -217,20 +236,28 @@ def parseAndInspectQuery
           validateAssertion term query.declarations allowQuantifiers
         catch error =>
           throw (if isChc then errorWithContext s!"clause {assertionNumber}" error else error)
-        query := { query with invoked := query.invoked.push commandName }
+        query := { query with
+          assertionSources := query.assertionSources.push command.source
+          invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
       | "check-sat" =>
-        query := { query with assertions := ← solver.getAssertions }
+        let assertions ← solver.getAssertions
+        unless assertions.size == query.assertionSources.size do
+          throw (.error "assertions and source locations disagree")
+        query := { query with assertions, source := some command.source }
         checked := true
       | "exit" =>
         unless checked do throw (.error "exit before check-sat")
         exited := true
       | _ => throw (.unsupported s!"unsupported command: {commandName}")
-      ordinal := ordinal + 1
-    catch error => throw (errorWithContext s!"{context}: command {commandOrdinal}" error)
+      query := { query with commands := query.commands.push command }
+    catch error => throw (errorWithContext context error)
   unless checked do
-    let context := if mode == .chc || query.logic == some "HORN" then s!"{name}: query 1" else name
-    throw (errorWithContext s!"{context}: command {ordinal}" (.error "expected one check-sat"))
+    let source : Source.Ref := {
+      file := name, number := reader.number
+      span := { start := reader.position, stop := reader.position } }
+    throw (errorWithContext (source.context (mode == .chc || query.logic == some "HORN"))
+      (.error "expected one check-sat"))
   inspect query
 
 end Smt2Lean.Backend

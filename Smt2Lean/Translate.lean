@@ -6,6 +6,13 @@ namespace Smt2Lean.Translate
 open Lean Meta Qq
 open Backend
 
+private def atSource [Monad m] [MonadError m] (source : Option Source.Ref)
+    (description : String) (action : m α) (chc : Bool := false) : m α := do
+  try action
+  catch error =>
+    let context := source.map (·.context chc) |>.getD "translation"
+    throwError "{context}: {description}: {error.toMessageData}"
+
 private def checkPropositions (values : Array Expr) (state : Smt.Reconstruct.State)
     : MetaM Unit := do
   unless state.skippedGoals.isEmpty do
@@ -47,20 +54,25 @@ Use the parameters and assertions inside `inspect`, while their local context ex
 def withAssertions [Inhabited α] (query : ParsedQuery)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
   -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
-  for assertion in query.assertions do
-    (validateAssertion assertion query.declarations).runIO
-  let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) => do
-    let sort ← ofExcept declaration.term.getSort
-    let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
-    let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
-    return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
+  for h : i in [:query.assertions.size] do
+    atSource query.assertionSources[i]? s!"assertion {i + 1}" do
+      (validateAssertion query.assertions[i] query.declarations).runIO
+  let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
+    atSource declaration.source s!"declaration '{declaration.name}'" do
+      let sort ← ofExcept declaration.term.getSort
+      let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
+      let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
+      return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
   withLocalDeclsDND declarations fun parameters => do
     let mut userNames : Std.HashMap String Expr := {}
     for declaration in query.declarations, parameter in parameters do
       userNames := userNames.insert (← ofExcept declaration.term.getSymbol) parameter
-    let reconstruction := query.assertions.mapM Smt.Reconstruct.reconstructTerm
-    let (assertions, state) ← reconstruction.run { userNames } {}
-    checkPropositions assertions state
+    let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i term =>
+      atSource query.assertionSources[i]? s!"assertion {i + 1}" do
+        let value ← Smt.Reconstruct.reconstructTerm term
+        checkPropositions #[value] (← get)
+        return value
+    let (assertions, _) ← reconstruction.run { userNames } {}
     inspect parameters assertions
 
 private def reconstructAtom (relations : Std.HashMap cvc5.Term Expr)
@@ -101,21 +113,21 @@ clauses inside the callback, while their Lean context and native terms are alive
 -/
 def withClauses [Inhabited α] (problem : Chc.Problem)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
-  let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) => do
-    let sort ← ofExcept relation.term.getSort
-    let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
-    return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
+  let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
+    atSource relation.source s!"relation '{relation.name}'" (chc := true) do
+      let sort ← ofExcept relation.term.getSort
+      let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
+      return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
   withLocalDeclsDND declarations fun parameters => do
     let mut relations : Std.HashMap cvc5.Term Expr := {}
     for relation in problem.relations, parameter in parameters do
       relations := relations.insert relation.term parameter
-    let clauses ← problem.clauses.mapM fun clause => do
-      try
+    let clauses ← problem.clauses.mapM fun clause =>
+      atSource clause.source s!"clause {clause.assertionNumber}" (chc := true) do
         let value ← reconstructClause relations clause
         if (← mkForallFVars parameters value (usedOnly := false)).hasFVar then
           throwError "clause contains variables outside its relation parameters"
         return value
-      catch error => throwError "CHC clause {clause.assertionNumber}: {error.toMessageData}"
     inspect parameters clauses
 
 /-- Install a closed, axiom-free proposition after the kernel checks its type. -/
@@ -147,7 +159,7 @@ def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM 
   let value ← withAssertions query fun parameters assertions => do
     let body ← mkArrow (mkAndN assertions.toList) q(False)
     mkForallFVars parameters body (usedOnly := false)
-  defineProposition name value
+  atSource query.source "Refutation" (defineProposition name value)
 
 /--
 Define `Problem : Prop := ∃ relations, clause₁ ∧ … ∧ clauseₙ` for validated CHCs.
@@ -157,6 +169,6 @@ def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr
   let value ← withClauses problem fun parameters clauses => do
     parameters.foldrM (init := mkAndN clauses.toList) fun parameter body => do
       mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
-  defineProposition name value
+  atSource problem.source "Problem" (defineProposition name value) (chc := true)
 
 end Smt2Lean.Translate
