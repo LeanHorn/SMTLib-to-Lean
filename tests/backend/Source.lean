@@ -43,6 +43,9 @@ def main : IO Unit := do
   let backslash := "(set-info :source \"slash" ++ "\\" ++ "\")"
   let (commands, _) ← readAll (backslash ++ "(check-sat)")
   require (commands.map (·.text) == #[backslash, "(check-sat)"]) "incorrect backslash escape"
+  let (commands, _) ← readAll "(echo \"λ🙂\")(check-sat)"
+  let start := commands[1]!.source.span.start
+  require (start.offset == 15 && start.column == 12) "UTF-8 bytes and character columns were conflated"
   let (commands, eof) ← readAll "; comment\r; another\n\t"
   require (commands.isEmpty && eof.line == 3 && eof.column == 2) "wrong empty-input location"
   for (input, reason) in #[

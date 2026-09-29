@@ -10,7 +10,7 @@ Parse a restricted SMT-LIB script with cvc5 without solving it.
 
 Accept one Bool/Int query, with declarations, assertions, and optional metadata.
 Intercept `check-sat` and pass the validated query to a callback after reading
-the entire input. Report failures with the input name and command number;
+the entire input. Report failures with file, line, column, and command number;
 CHC mode adds the query number and, for assertion validation, the clause number.
 
 The reconstruction imports register the handlers used by `Translate.lean`
@@ -155,7 +155,8 @@ def errorWithContext (context : String) : cvc5.Error → cvc5.Error
 A higher-order function that parses and validates SMT-LIB commands without solving.
 Accepts supported Bool/Int declarations and assertions, metadata, and one `check-sat`.
 Only metadata and an optional final `exit` may follow the check.
-Calls `inspect` once with the logic, declarations, assertions, and executed command names.
+Calls `inspect` once with native terms, original command text, source ranges,
+the logic, and executed command names.
 HORN requires CHC or auto mode; this parser does not check Horn clause shape.
 -/
 def parseAndInspectQuery

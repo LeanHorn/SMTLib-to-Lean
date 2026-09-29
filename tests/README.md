@@ -6,11 +6,12 @@ Run all translation demos from the repository root:
 tests/translation/run-demo.sh
 ```
 
-The script builds the CLI, runs the reconstruction smoke test, and runs `cli.py`.
-The CLI checks compile twenty-five SMT files, five CHC files, and their statement sections using
-Lean core. Boolean contradiction, integer bounds, function congruence, and quantified outputs,
-including their status variants, must match the `expected/Query.lean` in each
-fixture directory. All four README proofs compile with warnings treated as errors
+The script builds the CLI, runs the source-reader and reconstruction tests, and runs `cli.py`.
+The CLI checks compile twenty-seven SMT files, six CHC files, and their statement sections using
+Lean core. Boolean contradiction, integer bounds, function congruence, quantified,
+and lh_sum_rec outputs must match their `expected/Query.lean`. Status variants
+must match after removing source comments, since inserting metadata can move
+locations without changing a proposition. All four README proofs compile with warnings treated as errors
 and no `sorryAx` dependency. The Boolean, function, and quantifier proofs have no axioms; the
 integer proof uses core's `propext` through its order lemma. Edited templates and
 completed proofs survive attempted overwrites. The combined function/predicate
@@ -25,13 +26,18 @@ tests/run.sh   # replays every file through z3 and checks the recorded answers
 The translator's own checks run from the repository root without solving in cvc5:
 
 ```sh
+lake exe testSource          # tests/backend/Source.lean
 lake exe testParser          # tests/backend/Parser.lean
 lake exe testReconstruction  # tests/backend/Reconstruction.lean
 lake exe testTranslation     # tests/backend/Translation.lean
 lake exe testHorn            # tests/backend/Horn.lean
 ```
 
-`Parser.lean` checks accepted queries and rejection diagnostics.
+`Source.lean` checks command boundaries, exact bytes, UTF-8 offsets, CR/LF/CRLF,
+quoted identifiers, doubled quotes, literal backslashes in strings, and malformed
+input. `Parser.lean` checks accepted queries, attachment of source ranges, and
+rejection diagnostics. Locations point to command starts or lexical failures;
+reconstruction errors retain the originating assertion/clause location.
 `Horn.lean` parses the unedited `chc/lh_sum_rec.smt2` in explicit CHC mode. It checks
 one typed declaration, three quantified assertions, and an invocation trace with
 no solver query. Unsupported terms/sorts and invalid command sequences still fail
@@ -49,7 +55,10 @@ absent/sat/unsat/unknown status metadata. The same clauses under `ALL` or no log
 produce `Refutation`; HORN text in comments, names, and metadata cannot select
 CHC mode. Empty HORN input also translates. Invalid CHC declarations, later
 clauses/operators, missing checks, and malformed tails fail with source context
-and create no output. Edited CHC proof work survives attempted overwrites.
+and create no output. The combined twelve-clause CHC fixture also compiles through
+the CLI. Source checks cover multiline commands, quoted text, CRLF input, and
+filenames containing newlines. Moving the input changes only source comments.
+Edited CHC proof work survives attempted overwrites.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
 contexts, and twenty-two closed Bool/Int refutations against handwritten Lean propositions.
@@ -117,6 +126,10 @@ All generated test files go into temporary directories and are removed afterward
 The parser test also constructs native terms with a dangling variable and a
 different variable with the same name. Both must fail scope validation, even when
 the same subterm was already accepted under a quantifier.
+
+`translation/chc/expected/Query.lean` is the reviewed output for `chc/lh_sum_rec.smt2`:
+one existential relation and all three original clauses, followed by an unfinished
+proof. Its source comments identify the original query and clause ranges.
 
 `translation/chc/clauses.smt2` combines six relation declarations and twelve clauses:
 five bare facts, a quantified fact, five rules, and a bare false assertion. It

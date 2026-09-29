@@ -57,8 +57,9 @@ tests/translation/run-demo.sh
 The script checks the Boolean, integer, function, and quantifier demos: expected outputs, metadata
 variants, standalone statements and templates, and the completed proofs shown here.
 It also checks rejection cases and overwrite protection, using temporary
-directories that are removed afterwards. CHC checks translate lh_sum_rec and verify
-that the parsed logic selects the target independently of status metadata.
+directories that are removed afterwards. CHC checks compare lh_sum_rec with its
+expected output and compile the combined clause fixture. Source-location checks
+cover multiline input, quoted text, and malformed tails.
 
 ## Translate integer queries
 
@@ -284,12 +285,58 @@ Supported inputs:
 
 The driver validates every declaration and assertion, then calls `inspect` once
 with a `ParsedQuery`: optional logic, declarations (SMT names and native term identities), assertion
-terms, and executed command names. cvc5 reports both declaration spellings as
+terms, source locations, original command text, and executed command names. cvc5 reports both declaration spellings as
 `declare-fun` in this trace. No query command is executed.
 
 Unsupported input is rejected before `inspect` runs, including content after
-`check-sat` or `exit`. Errors include the input name and command number. cvc5 may
+`check-sat` or `exit`. Errors include `file:line:column` and the command number. cvc5 may
 print a warning when no logic is supplied; the same term validation still applies.
+
+`Smt2Lean.Source` reads command boundaries while preserving the exact input bytes.
+It handles nested parentheses, comments, quoted identifiers, and strings with
+doubled quotes. cvc5 still parses and checks the terms. Locations cover whole
+commands; validation and reconstruction errors point to the relevant command's
+start. Unterminated input reports EOF and where the unfinished construct opened.
+Spans use UTF-8 byte offsets and one-based character columns, with an exclusive
+end. A tab counts as one character; CRLF counts as one line break.
+
+Generated `-- Source:` comments identify the original `check-sat` and each
+assertion or CHC clause. Moving a command changes these comments without changing
+the Lean proposition. The statement and proof remain in one file.
+
+## Translate a CHC query
+
+Translate the existing LiquidHaskell recursive-sum example:
+
+```sh
+lake exe smt2lean tests/chc/lh_sum_rec.smt2 --out chc-demo
+lake env lean chc-demo/Query.lean
+```
+
+Compare `chc-demo/Query.lean` with the [expected output](tests/translation/chc/expected/Query.lean).
+It contains one existential relation `r0 : Int → Prop` (the source relation `k_1`)
+and all three clauses: a base rule, a recursive rule, and a false-head rule.
+The Statements section defines `Problem`; the Proofs section contains:
+
+```lean
+theorem problem : Problem := by
+  sorry
+```
+
+The `sorry` warning is expected. Typechecking verifies the generated statement;
+the proof that satisfying relations exist remains unfinished. Status metadata
+does not change this target. This command does not run Flex.
+
+The combined fixture exercises twelve clauses, including nonlinear guards,
+nullary relations, multiple relation premises, and shadowed binders:
+
+```sh
+lake exe smt2lean tests/translation/chc/clauses.smt2 --out chc-clauses-demo
+lake env lean chc-clauses-demo/Query.lean
+```
+
+Both output directories must be new. The combined fixture includes `False`, so
+its generated proposition is intentionally unprovable; it tests translation.
 
 ## CHC validation
 
@@ -336,11 +383,11 @@ Other theories/operators remain unsupported.
 
 For lh_sum_rec, validation yields one guarded fact, one recursive rule, and one
 false-head clause, with 0/1/1 relation premises. Status metadata does not change
-the result. Clause validation errors identify the file, query 1, and one-based
-assertion number; parser errors also identify the command. For example:
+the result. Clause validation errors identify the source location, query 1,
+command, and one-based assertion number. For example:
 
 ```text
-example.smt2: query 1: clause 3: CHC relation inside a theory guard: (P x)
+example.smt2:7:1: query 1: command 7: clause 3: CHC relation inside a theory guard: (P x)
 ```
 
 The CLI routes `(set-logic HORN)` through CHC validation and emits `Problem`.
