@@ -1,4 +1,5 @@
 import Smt2Lean.Chc
+import Smt2Lean.Helpers
 import Lean.Util.CollectAxioms
 
 namespace Smt2Lean.Translate
@@ -23,17 +24,24 @@ private def checkPropositions (values : Array Expr) (state : Smt.Reconstruct.Sta
     unless ← isProp value do
       throwError "reconstructed assertion is not a proposition: {value}"
 
-/-- Use core connectives instead of lean-smt's separate XOr inductive type. -/
-@[smt_term_reconstruct] private def reconstructXor : Smt.TermReconstructor := fun term => do
-  unless (← ofExcept term.getKind) == .XOR do return none
-  let mut value : Q(Prop) ← Smt.Reconstruct.reconstructTerm term[0]!
-  for child in term.getChildren[1:] do
-    let right : Q(Prop) ← Smt.Reconstruct.reconstructTerm child
-    value := q(($value ∧ ¬$right) ∨ (¬$value ∧ $right))
-  return value
+/-- Preserve operator names with transparent, kernel-checked definitions. -/
+private def reconstructOperators : Smt.TermReconstructor := fun term => do
+  match ← ofExcept term.getKind with
+  | .XOR =>
+    let helper ← Helpers.xor
+    let mut value ← Smt.Reconstruct.reconstructTerm term[0]!
+    for child in term.getChildren[1:] do
+      value := mkApp2 (mkConst helper) value (← Smt.Reconstruct.reconstructTerm child)
+    return value
+  | .DISTINCT =>
+    let (u, α) ← Smt.Reconstruct.reconstructSortLevelAndSort (← ofExcept term[0]!.getSort)
+    let xs ← term.getChildren.mapM Smt.Reconstruct.reconstructTerm
+    let helper ← Helpers.distinct xs.size
+    return mkAppN (mkApp (mkConst helper [u]) α) xs
+  | _ => return none
 
 /-- Bind by native identity so shadowed names cannot capture an outer variable. -/
-@[smt_term_reconstruct] private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
+private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
   let kind ← ofExcept term.getKind
   unless kind == .FORALL || kind == .EXISTS do return none
   let variables := term[0]!.getChildren
@@ -55,6 +63,25 @@ private def checkPropositions (values : Array Expr) (state : Smt.Reconstruct.Sta
       let result ← parameters.foldrM (init := body) fun parameter body => do
         mkAppM ``Exists #[← mkLambdaFVars #[parameter] body]
       return result
+
+/-- Try our encodings first, then the upstream handlers for the supported theories. -/
+@[smt_term_reconstruct] private def reconstructTerm : Smt.TermReconstructor := fun term => do
+  for reconstruct in [reconstructOperators, reconstructQuantifier,
+      Smt.Reconstruct.Prop.reconstructProp, Smt.Reconstruct.Builtin.reconstructBuiltin,
+      Smt.Reconstruct.Int.reconstructInt, Smt.Reconstruct.UF.reconstructUF] do
+    if let some value ← reconstruct term then return value
+  return none
+
+private def withTermReconstruction (action : MetaM α) : MetaM α := do
+  -- Upstream stores handlers in a hash set: registration order is not priority.
+  let extension := Smt.Attribute.smtExt
+  let previous := (extension.getState (← getEnv)).getD ``Smt.TermReconstructor {}
+  modifyEnv fun env => extension.modifyState env fun state =>
+    state.insert ``Smt.TermReconstructor {``reconstructTerm}
+  try action
+  finally
+    modifyEnv fun env => extension.modifyState env fun state =>
+      state.insert ``Smt.TermReconstructor previous
 
 /--
 Reconstruct a parsed query using fresh parameters of each declaration's Lean type.
@@ -81,7 +108,9 @@ def withAssertions [Inhabited α] (query : ParsedQuery)
         let value ← Smt.Reconstruct.reconstructTerm term
         checkPropositions #[value] (← get)
         return value
-    let (assertions, _) ← reconstruction.run { userNames } {}
+    -- Match the instance scope used when the emitted `if` expressions are elaborated.
+    let (assertions, _) ← withTermReconstruction <|
+      Elab.Tactic.classical <| reconstruction.run { userNames } {}
     inspect parameters assertions
 
 private def reconstructAtom (relations : Std.HashMap cvc5.Term Expr)
@@ -110,7 +139,8 @@ private def reconstructClause (relations : Std.HashMap cvc5.Term Expr)
         | .guard term => Smt.Reconstruct.reconstructTerm term
       let body ← premises.foldrM (fun premise body => mkArrow premise body) head
       mkForallFVars variables body (usedOnly := false)
-    let (value, state) ← reconstruction.run {} { termCache }
+    let (value, state) ← withTermReconstruction <|
+      Elab.Tactic.classical <| reconstruction.run {} { termCache }
     checkPropositions #[value] state
     check value
     return value
@@ -139,7 +169,15 @@ def withClauses [Inhabited α] (problem : Chc.Problem)
         return value
     inspect parameters clauses
 
-/-- Install a closed, axiom-free proposition after the kernel checks its type. -/
+/-- Permit Lean's foundations, but no admissions or query-specific axioms. -/
+def checkStatementAxioms (name : Name) : CoreM Unit := do
+  let axioms ← collectAxioms name
+  let unexpected := axioms.filter fun dependency =>
+    ![``propext, ``Classical.choice, ``Quot.sound].contains dependency
+  unless unexpected.isEmpty do
+    throwError "{name} depends on unsupported axioms: {unexpected}"
+
+/-- Install a closed proposition after checking its type and axiom dependencies. -/
 private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   if value.hasFVar || value.hasLooseBVars || value.hasMVar then
     throwError "{name} contains unresolved variables"
@@ -154,9 +192,7 @@ private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   -- Check synchronously so a kernel failure cannot be reported as success.
   let checkedEnv ← ofExceptKernelException <|
     (← getEnv).addDeclCore 0 1000 declaration none
-  let axioms ← withEnv checkedEnv (collectAxioms name)
-  unless axioms.isEmpty do
-    throwError "{name} depends on axioms: {axioms}"
+  withEnv checkedEnv (checkStatementAxioms name)
   setEnv checkedEnv
   return value
 

@@ -31,5 +31,9 @@
 (assert (forall ((x Int) (y Int) (b Bool) (c Bool))
   (=> (and (P x) (xor b c) (distinct x y 0) (distinct b c))
       (R x (xor b (distinct x y)) y))))
+; Conditional guards and Bool/Int relation arguments.
+(assert (forall ((x Int) (y Int) (b Bool) (c Bool))
+  (=> (and (P x) (ite b (< x y) (= x y)))
+      (R (ite b x y) (ite c b (< x y)) (ite (< x y) (+ x 1) y)))))
 (check-sat)
 (exit)

@@ -120,6 +120,7 @@ def validateAssertion (root : cvc5.Term)
           throw (.unsupported s!"unbound variable: {term}")
         pure children.isEmpty
       | .NOT | .NEG | .ABS => pure (children.size == 1)
+      | .ITE => pure (children.size == 3)
       | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT =>
         pure (children.size >= 2)
       -- cvc5 expands chains into conjunctions of adjacent binary comparisons.

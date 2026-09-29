@@ -39,8 +39,8 @@ private def checkRejected (name input : String) (ordinal : Nat) (reason : String
     require (message.contains reason) s!"{name}: wrong rejection reason: {message}"
 
 private def checkConnectives (name input : String) : IO Unit :=
-  checkAccepted name input #["True", "a b", "p", "q", "r", "unused"] 14
-    (#["set-logic"] ++ Array.replicate 6 "declare-fun" ++ Array.replicate 14 "assert")
+  checkAccepted name input #["True", "a b", "p", "q", "r", "unused"] 17
+    (#["set-logic"] ++ Array.replicate 6 "declare-fun" ++ Array.replicate 17 "assert")
     fun query => do
       require (query.assertions[0]? == query.declarations[0]?.map (·.term))
         s!"{name}: |True| must refer to the declared variable, not the Boolean literal"
@@ -81,8 +81,8 @@ private def checkAcceptedQueries : IO Unit := do
         require ((← ofExcept flag.term.getSort).isBoolean)
           "expected a Bool declaration"
   let arithmetic ← IO.FS.readFile "tests/translation/int/arithmetic.smt2"
-  checkAccepted "arithmetic.smt2" arithmetic #["x", "y", "z", "p"] 12
-    (#["set-logic"] ++ Array.replicate 4 "declare-fun" ++ Array.replicate 12 "assert")
+  checkAccepted "arithmetic.smt2" arithmetic #["x", "y", "z", "p"] 15
+    (#["set-logic"] ++ Array.replicate 4 "declare-fun" ++ Array.replicate 15 "assert")
     fun query => do
       let chainGroups := query.assertions.back![1]!.getChildren
       require (chainGroups.size == 4) "expected all four comparison chains"
@@ -98,8 +98,8 @@ private def checkAcceptedQueries : IO Unit := do
   for logic in #["QF_UFLIA", "QF_UFNIA", "ALL"] do
     checkAccepted s!"applications.smt2 ({logic})"
       (functions.replace "QF_UFLIA" logic)
-      #["f", "g", "Int.add", "unused", "x", "y", "p", "P", "R", "b", "choose", "test", "True", "unusedBool"] 15
-      (#["set-logic"] ++ Array.replicate 14 "declare-fun" ++ Array.replicate 15 "assert")
+      #["f", "g", "Int.add", "unused", "x", "y", "p", "P", "R", "b", "choose", "test", "True", "unusedBool"] 16
+      (#["set-logic"] ++ Array.replicate 14 "declare-fun" ++ Array.replicate 16 "assert")
       fun query => do
         let #[_, g, _, _, x, y, _, _, _, _, _, _, _, _] := query.declarations
           | throw (.error "expected fourteen declarations")
@@ -114,8 +114,8 @@ private def checkAcceptedQueries : IO Unit := do
   let scopes ← IO.FS.readFile "tests/translation/quantifiers/scopes.smt2"
   for logic in #["UFLIA", "UFNIA", "ALL"] do
     checkAccepted s!"scopes.smt2 ({logic})" (scopes.replace "UFLIA" logic)
-      #["x", "p", "R", "f", "True"] 8
-      (#["set-logic"] ++ Array.replicate 5 "declare-fun" ++ Array.replicate 8 "assert")
+      #["x", "p", "R", "f", "True"] 9
+      (#["set-logic"] ++ Array.replicate 5 "declare-fun" ++ Array.replicate 9 "assert")
       fun query => do
         let outer := query.assertions[3]!
         let body := outer[1]!
@@ -166,14 +166,20 @@ private def checkRejectedQueries : IO Unit := do
       2, "quantifiers require"),
     ("bound-array", "(set-logic ALL)\n(assert (exists ((a (Array Int Int))) true))\n(check-sat)",
       2, "unsupported bound variable sort"),
-    ("quantified-ite", "(set-logic ALL)\n(assert (forall ((p Bool)) (ite p true false)))\n(check-sat)",
-      2, "ITE"),
+    ("ite-unsupported-branch", "(set-logic ALL)\n(assert (forall ((p Bool)) (= (ite p 1 (div 1 0)) 1)))\n(check-sat)",
+      2, "INTS_DIVISION"),
     ("quantifier-pattern", "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
       3, "quantifier without annotations"),
     ("out-of-scope", "(set-logic ALL)\n(assert (forall ((x Int)) (= x x)))\n(assert (= x 0))\n(check-sat)",
       3, "x"),
-    ("ite", "(set-logic ALL)\n(declare-const p Bool)\n(assert (ite p true false))\n(check-sat)",
-      3, "ITE"),
+    ("ite-condition", "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
+      2, "condition"),
+    ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
+      2, "type"),
+    ("ite-real", "(set-logic ALL)\n(assert (= (ite true 1.0 2.0) 1.0))\n(check-sat)",
+      2, "expected Bool or Int"),
+    ("ite-bv", "(set-logic ALL)\n(assert (= (ite true #b00 #b01) #b00))\n(check-sat)",
+      2, "expected Bool or Int"),
     ("push", "(set-logic QF_UF)\n(push 1)\n(check-sat)",
       2, "unsupported command: push"),
     ("pop", "(set-logic QF_UF)\n(pop 1)\n(check-sat)",
@@ -224,7 +230,8 @@ private def checkRejectedQueries : IO Unit := do
   for (name, input, ordinal, reason) in rejected do
     checkRejected s!"reject-{name}" input ordinal reason
   for (term, kind) in #[("(xor)", "XOR"), ("(xor true)", "XOR"),
-      ("(distinct)", "DISTINCT"), ("(distinct 1)", "DISTINCT")] do
+      ("(distinct)", "DISTINCT"), ("(distinct 1)", "DISTINCT"),
+      ("(ite true false)", "ITE"), ("(ite true false true false)", "ITE")] do
     checkRejected s!"reject-arity-{term}"
       s!"(set-logic ALL)\n(assert {term})\n(check-sat)" 2 s!"invalid kind '{kind}'"
   -- Registering lean-smt's integer handlers must not enable unaudited operators.
@@ -275,7 +282,7 @@ private def checkSourceLocations : IO Unit := do
         source.span.stop.line == 5 && source.span.stop.column == 11) "wrong multiline assertion span"
       require (query.source.map (·.span.start.line) == some 6) "wrong check-sat location"
   for (input, location, reason) in #[
-    ("; α\n(set-logic ALL)\n  (assert\n    (ite true true false))\n(check-sat)",
+    ("; α\n(set-logic ALL)\n  (assert\n    (= (div 1 0) 0))\n(check-sat)",
       "3:3: command 2:", "unsupported operator"),
     ("(set-logic QF_UF)\n(assert true)\n(check-sat)\n(assert",
       "4:8: command 4:", "unterminated command"),

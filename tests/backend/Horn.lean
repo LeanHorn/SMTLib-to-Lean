@@ -64,8 +64,8 @@ private def checkParser : IO Unit := do
   for (name, suffix, ordinal, reason) in #[
     ("bound-real", "(assert (forall ((x Real)) true))\n(check-sat)",
       2, "unsupported bound variable sort"),
-    ("ite", "(assert (forall ((p Bool)) (ite p true false)))\n(check-sat)",
-      2, "unsupported operator: ITE"),
+    ("div", "(assert (forall ((x Int)) (= (div x 2) 0)))\n(check-sat)",
+      2, "unsupported operator: INTS_DIVISION"),
     ("missing-check", "(assert true)", 3, "expected one check-sat"),
     ("repeated-check", "(check-sat)\n(check-sat)", 3, "after check-sat"),
     ("trailing-command", "(check-sat)\n(push 1)", 3, "after check-sat")
@@ -85,14 +85,14 @@ private def checkClauses : IO Unit := do
     for relation in relations, declaration in query.declarations do
       require (relation.term == declaration.term) "relation identity changed"
     let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
-    require (clauses.map (·.assertionNumber) == (List.range 13).toArray.map (· + 1))
+    require (clauses.map (·.assertionNumber) == (List.range 14).toArray.map (· + 1))
       "wrong clause count or source assertion numbers"
-    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3, 4])
+    require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3, 4, 4])
       "wrong binder counts"
-    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 1, 1])
+    require (clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 1, 1, 1])
       "wrong premise counts"
     require (clauses.map (headName ∘ (·.head)) ==
-      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false", "R"])
+      #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false", "R", "R"])
       "wrong clause heads"
     let facts ← (query.assertions.extract 0 5).mapM (recognizeFact relations)
     require (facts.map (·.relation.term) == (query.declarations.extract 0 5).map (·.term))
@@ -246,11 +246,11 @@ private def checkProblems : IO Unit := do
     require ((← calls.get) == 1) "expected one validated problem"
   let path := "tests/translation/chc/clauses.smt2"
   (parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
-    require (problem.relations.size == 6 && problem.clauses.size == 13)
+    require (problem.relations.size == 6 && problem.clauses.size == 14)
       "validated fixture lost declarations or clauses"
-    require (problem.clauses.map relationCount == #[0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 3, 1])
+    require (problem.clauses.map relationCount == #[0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 3, 1, 1])
       "wrong relation-premise counts"
-    require (problem.clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 3, 2, 3, 1, 0, 7, 4])
+    require (problem.clauses.map (·.premises.size) == #[0, 0, 0, 0, 0, 0, 3, 2, 3, 1, 0, 7, 4, 2])
       "wrong flattened premise counts"
     let some clause := problem.clauses[11]? | throw (.error "missing nonlinear rule")
     require (clause.premises.map premiseText == #[
@@ -267,6 +267,10 @@ private def checkRejectedProblems : IO Unit := do
     ("relation-equality", "(=> (= (P x) cond) done)", "inside a theory guard"),
     ("relation-xor", "(=> (xor cond (P x)) done)", "inside a theory guard"),
     ("relation-distinct", "(=> (distinct cond (P x)) done)", "inside a theory guard"),
+    ("relation-ite-condition", "(=> (ite (P x) cond true) done)", "inside a theory guard"),
+    ("relation-ite-branch", "(=> (ite cond (P x) true) done)", "inside a theory guard"),
+    ("relation-int-ite", "(P (ite (P x) x 0))", "inside a relation argument"),
+    ("quantified-ite", "(P (ite (exists ((y Int)) (= x y)) x 0))", "leading forall"),
     ("relation-disjunction", "(=> (or (> x 0) (P x)) done)", "inside a theory guard"),
     ("relation-implication", "(=> (=> cond (P x)) done)", "inside a theory guard"),
     ("relation-under-negations", "(=> (not (not (P x))) done)", "inside a theory guard"),
@@ -301,5 +305,5 @@ def main : IO Unit := do
   checkNativeIdentity
   checkProblems
   checkRejectedProblems
-  IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (13 clauses)"
+  IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (14 clauses)"
   IO.println "Metadata, clause diagnostics, and whole-problem rejection passed; no solver query invoked."

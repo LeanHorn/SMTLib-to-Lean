@@ -52,8 +52,29 @@ Boolean operators follow [SMT-LIB Core](https://smt-lib.org/theories-Core.shtml)
 `xor` accepts two or more Boolean operands and means an odd number are true.
 `distinct` accepts two or more Bool operands or two or more Int operands and
 compares every pair. Both work inside quantified formulas and CHC theory guards.
-For example, `(distinct x y z)` becomes `x ≠ y ∧ x ≠ z ∧ y ≠ z`.
-Generated xor expressions use ordinary `∧`, `∨`, and `¬`, keeping output in Lean core.
+Generated files define each used operator helper once, above the query statement:
+
+```lean
+def SMT.xor (p q : Prop) : Prop := (p ∧ ¬q) ∨ (¬p ∧ q)
+def SMT.distinct3 {α : Sort u} (x y z : α) : Prop := x ≠ y ∧ x ≠ z ∧ y ≠ z
+```
+
+The query then uses `SMT.xor p q` and `SMT.distinct3 x y z` directly.
+`distinct2`, `distinct3`, etc. cover each argument count used in the input;
+the same helper works for Bool and Int. Multi-operand xor uses nested calls.
+Unused helpers are omitted. Definitions and calls remain in the same `Query.lean`,
+importing only Lean core.
+
+`(ite condition yes no)` supports Bool or Int branches of the same sort, including
+nested conditionals, arithmetic, function arguments, and quantified SMT conditions.
+It becomes Lean `if condition then yes else no`. CHC conditions remain relation-free
+and quantifier-free, like other theory guards.
+
+When a condition needs classical decidability, the generated definition uses
+`noncomputable def` with a local `classical` block. Its only permitted axiom
+dependencies are Lean's `propext`, `Classical.choice`, and `Quot.sound`.
+Statements still reject `sorry` and query-specific axioms; classical decidability
+adds no assumption about the SMT query and does not prove its theorem.
 
 Run the automated demo checks with Python 3 installed:
 
@@ -107,6 +128,7 @@ The integer fragment follows [SMT-LIB Ints](https://smt-lib.org/theories-Ints.sh
 | `abs` | One `Int` | `Int` | `if x < 0 then -x else x` |
 | `=` | Two or more of the same supported sort | `Bool` | Conjunction of adjacent equalities |
 | `distinct` | Two or more of the same supported sort | `Bool` | Conjunction of all pairwise inequalities |
+| `ite` | A `Bool` condition and two `Int` branches | `Int` | `if condition then yes else no` |
 | `<`, `<=`, `>`, `>=` | Two or more `Int` | `Bool` | Conjunction of adjacent comparisons |
 
 SMT `Bool` results become Lean propositions. All generated code uses Lean core;
@@ -281,6 +303,7 @@ Supported inputs:
 - Functions with one or more `Bool`/`Int` arguments and either result sort, including
   nested calls and compound Boolean arguments. Bool results are Lean propositions.
 - Boolean literals and `not`, `and`, `or`, `xor`, and `=>`.
+- `ite` with a Boolean condition and two Bool branches or two Int branches.
 - `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
 - Integer literals, unary `-`, and `=`/`distinct` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
@@ -335,7 +358,7 @@ The `sorry` warning is expected. Typechecking verifies the generated statement;
 the proof that satisfying relations exist remains unfinished. Status metadata
 does not change this target. This command does not run Flex.
 
-The combined fixture exercises thirteen clauses, including nonlinear guards,
+The combined fixture exercises fourteen clauses, including nonlinear and conditional guards,
 nullary relations, multiple relation premises, and shadowed binders:
 
 ```sh
@@ -383,10 +406,10 @@ The supported rule shape is:
 
 Leading binders and premises may be absent; the head may instead be `false`.
 Chained implications and any number of positive relation premises are accepted.
-Guards support Bool/Int literals and variables, `not`, `and`, `or`, `xor`, `=>`, `=`, `distinct`,
+Guards support Bool/Int literals and variables, `not`, `and`, `or`, `xor`, `=>`, `=`, `distinct`, `ite`,
 `+`, `-`, `*`, `abs`, and comparisons. Guard disjunctions and negations stay intact:
 `(not cond)` is valid for a bound Bool, while `(not (P x))` is rejected. Relations
-inside equality, distinct, xor, disjunction, or another relation's arguments are also rejected.
+inside equality, distinct, xor, conditionals, disjunction, or another relation's arguments are also rejected.
 Other theories/operators remain unsupported.
 
 For lh_sum_rec, validation yields one guarded fact, one recursive rule, and one
@@ -410,14 +433,14 @@ clause propositions to a callback. Native identities preserve shadowed bindings;
 unused variables and relations are retained. Facts have no added premise, and
 false heads become Lean `False`.
 
-`lake exe testTranslation` compares all sixteen clauses from lh_sum_rec and the
+`lake exe testTranslation` compares all seventeen clauses from lh_sum_rec and the
 combined fixture with handwritten Lean propositions and kernel-checks each clause
 after closing its relation parameters. These checks do not prove the clauses.
 
 `Smt2Lean.Translate.defineProblem` combines those clauses into a closed
 `Problem : Prop := ∃ relations, clause₁ ∧ … ∧ clauseₙ` definition in memory.
 It retains unused and nullary relations; an empty conjunction is `True`. The
-definition is kernel-checked and has no axiom dependencies. This checks its type,
+definition is kernel-checked, with only the standard Lean axioms above permitted. This checks its type,
 not whether suitable relation interpretations exist. Status metadata never
 changes the proposition.
 
@@ -439,7 +462,8 @@ lake exe testTranslation
 This test also renders twenty-four SMT cases and ten CHC cases, compares the
 re-elaborated statements with the original expressions, and compiles each complete
 file and its isolated statement section using only Lean core. `Refutation` and
-`Problem` have no axiom dependencies; only their proof templates are admitted.
+`Problem` reject admissions and query-specific axioms; conditionals may use the
+standard Lean axioms listed above. Only their proof templates are admitted.
 
 `Smt2Lean.Translate.withAssertions` binds each SMT declaration to a fresh Lean
 parameter of its reconstructed type and reconstructs the assertions using Lean-SMT.
@@ -461,4 +485,4 @@ For assertions `p` and `(not p)`, its body is:
 
 A single assertion gives `∀ p : Prop, p → False`; no assertions give
 `True → False`. Status metadata never changes the target. Every definition is
-kernel-checked and has no axiom dependencies. This checks its type, not its truth.
+kernel-checked with the same axiom restrictions. This checks its type, not its truth.

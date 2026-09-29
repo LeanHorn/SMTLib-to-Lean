@@ -29,5 +29,9 @@
 (assert (= (f (exists ((y Int)) (= y x)) x)
            (f (forall ((y Int)) (R x y p)) 0)))
 (assert (and (forall ((z Int)) (R z x p)) (exists ((z Int)) (R z x p))))
+; Quantified conditions and shadowing must not capture variables in either branch.
+(assert (forall ((p Bool) (x Int))
+  (= (ite (exists ((x Int)) (R x x p))
+          (ite p x 0) (ite (forall ((p Bool)) p) 1 x)) x)))
 (check-sat)
 (exit)

@@ -55,7 +55,7 @@ absent/sat/unsat/unknown status metadata. The same clauses under `ALL` or no log
 produce `Refutation`; HORN text in comments, names, and metadata cannot select
 CHC mode. Empty HORN input also translates. Invalid CHC declarations, later
 clauses/operators, missing checks, and malformed tails fail with source context
-and create no output. The combined twelve-clause CHC fixture also compiles through
+and create no output. The combined fourteen-clause CHC fixture also compiles through
 the CLI. Source checks cover multiline commands, quoted text, CRLF input, and
 filenames containing newlines. Moving the input changes only source comments.
 Edited CHC proof work survives attempted overwrites.
@@ -64,14 +64,22 @@ Edited CHC proof work survives attempted overwrites.
 contexts, and closed Bool/Int refutations against handwritten Lean propositions.
 It checks all 28 truth assignments for xor with two, three, and four operands
 against odd parity, plus four integer distinct cases, using kernel-checked proofs.
+Eight Boolean ite truth cases and four integer ite cases check branch selection,
+negative/large values, and nesting.
 These cases and a quantified function-argument example bring the total to 24 refutations.
 It also compares the printed statements with the original expressions and compiles
 each `Query.lean` and its isolated statement section using only Lean core.
-Statements have no axiom dependencies; only the following proof templates contain
-admissions. Existing proof work is
+Used xor/distinct helpers must appear exactly once before the query statement.
+Tests compare the emitted helper bodies with their checked definitions, then
+unfold helpers in each environment separately to compare the complete statements.
+Tests check exact axiom dependencies: none for the earlier examples, and only
+`propext`, `Classical.choice`, and `Quot.sound` for classical conditionals.
+Separate rejection cases check that admissions and fabricated axioms remain
+forbidden, including through another definition. Only proof templates contain
+admissions in generated output. Existing proof work is
 preserved. The tests reuse the combined fixtures below.
 
-The translation test also reconstructs all sixteen CHC clauses from lh_sum_rec
+The translation test also reconstructs all seventeen CHC clauses from lh_sum_rec
 and the combined CHC fixture. Each clause is compared with a handwritten Lean
 proposition and kernel-checked after closing its relation parameters. Checks cover
 unused variables/relations, shadowed binders, mixed sorts, nullary relations,
@@ -81,7 +89,7 @@ Complete CHC problems are compared with handwritten existential propositions,
 including both fixtures, empty inputs, unused relations, nullary facts, and
 inconsistent clauses. Absent/sat/unsat/unknown status variants of lh_sum_rec keep
 the same target. All ten `Problem` definitions are closed, kernel-checked, and
-free of axioms. The emitter writes each CHC case to one temporary `Query.lean`
+checked against their expected axiom dependencies. The emitter writes each CHC case to one temporary `Query.lean`
 with Statements before Proofs. The complete file and isolated statements compile
 using only Lean core; only the `problem` theorem depends on `sorryAx`. Edited files
 survive attempted overwrites.
@@ -100,7 +108,7 @@ All generated test files go into temporary directories and are removed afterward
 - `contradiction.smt2`: the smallest demo, `p` and `not p`.
 - `connectives.smt2`: all supported connectives, both declaration forms, quoted
   names, an unused declaration, metadata, and exit in one query. Includes xor
-  with two to four operands and Boolean distinct, including three operands.
+  with two to four operands, Boolean distinct, and nested Boolean conditionals.
 - `empty.smt2`: a query with no assertions.
 
 `translation/int/` keeps three reusable queries:
@@ -109,14 +117,15 @@ All generated test files go into temporary directories and are removed afterward
   chained equality, unary minus, zero, and integers beyond 64 bits.
 - `arithmetic.smt2`: operand order, nonlinear multiplication, nested negation/abs,
   absolute value at negative/zero/positive inputs, all four comparison chains,
-  and pairwise distinct with a repeated nonadjacent operand.
+  pairwise distinct with a repeated nonadjacent operand, and integer conditionals
+  with both symbolic and decidable conditions.
 - `bounds.smt2`: the small contradiction `x ≥ 0` and `x < 0`.
 
 `translation/functions/` keeps two queries:
 
 - `applications.smt2`: Bool/Int functions and predicates, mixed signatures, nested
   calls, compound Boolean arguments, quoted `Int.add`/`True` names, and unused
-  parameters. Tests check argument order, missing mappings, and fresh parameters
+  parameters, and Bool/Int conditional arguments. Tests check argument order, missing mappings, and fresh parameters
   across nested reconstructions and separate inputs with reused names.
 - `congruence.smt2`: the small contradiction `x = y` and `f(x) ≠ f(y)`.
 
@@ -126,6 +135,8 @@ All generated test files go into temporary directories and are removed afterward
   premise-only and unused variables, quoted names, and quantified Boolean arguments.
   A `let` alias keeps an outer variable accessible under an inner binder with the
   same name. This checks native identity rather than name-based lookup.
+  Conditional branches retain outer variables when their conditions introduce
+  shadowed existential/universal binders.
 - `quantified.smt2`: `∀ x, P x` together with `∃ x, ¬P x`, with a completed README proof.
 
 The parser test also constructs native terms with a dangling variable and a
@@ -136,14 +147,16 @@ the same subterm was already accepted under a quantifier.
 one existential relation and all three original clauses, followed by an unfinished
 proof. Its source comments identify the original query and clause ranges.
 
-`translation/chc/clauses.smt2` combines six relation declarations and thirteen clauses:
-five bare facts, a quantified fact, six rules, and a bare false assertion. It
+`translation/chc/clauses.smt2` combines six relation declarations and fourteen clauses:
+five bare facts, a quantified fact, seven rules, and a bare false assertion. It
 covers mixed sorts, arithmetic, quoted names, unused relations/variables, chained
 implications, and shadowed leading binders. Tests preserve argument and premise
 order before and after flattening premise conjunctions. A nonlinear rule combines
 three relation premises with arithmetic, nested conjunctions, and Boolean guards;
 conjunctions inside a guard's `or` stay intact. Another rule combines xor and
 Bool/Int distinct guards with nested operators in a relation argument.
+Conditional guards and both Bool/Int conditional relation arguments are included;
+relations and nested quantifiers hidden inside conditions remain rejected.
 The unedited lh_sum_rec fixture
 retains its three clauses with binder counts 3/5/3, heads k_1/k_1/false, and
 relation-premise counts 0/1/1 under absent/sat/unsat/unknown status metadata.

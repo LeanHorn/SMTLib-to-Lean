@@ -17,6 +17,11 @@
 (assert (distinct x y))
 (assert (distinct x y z 7))
 (assert (not (distinct x y x)))
+; Integer conditionals with symbolic and decidable conditions, including nesting.
+(assert (= (+ (ite p x y) 1) (ite (< x y) (+ x 1) (- y 1))))
+(assert (= (ite p (ite (> x y) x y) z)
+           (ite (not p) z (ite (> x y) x y))))
+(assert (= (ite (< x y) x y) (ite true (ite false y x) y)))
 (assert (=> p (and (< x y z (+ x 1))
                    (<= x y z (+ x 2))
                    (> x y z (- x 1))

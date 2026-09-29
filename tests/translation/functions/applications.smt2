@@ -29,5 +29,7 @@
 (assert (= (b (b true)) (b false)))
 (assert (= (choose (= x y) (- x y)) (|True| (=> p (P (f x))))))
 (assert (= (test (choose (P (f x)) (g x y)) (b p)) (b (= p (P x)))))
+(assert (= (choose (ite p (P x) (not (P y))) (ite (P x) (f y) x))
+           (f (ite p x y))))
 (check-sat)
 (exit)

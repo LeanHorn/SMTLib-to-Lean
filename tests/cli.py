@@ -155,7 +155,7 @@ def main():
         output = tmp / "combined-chc"
         run(CHC / "clauses.smt2", "--out", output)
         combined = check_generated(lean, output, goal="Problem")
-        assert combined.count("(clause ") == 13
+        assert combined.count("(clause ") == 14
 
         query = horn_output / "Query.lean"
         edited = horn_source + "\n-- User CHC proof work.\n"
@@ -227,7 +227,9 @@ def main():
             "(set-logic QF_UFLIA)\n(declare-fun f (Int) Int)\n(assert (= (f true) 0))\n(check-sat)",
             "(set-logic ALL)\n(assert (forall ((x Real)) true))\n(check-sat)",
             "(set-logic QF_LIA)\n(assert (forall ((x Int)) (> x 0)))\n(check-sat)",
-            "(set-logic ALL)\n(assert (exists ((p Bool)) (ite p true false)))\n(check-sat)",
+            "(set-logic ALL)\n(assert (exists ((p Bool)) (= (ite p 1 (div 1 0)) 1)))\n(check-sat)",
+            "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
+            "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
             "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
@@ -255,7 +257,7 @@ def main():
         assert '":7:1-8:11 (assertion 1, command 4)' in shifted_code
         assert without_sources(shifted_code) == without_sources(generated)
         for name, text, location, reason in [
-            ("multiline", "; λ\n(set-logic ALL)\n  (assert\n    (ite true true false))\n(check-sat)",
+            ("multiline", "; λ\n(set-logic ALL)\n  (assert\n    (= (div 1 0) 0))\n(check-sat)",
              "3:3: command 2:", "unsupported operator"),
             ("bad-string", '(set-logic QF_UF)\n(set-info :source "unfinished',
              "2:30: command 2:", "unterminated string"),

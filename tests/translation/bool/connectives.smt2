@@ -32,6 +32,10 @@
 ; Bool distinct compares every pair; three Boolean values cannot all differ.
 (assert (distinct p false))
 (assert (not (distinct p q r)))
+; Boolean conditionals, nested conditions, and equality between propositions.
+(assert (ite p q r))
+(assert (ite (ite p q r) (not false) false))
+(assert (ite (= p q) p (not p)))
 (check-sat)
 (set-info :status unknown)
 (exit)
