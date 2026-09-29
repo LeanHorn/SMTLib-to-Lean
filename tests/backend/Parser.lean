@@ -15,6 +15,7 @@ private def checkAccepted (name input : String) (names : Array String) (count : 
     calls.modify (· + 1)
     require (query.declarations.map (·.name) == names) s!"{name}: wrong declarations"
     require (query.assertions.size == count) s!"{name}: wrong assertion count"
+    require (query.assertionSources.size == count) s!"{name}: missing assertion locations"
     require (query.invoked == invoked) s!"{name}: unexpected invocation trace: {query.invoked}"
     for left in query.declarations do
       for right in query.declarations do
@@ -33,7 +34,7 @@ private def checkRejected (name input : String) (ordinal : Nat) (reason : String
   | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
   | .error error =>
     let message := toString error
-    require (message.contains s!"{name}: command {ordinal}:")
+    require (message.contains s!"{name}:" && message.contains s!": command {ordinal}:")
       s!"{name}: wrong error location: {message}"
     require (message.contains reason) s!"{name}: wrong rejection reason: {message}"
 
@@ -138,7 +139,7 @@ private def checkRejectedQueries : IO Unit := do
   -- Each invalid script needs its own parse: the first error stops validation.
   let rejected : Array (String × String × Nat × String) := #[
     ("malformed", "(set-logic QF_UF)\n(assert (and true (not false))",
-      2, "EOF_TOK"),
+      2, "unexpected EOF"),
     ("invalid-logic", "(set-logic NOT_A_LOGIC)\n(check-sat)",
       1, "cannot parse logic string"),
     ("real", "(set-logic ALL)\n(declare-const x Real)\n(check-sat)",
@@ -200,7 +201,7 @@ private def checkRejectedQueries : IO Unit := do
     ("early-exit", "(set-logic QF_UF)\n(exit)",
       2, "exit before check-sat"),
     ("malformed-tail", "(set-logic QF_UF)\n(check-sat)\n(assert",
-      3, "EOF_TOK"),
+      3, "unexpected EOF"),
     ("undeclared", "(set-logic QF_UF)\n(assert p)\n(check-sat)",
       2, "p"),
     ("definition", "(set-logic QF_UF)\n(define-fun p () Bool true)\n(check-sat)",
@@ -248,8 +249,39 @@ private def checkBoundScopes : IO Unit := (do
       "validation accepted a variable outside its binding scope"
   ).runIO
 
+private def checkSourceLocations : IO Unit := do
+  let input := "; ignored ( )\r\n(set-logic QF_UF)\r\n  (declare-const |p (;)| Bool)\r\n" ++
+    "(assert\r\n  |p (;)|)\r\n(check-sat) ; trailing"
+  checkAccepted "locations.smt2" input #["p (;)"] 1
+    #["set-logic", "declare-fun", "assert"] fun query => do
+      require (query.commands.size == 4) "lost source commands"
+      require (query.commands[2]!.text == "(assert\r\n  |p (;)|)") "rewrote original bytes"
+      let some declaration := query.declarations[0]?.bind (·.source)
+        | throw (.error "missing declaration source")
+      require (declaration.span.start.line == 3 && declaration.span.start.column == 3)
+        "wrong declaration location"
+      let source := query.assertionSources[0]!
+      require (source.number == 3 && source.span.start.line == 4 && source.span.start.column == 1 &&
+        source.span.stop.line == 5 && source.span.stop.column == 11) "wrong multiline assertion span"
+      require (query.source.map (·.span.start.line) == some 6) "wrong check-sat location"
+  for (input, location, reason) in #[
+    ("; α\n(set-logic ALL)\n  (assert\n    (ite true true false))\n(check-sat)",
+      "3:3: command 2:", "unsupported operator"),
+    ("(set-logic QF_UF)\n(assert true)\n(check-sat)\n(assert",
+      "4:8: command 4:", "unterminated command"),
+    ("(set-logic QF_UF)\n  (assert missing)\n(check-sat)",
+      "2:3: command 2:", "missing")
+  ] do
+    let inspected ← IO.mkRef false
+    match ← (parseAndInspectQuery input (fun _ => inspected.set true) (name := "located.smt2")).run with
+    | .ok _ => throw (IO.userError "accepted invalid located query")
+    | .error error => require ((toString error).contains s!"located.smt2:{location}" &&
+        (toString error).contains reason) s!"wrong located error: {error}"
+    require (!(← inspected.get)) "invalid located query reached inspect"
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkRejectedQueries
   checkBoundScopes
+  checkSourceLocations
   IO.println "Parser passed: Bool/Int queries, binding identity/scope, and rejection diagnostics"

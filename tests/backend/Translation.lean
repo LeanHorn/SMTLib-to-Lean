@@ -36,8 +36,12 @@ private def checkUnmapped (query : ParsedQuery) : MetaM Unit := do
     pure none
   catch error => pure (some error)
   let some error := error? | throwError "an unmapped SMT name was accepted"
-  unless (← error.toMessageData.toString).contains "undeclared term" do
+  let message ← error.toMessageData.toString
+  unless message.contains "undeclared term" do
     throw error
+  let some source := query.assertionSources[0]? | throwError "missing assertion source"
+  unless message.contains s!"{source.context}: assertion 1:" do
+    throwError "reconstruction error lost its source: {message}"
 
 /-- Even nested reconstructions must not reuse the enclosing query's parameters. -/
 private def checkFunctionIsolation (query : ParsedQuery) : MetaM Unit :=
@@ -53,11 +57,13 @@ private def runQuery (env : Environment) (name input : String)
     discard <| (check query).toIO { fileName := name, fileMap := default } { env }
   ).runIO
 
-private def checkEmission (value : Expr) (kind : GoalKind := .refutation) : MetaM Unit := do
+private def checkEmission (value : Expr) (kind : GoalKind := .refutation)
+    (origin : Option Smt2Lean.Source.Ref := none)
+    (assertions : Array Smt2Lean.Source.Ref := #[]) : MetaM Unit := do
   let (definitionName, theoremName) := match kind with
     | .refutation => (`Refutation, `refutation)
     | .problem => (`Problem, `problem)
-  let source ← render value kind
+  let source ← render value kind origin assertions
   let [statements, proofs] := source.splitOn "-- Proofs\n"
     | throwError "expected one Statements section followed by Proofs"
   unless statements.startsWith "import Init\n\n-- Statements\n\n" &&
@@ -114,7 +120,7 @@ private def checkRefutation (query : ParsedQuery) (expected : Expr) : MetaM Unit
     | throwError "expected a definition named Refutation"
   checkEqual definition.type q(Prop)
   checkEqual definition.value value
-  checkEmission value
+  checkEmission value (origin := query.source) (assertions := query.assertionSources)
 
 private def checkClauseValues (parameters actual expected : Array Expr) : MetaM Unit := do
   unless actual.size == expected.size do throwError "wrong reconstructed clause count"
@@ -181,8 +187,12 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
       pure none
     catch error => pure (some error)
     let some error := error? | throwError "accepted an unmapped relation named True"
-    unless (← error.toMessageData.toString).contains "unmapped CHC relation: True" do
+    let message ← error.toMessageData.toString
+    unless message.contains "unmapped CHC relation: True" do
       throw error
+    let some source := fact.source | throwError "missing clause source"
+    unless message.contains s!"{source.context true}: clause 4:" do
+      throwError "CHC reconstruction error lost its source: {message}"
   IO.println "CHC reconstruction passed: 15 clauses match handwritten Lean propositions"
 
 private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr) : MetaM Unit := do
@@ -196,7 +206,8 @@ private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr) : Me
   checkEqual definition.value value
   unless (← collectAxioms `Problem).isEmpty do
     throwError "Problem depends on axioms"
-  checkEmission value (kind := .problem)
+  checkEmission value (kind := .problem) (origin := problem.source)
+    (assertions := problem.clauses.filterMap (·.source))
 
 private def checkHornProblems (env : Environment) : IO Unit := do
   let path := "tests/chc/lh_sum_rec.smt2"

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import os
+import re
 import subprocess
 import tempfile
 
@@ -11,9 +12,12 @@ FIXTURES = ROOT / "tests/translation/bool"
 INTEGERS = ROOT / "tests/translation/int"
 FUNCTIONS = ROOT / "tests/translation/functions"
 QUANTIFIERS = ROOT / "tests/translation/quantifiers"
+CHC = ROOT / "tests/translation/chc"
 
 
 def run(*args, code=0):
+    args = [arg.relative_to(ROOT) if isinstance(arg, Path) and arg.is_relative_to(ROOT)
+            else arg for arg in args]
     result = subprocess.run(
         [str(EXE), *map(str, args)], cwd=ROOT, capture_output=True, text=True
     )
@@ -21,6 +25,12 @@ def run(*args, code=0):
     if code:
         assert result.stderr and not result.stdout, result
     return result
+
+
+def without_sources(text):
+    """Metadata and filenames may move locations, but must not change Lean code."""
+    return "".join(line for line in text.splitlines(keepends=True)
+                   if not line.startswith("-- Source: "))
 
 
 def check_lean(lean, source, *, complete=False):
@@ -42,6 +52,7 @@ def check_generated(lean, output, *, goal="Refutation"):
     source = query.read_text()
     statements, proofs = source.split("-- Proofs\n", 1)
     assert "-- Statements" in statements and f"def {goal} : Prop" in statements
+    assert "-- Source: " in statements
     assert f"theorem {goal.lower()} : {goal}" in proofs
     assert "sorry" not in statements and "by\n  sorry" in proofs
     check_lean(lean, query)
@@ -61,6 +72,7 @@ def main():
         "bounds": (INTEGERS / "expected/Query.lean").read_text(),
         "congruence": (FUNCTIONS / "expected/Query.lean").read_text(),
         "quantified": (QUANTIFIERS / "expected/Query.lean").read_text(),
+        "lh_sum_rec": (CHC / "expected/Query.lean").read_text(),
     }
     help_text = run("--help").stdout
     assert all(word in help_text for word in ["Usage:", "HORN", "Problem", "Refutation"])
@@ -102,7 +114,8 @@ def main():
                 source, output = tmp / f"{name}-{status}.smt2", tmp / f"{name}-{status}"
                 source.write_text(f"(set-info :status {status})\n" + fixture.read_text())
                 run(source, "--out", output)
-                assert check_generated(lean, output) == expected[name], f"{name}: {status} changed the target"
+                generated = check_generated(lean, output)
+                assert without_sources(generated) == without_sources(expected[name]), f"{name}: {status} changed the target"
 
             # Replace the Proofs section exactly as in the README.
             completed = tmp / name / "Query.lean"
@@ -128,13 +141,21 @@ def main():
         horn_output = tmp / "horn"
         run(horn, "--out", horn_output)
         horn_source = check_generated(lean, horn_output, goal="Problem")
+        assert horn_source == expected["lh_sum_rec"], "lh_sum_rec output changed"
+        assert horn_source.count("(clause ") == 3
         horn_text = horn.read_text()
         for status in [None, "unsat", "unknown"]:
             source, output = tmp / f"horn-{status}.smt2", tmp / f"horn-{status}"
             metadata = "" if status is None else f"(set-info :status {status})"
             source.write_text(horn_text.replace("(set-info :status sat)", metadata))
             run(source, "--out", output)
-            assert check_generated(lean, output, goal="Problem") == horn_source, status
+            generated = check_generated(lean, output, goal="Problem")
+            assert without_sources(generated) == without_sources(horn_source), status
+
+        output = tmp / "combined-chc"
+        run(CHC / "clauses.smt2", "--out", output)
+        combined = check_generated(lean, output, goal="Problem")
+        assert combined.count("(clause ") == 12
 
         query = horn_output / "Query.lean"
         edited = horn_source + "\n-- User CHC proof work.\n"
@@ -158,7 +179,7 @@ def main():
             run(source, "--out", output)
             generated = check_generated(lean, output)
             if smt_source is not None:
-                assert generated == smt_source
+                assert without_sources(generated) == without_sources(smt_source)
             smt_source = generated
 
         # HORN text in comments, names, and metadata must never select CHC mode.
@@ -178,20 +199,20 @@ def main():
         for name, text, location, reason in [
             ("later-clause", horn_prefix +
              "(assert (forall ((x Int)) (=> (not (P x)) false)))\n(check-sat)",
-             "clause 2:", "CHC relation inside a theory guard"),
+             "4:1: query 1: command 4: clause 2:", "CHC relation inside a theory guard"),
             ("later-operator", horn_prefix +
              "(assert (forall ((x Int)) (=> (= (div x 2) 0) (P x))))\n(check-sat)",
-             "command 4: clause 2:", "unsupported operator"),
+             "4:1: query 1: command 4: clause 2:", "unsupported operator"),
             ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
-             "", "unsupported CHC declaration"),
+             "2:1: query 1: command 2:", "unsupported CHC declaration"),
             ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
-             "command 5:", "EOF_TOK"),
-            ("missing-check", horn_prefix, "command 4:", "expected one check-sat"),
+             "5:8: query 1: command 5:", "unterminated command"),
+            ("missing-check", horn_prefix, "4:1: query 1: command 4:", "expected one check-sat"),
         ]:
             source, output = tmp / f"horn-{name}.smt2", tmp / f"horn-{name}"
             source.write_text(text)
             result = run(source, "--out", output, code=1)
-            assert f"{source}: query 1: {location}" in result.stderr, result.stderr
+            assert f"{source}:{location}" in result.stderr, result.stderr
             assert reason in result.stderr, result.stderr
             assert not output.exists()
 
@@ -213,8 +234,39 @@ def main():
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"
             source.write_text(text)
             result = run(source, "--out", output, code=1)
-            assert f"{source}: command " in result.stderr
+            assert re.search(re.escape(str(source)) + r":\d+:\d+: command ", result.stderr), result.stderr
             assert not output.exists()
+
+        # Quoted names and doubled quotes cannot move source boundaries. Keep CRLF bytes.
+        source, output = tmp / "locations\n-- name.smt2", tmp / "locations"
+        text = ('; λ ignored )\r\n(set-logic QF_UF)\r\n'
+                '(set-info :source "(; ""quoted"")")\r\n'
+                '(declare-const |p (;)| Bool)\r\n'
+                '(assert\r\n  |p (;)|)\r\n(check-sat)')
+        source.write_bytes(text.encode())
+        run(source, "--out", output)
+        generated = check_generated(lean, output)
+        assert '\\n-- name.smt2":5:1-6:11 (assertion 1, command 4)' in generated
+        # Move the same assertion and ensure only provenance changes.
+        shifted, shifted_output = tmp / "shifted.smt2", tmp / "shifted"
+        shifted.write_bytes(('\n\n' + text).encode())
+        run(shifted, "--out", shifted_output)
+        shifted_code = check_generated(lean, shifted_output)
+        assert '":7:1-8:11 (assertion 1, command 4)' in shifted_code
+        assert without_sources(shifted_code) == without_sources(generated)
+        for name, text, location, reason in [
+            ("multiline", "; λ\n(set-logic ALL)\n  (assert\n    (ite true true false))\n(check-sat)",
+             "3:3: command 2:", "unsupported operator"),
+            ("bad-string", '(set-logic QF_UF)\n(set-info :source "unfinished',
+             "2:30: command 2:", "unterminated string"),
+            ("extra-close", "(set-logic QF_UF)\n(check-sat)\n  )",
+             "3:3: command 3:", "expected '('"),
+        ]:
+            source, output = tmp / f"{name}.smt2", tmp / name
+            source.write_text(text)
+            result = run(source, "--out", output, code=1)
+            assert f"{source}:{location}" in result.stderr, result.stderr
+            assert reason in result.stderr and not output.exists(), result.stderr
 
         # Existing empty directories, files, and symlinks must also be refused.
         empty_dir, occupied_file, link = tmp / "existing", tmp / "file", tmp / "link"
@@ -231,7 +283,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: 25 SMT and 5 CHC standalone translations, metadata, and 4 completed proofs")
+    print("Demo passed: 27 SMT and 6 CHC standalone translations, source locations, and 4 completed proofs")
 
 
 if __name__ == "__main__":

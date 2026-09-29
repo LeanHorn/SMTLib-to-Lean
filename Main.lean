@@ -19,9 +19,13 @@ private def translateFile (input output : System.FilePath) : IO Unit := do
   (Backend.parseAndInspectQuery text (name := input.toString) (mode := .auto) fun query => do
     let translation : MetaM String ← if query.logic == some "HORN" then do
       let problem ← Chc.validateQuery query input.toString
-      pure do Emit.render (← Translate.defineProblem problem) (kind := .problem)
+      pure do
+        Emit.render (← Translate.defineProblem problem) (kind := .problem)
+          (source := query.source) (assertions := query.assertionSources)
     else
-      pure do Emit.render (← Translate.defineRefutation query)
+      pure do
+        Emit.render (← Translate.defineRefutation query)
+          (source := query.source) (assertions := query.assertionSources)
     let (source, _, _) ← translation.toIO
       { fileName := input.toString, fileMap := default } { env }
     Emit.writeFile output source

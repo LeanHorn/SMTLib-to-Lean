@@ -26,6 +26,10 @@ root = "tests.backend.Reconstruction"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "testSource"
+root = "tests.backend.Source"
+
+[[lean_exe]]
 name = "testParser"
 root = "tests.backend.Parser"
 

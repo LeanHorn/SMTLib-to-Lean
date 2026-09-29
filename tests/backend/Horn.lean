@@ -19,8 +19,8 @@ private def checkRejected (name input : String) (ordinal : Nat) (reason : String
   | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
   | .error error =>
     let message := toString error
-    let context := if mode == .chc then s!"{name}: query 1" else name
-    require (message.contains s!"{context}: command {ordinal}:" && message.contains reason)
+    let context := if mode == .chc then "query 1: " else ""
+    require (message.contains s!"{name}:" && message.contains s!": {context}command {ordinal}:" && message.contains reason)
       s!"{name}: wrong diagnostic: {message}"
 
 private def checkParser : IO Unit := do
@@ -284,7 +284,7 @@ private def checkRejectedProblems : IO Unit := do
     | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
     | .error error =>
       let message := toString error
-      require (message.contains s!"{path}: query 1:" && message.contains "clause 3:" &&
+      require (message.contains s!"{path}:7:1: query 1: command 7:" && message.contains "clause 3:" &&
         message.contains reason) s!"{name}: wrong diagnostic: {message}"
     require (!(← inspected.get)) s!"{name}: returned a partial problem"
 

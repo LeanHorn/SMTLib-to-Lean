@@ -3,7 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-lake build smt2lean testReconstruction
+lake build smt2lean testSource testReconstruction
+lake env .lake/build/bin/testSource
 lake env .lake/build/bin/testReconstruction
 lake env python3 tests/cli.py
 
