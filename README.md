@@ -164,6 +164,46 @@ relation premises, guards, and relation arguments. Expanded terms retain the
 same operator and CHC restrictions. The `sorry` warning is expected for the
 unfinished proof template.
 
+## Translate definitions and sort aliases
+
+Nonrecursive `define-fun` supports Bool/Int results and parameters, including no
+parameters. Bodies can refer to earlier declarations and definitions and use the
+supported operators, `let`, `ite`, and quantifiers.
+
+```smt2
+(define-sort I () Int)
+(declare-const x I)
+(define-fun next () I (+ x 1))
+(define-fun bump ((n I)) I (+ next n))
+(assert (= (bump 2) 7))
+```
+
+The assertion becomes `x + 1 + 2 = 7`. Only `x` becomes a Lean parameter;
+`next` and `bump` are expanded using their bodies. Globals keep their original
+bindings even when callers reuse their names. Substitution also prevents a
+quantifier inside a definition from capturing a caller's variable.
+
+`define-sort` supports Bool/Int aliases, chains, and parameterized aliases such as
+`(define-sort Id (T) T)`. Resolved sorts must be Bool or Int; aliases introduce no
+new Lean types. They work in declarations, definition signatures, and binders.
+
+Every definition body is checked when declared, including unused definitions.
+Recursive definitions, forward references, unsupported bodies/signatures, and
+unsupported alias bodies are rejected at their source command. cvc5 checks
+argument sorts and alias arity. Definition equations stay internal; they are
+never added to the translated query as extra assertions.
+
+```sh
+lake exe smt2lean tests/translation/bindings/definitions.smt2 --out definitions-demo
+lake env lean definitions-demo/Query.lean
+lake exe smt2lean tests/translation/chc/definitions.smt2 --out definitions-chc-demo
+lake env lean definitions-chc-demo/Query.lean
+```
+
+CHC helpers expand before Horn validation. Only declared relations become
+existential parameters; helper predicates add none. The expanded clauses must
+still satisfy the supported Horn shape. Both demos have unfinished `sorry` proofs.
+
 ## Translate functions and predicates
 
 Functions can take any mixture of `Bool` and `Int` arguments and return either
@@ -332,6 +372,8 @@ Supported inputs:
 - Boolean literals and `not`, `and`, `or`, `xor`, and `=>`.
 - `ite` with a Boolean condition and two Bool branches or two Int branches.
 - Simultaneous and nested `let` bindings over Bool/Int expressions, expanded by cvc5.
+- Nonrecursive Bool/Int `define-fun`, expanded before reconstruction and CHC validation.
+- `define-sort` aliases and parameterized aliases resolving to Bool/Int.
 - `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
 - Integer literals, unary `-`, and `=`/`distinct` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
@@ -344,7 +386,7 @@ Supported inputs:
 
 The driver validates every declaration and assertion, then calls `inspect` once
 with a `ParsedQuery`: optional logic, declarations (SMT names and native term identities), assertion
-terms, source locations, original command text, and executed command names. cvc5 reports both declaration spellings as
+terms, checked definitions with their source locations, original command text, and executed command names. cvc5 reports both declaration spellings as
 `declare-fun` in this trace. No query command is executed.
 
 Unsupported input is rejected before `inspect` runs, including content after

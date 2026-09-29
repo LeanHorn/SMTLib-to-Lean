@@ -147,6 +147,74 @@ private def checkAcceptedQueries : IO Unit := do
     "(set-logic UF)\n(assert (forall ((p Bool)) (exists ((q Bool)) (= p q))))\n(check-sat)"
     #[] 1 #["set-logic", "assert"]
 
+private def checkDefinitions : IO Unit := do
+  let path := "tests/translation/bindings/definitions.smt2"
+  checkAccepted path (← IO.FS.readFile path) #["x", "p", "f", "later"] 8
+    (#["set-logic"] ++ Array.replicate 5 "define-sort" ++ Array.replicate 3 "declare-fun" ++
+      Array.replicate 8 "define-fun" ++ #["assert", "define-fun", "define-fun"] ++
+      Array.replicate 6 "assert" ++ #["declare-fun", "assert"])
+    fun query => do
+      require (query.definitions.size == 10) "lost checked definitions"
+      for definition in query.definitions do
+        require (query.commands[definition.source.number - 1]!.text.startsWith "(define-fun")
+          "definition lost its source command"
+      let some x := query.declarations[0]? | throw (.error "missing x")
+      require (query.assertions[0]![0]![0]! == x.term)
+        "nullary definition lost its definition-time global"
+      for term in query.assertions do validateAssertion term query.declarations
+  for (logic, body, trace) in #[
+    ("QF_UF", "(define-fun p () Bool true)", #["define-fun"]),
+    ("QF_LIA", "(define-fun id ((x Int)) Int x)", #["define-fun"]),
+    ("ALL", "(define-sort |Alias (;)| (|T (;) |) |T (;) |)", #["define-sort"]),
+    ("ALL", "(define-sort Ignore (T) Int) (define-sort Chain (T) (Ignore T))",
+      #["define-sort", "define-sort"])
+  ] do
+    checkAccepted "unused definitions" s!"(set-logic {logic})\n{body}\n(check-sat)"
+      #[] 0 (#["set-logic"] ++ trace)
+  -- A linear native DAG must not be traversed as an exponentially large tree.
+  let mut shared := "(set-logic QF_LIA) (define-fun f0 ((x Int)) Int (+ x 1))"
+  for i in [1:33] do
+    shared := shared ++ s!"(define-fun f{i} ((x Int)) Int (+ (f{i-1} x) (f{i-1} x)))"
+  shared := shared ++ "(assert (= (f32 0) 0)) (check-sat)"
+  checkAccepted "shared definition bodies" shared #[] 1
+    (#["set-logic"] ++ Array.replicate 33 "define-fun" ++ #["assert"])
+
+  let rejected : Array (String × String × Nat × String) := #[
+    ("unused-div", "(define-fun bad () Int (div 1 2))", 2, "INTS_DIVISION"),
+    ("unused-mod", "(define-fun bad ((x Int)) Int (mod x 2))", 2, "INTS_MODULUS"),
+    ("unused-branch", "(define-fun bad () Int (ite true 0 (div 1 0)))", 2, "INTS_DIVISION"),
+    ("unused-real", "(define-fun bad () Real 0.0)", 2, "unsupported definition signature"),
+    ("unused-param", "(define-fun bad ((x Real)) Int 0)", 2, "unsupported definition signature"),
+    ("recursive", "(define-fun bad ((x Int)) Int (bad x))", 2, "not declared"),
+    ("forward", "(define-fun a () Int b) (define-fun b () Int 0)", 2, "not declared"),
+    ("recursive-command", "(define-fun-rec f ((x Int)) Int x)", 2, "unsupported command"),
+    ("duplicate", "(define-fun f () Int 1) (define-fun f () Int 2)", 3, "f"),
+    ("declare-defined", "(define-fun f () Int 1) (declare-const f Int)", 3, "f"),
+    ("define-declared", "(declare-const f Int) (define-fun f () Int 1)", 3, "f"),
+    ("escape", "(define-fun f ((x Int)) Int x) (assert (= x 0))", 3, "not declared"),
+    ("arity", "(define-fun f ((x Int) (y Int)) Int x) (assert (= (f 1) 0))", 3, "partially apply"),
+    ("argument", "(define-fun f ((x Int)) Int x) (assert (= (f true) 0))", 3, "type"),
+    ("result", "(define-fun f () Int true)", 2, "invalid sort"),
+    ("discarded-argument", "(define-fun f ((x Int)) Int 0) (assert (= (f (div 1 0)) 0))", 3, "INTS_DIVISION"),
+    ("discarded-body", "(define-fun f ((x Int)) Int 0) (define-fun g () Int (f (div 1 0)))", 3, "INTS_DIVISION"),
+    ("alias-real", "(define-sort Bad () Real)", 2, "unsupported sort alias"),
+    ("alias-array", "(define-sort Bad (T) (Array T T))", 2, "unsupported sort alias"),
+    ("alias-bv", "(define-sort Bad () (_ BitVec 8))", 2, "unsupported sort alias"),
+    ("alias-unknown", "(define-sort Bad () Missing)", 2, "declared"),
+    ("alias-recursive", "(define-sort Bad () Bad)", 2, "declared"),
+    ("alias-forward", "(define-sort A () B) (define-sort B () Int)", 2, "declared"),
+    ("alias-arity", "(define-sort Id (T) T) (declare-const x (Id Int Bool))", 3, "arity"),
+    ("alias-expansion", "(define-sort Id (T) T) (declare-const x (Id Real))", 3, "unsupported declaration sort"),
+    ("alias-binder", "(define-sort Id (T) T) (assert (forall ((x (Id Real))) true))", 3, "unsupported bound variable sort"),
+    ("after-check-definition", "(check-sat) (define-fun f () Int 0)", 3, "after check-sat"),
+    ("after-check-alias", "(check-sat) (define-sort I () Int)", 3, "after check-sat")
+  ]
+  for (name, body, ordinal, reason) in rejected do
+    checkRejected s!"definition-{name}" s!"(set-logic ALL)\n{body}\n(check-sat)" ordinal reason
+  checkRejected "definition-quantified-in-qf"
+    "(set-logic QF_LIA) (define-fun f () Bool (forall ((x Int)) (= x x))) (check-sat)"
+    2 "quantifiers require"
+
 private def checkRejectedQueries : IO Unit := do
   -- Each invalid script needs its own parse: the first error stops validation.
   let rejected : Array (String × String × Nat × String) := #[
@@ -240,8 +308,6 @@ private def checkRejectedQueries : IO Unit := do
       3, "unexpected EOF"),
     ("undeclared", "(set-logic QF_UF)\n(assert p)\n(check-sat)",
       2, "p"),
-    ("definition", "(set-logic QF_UF)\n(define-fun p () Bool true)\n(check-sat)",
-      2, "unsupported command: define-fun"),
     ("option", "(set-logic QF_UF)\n(set-option :produce-models true)\n(check-sat)",
       2, "unsupported command: set-option"),
     ("metadata", "(set-info :smt-lib-version 2.0)\n(set-logic QF_UF)\n(check-sat)",
@@ -278,6 +344,22 @@ private def checkBoundScopes : IO Unit := (do
   let body ← tm.mkTerm .EQUAL #[x, x]
   let quantified ← tm.mkTerm .FORALL #[variables, body]
   validateAssertion quantified #[]
+  -- Force a caller variable to share the definition's binder identity.
+  let y ← tm.mkVar int "y"
+  let bool ← tm.getBooleanSort
+  let f ← tm.mkConst (← tm.mkFunctionSort #[int] bool) "f"
+  let body ← tm.mkTerm .EXISTS #[← tm.mkTerm .VARIABLE_LIST #[y], ← tm.mkTerm .EQUAL #[x, y]]
+  let source : Smt2Lean.Source.Ref := {
+    file := "capture.smt2", number := 1, span := { start := {}, stop := {} } }
+  let definition : ParsedDefinition := { symbol := f, parameters := #[x], body, source }
+  let call ← tm.mkTerm .APPLY_UF #[f, y]
+  let caller ← tm.mkTerm .FORALL #[← tm.mkTerm .VARIABLE_LIST #[y], call]
+  let expanded ← expandDefinitions tm #[definition] caller
+  validateAssertion expanded #[]
+  let inner := expanded[1]!
+  let fresh := inner[0]![0]!
+  require (fresh != y && inner[1]![0]! == y && inner[1]![1]! == fresh)
+    "definition substitution captured its caller's variable"
   -- The quantified occurrence is visited first; it must not validate its sibling.
   let escaped ← tm.mkTerm .AND #[body, quantified]
   let wrongIdentity ← tm.mkTerm .FORALL #[variables, ← tm.mkTerm .EQUAL #[x, other]]
@@ -323,6 +405,7 @@ private def checkSourceLocations : IO Unit := do
 def main : IO Unit := do
   checkAcceptedQueries
   checkRejectedQueries
+  checkDefinitions
   checkBoundScopes
   checkSourceLocations
   IO.println "Parser passed: Bool/Int queries, binding identity/scope, and rejection diagnostics"

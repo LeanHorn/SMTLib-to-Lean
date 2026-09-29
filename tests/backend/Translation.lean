@@ -183,6 +183,36 @@ private def checkLetBindings (env : Environment) : IO Unit := do
         ((True = ((1 : Int) > 0)) ∧ (False = ((2 : Int) > 0)) ∧ (p = (x > 0)))) → False)
   IO.println "Let bindings passed: 9 Bool/Int assertions match handwritten expansions and standalone output"
 
+private def checkDefinitions (env : Environment) : IO Unit := do
+  let path := "tests/translation/bindings/definitions.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    withAssertions query fun parameters assertions => do
+      let #[x, p, f, later] := parameters | throwError "definitions became free parameters"
+      let x : Q(Int) := x
+      let p : Q(Prop) := p
+      let f : Q(Int → Int) := f
+      let later : Q(Int) := later
+      let expected : Array Expr := #[
+        q($x + 1 = $x + 1), q(($x + 1) + 1 = $f $x),
+        q((if $p then ($x + 1) + 1 else $x + 1) = (if $p then ($x + 1) + 1 else $x + 1)),
+        q(∀ (a : Int) (_b : Prop), ($p ∧ a > $x + 1) = ($p ∧ a > $x + 1)),
+        q((if False then (99 : Int) + 1 else $x + 1) = $x + 1),
+        q(∀ y : Int, ∃ z : Int, y = z), q(∀ q r : Prop, q = r),
+        q(($later + 1) + 1 = ($later + 1) + 1)]
+      unless assertions.size == expected.size do throwError "wrong definition assertion count"
+      for actual in assertions, wanted in expected do checkEqual actual wanted
+    checkRefutation query (usesClassical := true) q(∀ (x : Int) (p : Prop) (f : Int → Int) (later : Int),
+      (x + 1 = x + 1 ∧ (x + 1) + 1 = f x ∧
+        (if p then (x + 1) + 1 else x + 1) = (if p then (x + 1) + 1 else x + 1) ∧
+        (∀ (a : Int) (_b : Prop), (p ∧ a > x + 1) = (p ∧ a > x + 1)) ∧
+        (if False then (99 : Int) + 1 else x + 1) = x + 1 ∧
+        (∀ y : Int, ∃ z : Int, y = z) ∧ (∀ q r : Prop, q = r) ∧
+        (later + 1) + 1 = (later + 1) + 1) → False)
+  runQuery env "closed definition"
+    "(set-logic QF_UF) (define-fun yes () Bool true) (assert yes) (check-sat)"
+    fun query => checkRefutation query q(True → False)
+  IO.println "Definitions passed: Bool/Int bodies, aliases, chains, shadowing, and capture-free substitution"
+
 private def checkClauseValues (parameters actual expected : Array Expr) : MetaM Unit := do
   unless actual.size == expected.size do throwError "wrong reconstructed clause count"
   for value in actual, wanted in expected do
@@ -393,7 +423,19 @@ private def checkHornProblems (env : Environment) : IO Unit := do
   for (name, body, expected) in cases do
     runProblem env name ("(set-logic HORN)\n" ++ body ++ "\n(check-sat)")
       fun problem => checkProblem problem expected
-  IO.println "CHC problems passed: 10 complete propositions and standalone files; axiom dependencies checked"
+  let path := "tests/translation/chc/definitions.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem => do
+    withClauses problem fun parameters clauses => do
+      let #[p, r] := parameters | throwError "CHC helpers became existential relations"
+      let p : Q(Int → Prop) := p
+      let r : Q(Int → Prop → Prop) := r
+      checkClauseValues parameters clauses #[q($p 0),
+        q(∀ (x : Int) (b : Prop), $p x → x > 0 → $r (if b then x + 1 else x) b),
+        q(∀ (x : Int) (b : Prop), $r x b → x > 10 → b → False)]
+    checkProblem problem (usesClassical := true) q(∃ (p : Int → Prop) (r : Int → Prop → Prop),
+      p 0 ∧ (∀ (x : Int) (b : Prop), p x → x > 0 → r (if b then x + 1 else x) b) ∧
+      (∀ (x : Int) (b : Prop), r x b → x > 10 → b → False))
+  IO.println "CHC problems passed: 11 complete propositions and standalone files; axiom dependencies checked"
 
 def main : IO Unit := do
   initSearchPath (← findSysroot)
@@ -402,6 +444,7 @@ def main : IO Unit := do
   checkAxiomRejection
   checkOperatorSemantics env
   checkLetBindings env
+  checkDefinitions env
   checkHornReconstruction env
   checkHornProblems env
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
@@ -515,4 +558,4 @@ def main : IO Unit := do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
     runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
-  IO.println "Translation passed: 25 refutations and generated files; existing proof work preserved"
+  IO.println "Translation passed: 27 refutations and generated files; existing proof work preserved"

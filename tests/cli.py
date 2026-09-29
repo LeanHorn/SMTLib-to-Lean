@@ -87,7 +87,7 @@ def main():
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
         inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified"]]
-        inputs += [BINDINGS / "simultaneous.smt2"]
+        inputs += [BINDINGS / "simultaneous.smt2", BINDINGS / "definitions.smt2"]
         for fixture in inputs:
             name = fixture.stem
             output = tmp / name
@@ -159,6 +159,11 @@ def main():
         combined = check_generated(lean, output, goal="Problem")
         assert combined.count("(clause ") == 16
 
+        output = tmp / "definitions-chc"
+        run(CHC / "definitions.smt2", "--out", output)
+        generated = check_generated(lean, output, goal="Problem")
+        assert generated.count("(clause ") == 3
+
         query = horn_output / "Query.lean"
         edited = horn_source + "\n-- User CHC proof work.\n"
         query.write_text(edited)
@@ -211,6 +216,17 @@ def main():
             ("let-relation", horn_prefix +
              "(assert (forall ((x Int)) (let ((hidden (not (P x)))) (=> hidden (P x)))))\n(check-sat)",
              "4:1: query 1: command 4: clause 2:", "CHC relation inside a theory guard"),
+            ("defined-negative-relation", horn_prefix +
+             "(define-fun neg ((x Int)) Bool (not (P x)))\n"
+             "(assert (forall ((x Int)) (=> (neg x) false)))\n(check-sat)",
+             "5:1: query 1: command 5: clause 2:", "CHC relation inside a theory guard"),
+            ("defined-quantifier", horn_prefix +
+             "(define-fun someP () Bool (exists ((x Int)) (P x)))\n"
+             "(assert (=> someP false))\n(check-sat)",
+             "5:1: query 1: command 5: clause 2:", "quantifier"),
+            ("unused-definition", horn_prefix +
+             "(define-fun bad () Int (div 1 0))\n(check-sat)",
+             "4:1: query 1: command 4:", "INTS_DIVISION"),
             ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
              "2:1: query 1: command 2:", "unsupported CHC declaration"),
             ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
@@ -271,6 +287,10 @@ def main():
         for name, text, location, reason in [
             ("multiline", "; λ\n(set-logic ALL)\n  (assert\n    (= (div 1 0) 0))\n(check-sat)",
              "3:3: command 2:", "unsupported operator"),
+            ("definition-source", "; λ\n(set-logic ALL)\n  (define-fun bad ((x Int)) Int\n    (div x 2))\n(check-sat)",
+             "3:3: command 2:", "INTS_DIVISION"),
+            ("alias-source", "(set-logic ALL)\n  (define-sort Bad () Real)\n(check-sat)",
+             "2:3: command 2:", "unsupported sort alias"),
             ("bad-string", '(set-logic QF_UF)\n(set-info :source "unfinished',
              "2:30: command 2:", "unterminated string"),
             ("extra-close", "(set-logic QF_UF)\n(check-sat)\n  )",
@@ -297,7 +317,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: 28 SMT and 6 CHC standalone translations, source locations, and 4 completed proofs")
+    print("Demo passed: 29 SMT and 7 CHC standalone translations, source locations, and 4 completed proofs")
 
 
 if __name__ == "__main__":

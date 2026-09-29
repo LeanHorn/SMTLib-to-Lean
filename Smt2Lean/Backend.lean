@@ -1,5 +1,6 @@
 import cvc5
 import Smt2Lean.Source
+import Smt2Lean.Definitions
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
 import Smt.Reconstruct.Int
@@ -8,7 +9,7 @@ import Smt.Reconstruct.UF
 /-!
 Parse a restricted SMT-LIB script with cvc5 without solving it.
 
-Accept one Bool/Int query, with declarations, assertions, and optional metadata.
+Accept one Bool/Int query, with declarations, definitions, assertions, and metadata.
 Intercept `check-sat` and pass the validated query to a callback after reading
 the entire input. Report failures with file, line, column, and command number;
 CHC mode adds the query number and, for assertion validation, the clause number.
@@ -38,6 +39,7 @@ structure ParsedQuery where
   source : Option Source.Ref := none
   commands : Array Source.Command := #[]
   declarations : Array ParsedDeclaration := #[]
+  definitions : Array ParsedDefinition := #[]
   assertions : Array cvc5.Term := #[]
   assertionSources : Array Source.Ref := #[]
   invoked : Array String := #[]
@@ -53,11 +55,14 @@ private def isSupportedFunction (sort : cvc5.Sort) : cvc5.Env Bool := do
   return !domains.isEmpty && domains.all isScalarSort && isScalarSort result
 
 /-- Check sorts, operators, declarations, and bound-variable scope. -/
-def validateAssertion (root : cvc5.Term)
-    (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool := true) : cvc5.Env Unit := do
-  unless (← ofExcept root.getSort).isBoolean do
-    throw (.unsupported "expected a Bool assertion")
-  let mut pending : Array (cvc5.Term × Array cvc5.Term) := #[(root, #[])]
+private def validateTerm (root : cvc5.Term)
+    (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool)
+    (bound : Array cvc5.Term := #[]) : cvc5.Env Unit := do
+  for binder in bound do
+    unless (← ofExcept binder.getKind) == .VARIABLE &&
+        isScalarSort (← ofExcept binder.getSort) do
+      throw (.unsupported "definition parameters must be Bool or Int variables")
+  let mut pending : Array (cvc5.Term × Array cvc5.Term) := #[(root, bound)]
   let mut visited : Std.HashSet (cvc5.Term × Array cvc5.Term) := {}
   while !pending.isEmpty do
     let (term, bound) := pending.back!
@@ -130,6 +135,40 @@ def validateAssertion (root : cvc5.Term)
       throw (.unsupported s!"unsupported arity for {kind}: {children.size}")
     pending := pending ++ children.map (·, bound)
 
+/-- Assertions must be Boolean and contain only the supported, scoped terms. -/
+def validateAssertion (root : cvc5.Term)
+    (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool := true) : cvc5.Env Unit := do
+  unless (← ofExcept root.getSort).isBoolean do
+    throw (.unsupported "expected a Bool assertion")
+  validateTerm root declarations allowQuantifiers
+
+private def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
+  query.declarations ++ query.definitions.map fun d =>
+    { name := d.symbol.toString, term := d.symbol, source := some d.source }
+
+/-- cvc5 stores each define-fun as `symbol = body`, using a lambda for parameters. -/
+private def readDefinition (equation : cvc5.Term) (source : Source.Ref)
+    (query : ParsedQuery) (tm : cvc5.TermManager) (allowQuantifiers : Bool)
+    : cvc5.Env ParsedDefinition := do
+  unless (← ofExcept equation.getKind) == .EQUAL && equation.getNumChildren == 2 do
+    throw (.error "expected a native defining equation")
+  let symbol := equation[0]!
+  let sort ← ofExcept symbol.getSort
+  unless (← ofExcept symbol.getKind) == .CONSTANT &&
+      (isScalarSort sort || (← isSupportedFunction sort)) do
+    throw (.unsupported s!"unsupported definition signature: {sort}; expected Bool/Int")
+  let value := equation[1]!
+  let (parameters, body) ← if (← ofExcept value.getKind) == .LAMBDA then do
+      unless value.getNumChildren == 2 && (← ofExcept value[0]!.getKind) == .VARIABLE_LIST do
+        throw (.error "expected a native definition lambda")
+      pure (value[0]!.getChildren, value[1]!)
+    else pure (#[], value)
+  -- Check before expansion as well: even discarded arguments must be supported.
+  validateTerm body (knownTerms query) allowQuantifiers parameters
+  let body ← expandDefinitions tm query.definitions body
+  validateTerm body query.declarations allowQuantifiers parameters
+  return { symbol, parameters, body, source }
+
 /-- These metadata fields never become assumptions or select a proof target. -/
 private def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do
   -- The binding exposes no command arguments; inspect cvc5's canonical printing.
@@ -155,7 +194,8 @@ def errorWithContext (context : String) : cvc5.Error → cvc5.Error
 
 /--
 A higher-order function that parses and validates SMT-LIB commands without solving.
-Accepts supported Bool/Int declarations and assertions, metadata, and one `check-sat`.
+Accepts Bool/Int declarations, definitions, sort aliases, assertions, metadata,
+and one `check-sat`. Definitions are expanded before assertions reach `inspect`.
 Only metadata and an optional final `exit` may follow the check.
 Calls `inspect` once with native terms, original command text, source ranges,
 the logic, and executed command names.
@@ -177,6 +217,8 @@ def parseAndInspectQuery
   let mut exited := false
   let mut reader : Source.Reader input := {}
   let mut assertionNumber := 0
+  -- cvc5 counts defining equations too; query.assertions keeps only source assertions.
+  let mut nativeCount := 0
   while true do
     let isChc := mode == .chc || query.logic == some "HORN"
     let (command?, rest) ← match reader.next name with
@@ -229,14 +271,34 @@ def parseAndInspectQuery
         query := { query with
           declarations := query.declarations.push { name := symbol, term, source := some command.source }
           invoked := query.invoked.push commandName }
+      | "define-fun" =>
+        invokeCommand cmd solver symbols
+        let assertions ← solver.getAssertions
+        unless assertions.size == nativeCount + 1 do
+          throw (.error "expected one native defining equation")
+        let definition ← readDefinition assertions.back! command.source query tm allowQuantifiers
+        nativeCount := assertions.size
+        query := { query with
+          definitions := query.definitions.push definition
+          invoked := query.invoked.push commandName }
+      | "define-sort" =>
+        validateSortAlias cmd
+        invokeCommand cmd solver symbols
+        query := { query with invoked := query.invoked.push commandName }
       | "assert" =>
         assertionNumber := assertionNumber + 1
         try
           invokeCommand cmd solver symbols
           let assertions ← solver.getAssertions
+          unless assertions.size == nativeCount + 1 do
+            throw (.error "expected one new native assertion")
           let some term := assertions.back?
             | throw (.error "assert command did not store a formula")
+          validateAssertion term (knownTerms query) allowQuantifiers
+          let term ← expandDefinitions tm query.definitions term
           validateAssertion term query.declarations allowQuantifiers
+          nativeCount := assertions.size
+          query := { query with assertions := query.assertions.push term }
         catch error =>
           throw (if isChc then errorWithContext s!"clause {assertionNumber}" error else error)
         query := { query with
@@ -245,9 +307,9 @@ def parseAndInspectQuery
       | "set-info" => validateMetadata cmd
       | "check-sat" =>
         let assertions ← solver.getAssertions
-        unless assertions.size == query.assertionSources.size do
+        unless assertions.size == nativeCount && query.assertions.size == query.assertionSources.size do
           throw (.error "assertions and source locations disagree")
-        query := { query with assertions, source := some command.source }
+        query := { query with source := some command.source }
         checked := true
       | "exit" =>
         unless checked do throw (.error "exit before check-sat")
