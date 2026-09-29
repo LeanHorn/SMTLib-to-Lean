@@ -343,6 +343,16 @@ example.smt2: query 1: clause 3: CHC relation inside a theory guard: (P x)
 
 The CLI still rejects HORN input; CHC Lean output is not yet available.
 
+`Smt2Lean.Translate.withClauses` reconstructs validated CHCs in memory as
+`∀ variables, premise₁ → … → head`. It passes fresh relation parameters and the
+clause propositions to a callback. Native identities preserve shadowed bindings;
+unused variables and relations are retained. Facts have no added premise, and
+false heads become Lean `False`.
+
+`lake exe testTranslation` compares all fifteen clauses from lh_sum_rec and the
+combined fixture with handwritten Lean propositions and kernel-checks each clause
+after closing its relation parameters. These checks do not prove the clauses.
+
 ## Translation checks
 
 The translator reconstructs assertions and kernel-checks a closed refutation

@@ -95,10 +95,78 @@ private def checkRefutation (query : ParsedQuery) (expected : Expr) : MetaM Unit
   checkEqual definition.value value
   checkEmission value
 
+private def checkClauseValues (parameters actual expected : Array Expr) : MetaM Unit := do
+  unless actual.size == expected.size do throwError "wrong reconstructed clause count"
+  for value in actual, wanted in expected do
+    checkEqual value wanted
+    let closed ← mkForallFVars parameters value (usedOnly := false)
+    if closed.hasFVar || closed.hasMVar || closed.hasLooseBVars then
+      throwError "clause did not close over its relation parameters"
+    checkWithKernel closed
+
+private def runProblem (env : Environment) (path : String)
+    (check : Smt2Lean.Chc.Problem → MetaM Unit) : IO Unit := do
+  (Smt2Lean.Chc.parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
+    discard <| (check problem).toIO { fileName := path, fileMap := default } { env }
+  ).runIO
+
+private def checkHornReconstruction (env : Environment) : IO Unit := do
+  runProblem env "tests/chc/lh_sum_rec.smt2" fun problem =>
+    withClauses problem fun parameters clauses => do
+      let #[k] := parameters | throwError "expected one relation parameter"
+      let k : Q(Int → Prop) := k
+      checkClauseValues parameters clauses #[
+        q(∀ (n : Int) (cond : Prop) (vv : Int),
+          (cond = (n ≤ 0)) → cond → vv = 0 → $k vv),
+        q(∀ (n : Int) (cond : Prop) (n1 t1 v : Int),
+          (cond = (n ≤ 0)) → ¬cond → n1 = n - 1 → $k t1 → v = n + t1 → $k v),
+        q(∀ (r : Int) (ok1 v : Prop),
+          $k r → (ok1 = (0 ≤ r)) → (v = (0 ≤ r)) → v = ok1 → ¬v → False)
+      ]
+  runProblem env "tests/translation/chc/clauses.smt2" fun problem => do
+    withClauses problem fun parameters clauses => do
+      let #[p, r, done, namedTrue, quoted, unused] := parameters
+        | throwError "expected six relation parameters"
+      let p : Q(Int → Prop) := p
+      let r : Q(Int → Prop → Int → Prop) := r
+      let done : Q(Prop) := done
+      let namedTrue : Q(Prop) := namedTrue
+      let quoted : Q(Prop → Int → Prop) := quoted
+      checkEqual (← inferType unused) q(Int → Prop → Prop)
+      checkClauseValues parameters clauses #[
+        q($p 0), q($r 7 (True ∧ ¬False) (9 - 4)), done, namedTrue,
+        q($quoted ((1 : Int) = 2) (10 + 2)),
+        q(∀ (x : Int) (_p : Prop) (_unused : Int), $p x),
+        q(∀ (x y : Int) (b : Prop), $p x → y > x → b → $r (x + 1) b x),
+        q(∀ x : Int, x > 0 → $p x → $done),
+        q(∀ (outer inner : Int) (flag : Prop) (onlyBody : Int) (_unused : Prop),
+          outer < inner → flag → onlyBody = 7 → $r outer flag inner),
+        q($done → False), q(False),
+        q(∀ (x y : Int) (cond : Prop), $p x → x > 0 → $p y →
+          ((x < 0 ∧ y > 0) ∨ ¬cond) → $done →
+          (cond = (x * y + -x > Int.abs y)) → ¬cond → False)
+      ]
+      -- Nested calls must allocate their own relations and clause variables.
+      withClauses problem fun fresh values => do
+        for previous in parameters, current in fresh do
+          if previous == current || values.any (·.containsFVar previous.fvarId!) then
+            throwError "CHC reconstructions shared a relation parameter"
+    -- A missing relation named True must not fall back to Lean's builtin True.
+    let some fact := problem.clauses[3]? | throwError "missing True fact"
+    let error? ← try
+      withClauses { problem with relations := #[], clauses := #[fact] } fun _ _ => pure ()
+      pure none
+    catch error => pure (some error)
+    let some error := error? | throwError "accepted an unmapped relation named True"
+    unless (← error.toMessageData.toString).contains "unmapped CHC relation: True" do
+      throw error
+  IO.println "CHC reconstruction passed: 15 clauses match handwritten Lean propositions"
+
 def main : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
+  checkHornReconstruction env
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
   runQuery env "connectives" input fun query => do
     checkConnectives query

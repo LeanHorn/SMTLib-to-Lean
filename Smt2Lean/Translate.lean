@@ -1,10 +1,20 @@
-import Smt2Lean.Backend
+import Smt2Lean.Chc
 import Lean.Util.CollectAxioms
 
 namespace Smt2Lean.Translate
 
 open Lean Meta Qq
 open Backend
+
+private def checkPropositions (values : Array Expr) (state : Smt.Reconstruct.State)
+    : MetaM Unit := do
+  unless state.skippedGoals.isEmpty do
+    throwError "reconstruction left unfinished goals"
+  for value in values do
+    if value.hasMVar || value.hasLooseBVars then
+      throwError "reconstruction left unresolved variables"
+    unless ← isProp value do
+      throwError "reconstructed assertion is not a proposition: {value}"
 
 /-- Bind by native identity so shadowed names cannot capture an outer variable. -/
 @[smt_term_reconstruct] private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
@@ -50,14 +60,63 @@ def withAssertions [Inhabited α] (query : ParsedQuery)
       userNames := userNames.insert (← ofExcept declaration.term.getSymbol) parameter
     let reconstruction := query.assertions.mapM Smt.Reconstruct.reconstructTerm
     let (assertions, state) ← reconstruction.run { userNames } {}
-    unless state.skippedGoals.isEmpty do
-      throwError "reconstruction left unfinished goals"
-    for assertion in assertions do
-      if assertion.hasMVar || assertion.hasLooseBVars then
-        throwError "reconstruction left unresolved variables"
-      unless ← isProp assertion do
-        throwError "reconstructed assertion is not a proposition: {assertion}"
+    checkPropositions assertions state
     inspect parameters assertions
+
+private def reconstructAtom (relations : Std.HashMap cvc5.Term Expr)
+    (atom : Chc.RelationAtom) : Smt.ReconstructM Expr := do
+  let some relation := relations[atom.relation.term]?
+    | throwError "unmapped CHC relation: {atom.relation.name}"
+  return mkAppN relation (← atom.arguments.mapM Smt.Reconstruct.reconstructTerm)
+
+private def reconstructClause (relations : Std.HashMap cvc5.Term Expr)
+    (clause : Chc.Clause Chc.Premise) : MetaM Expr := do
+  let declarations ← clause.binders.mapM fun (binder : Chc.Binder) => do
+    let (type, _) ← (Smt.Reconstruct.reconstructSort binder.sort).run {} {}
+    let name ← mkFreshUserName (Name.mkSimple (← ofExcept binder.term.getSymbol))
+    return (name, type)
+  withLocalDeclsDND declarations fun variables => do
+    -- Start afresh for each clause: cvc5 can reuse a variable across assertions.
+    let mut termCache := relations
+    for binder in clause.binders, parameter in variables do
+      termCache := termCache.insert binder.term parameter
+    let reconstruction : Smt.ReconstructM Expr := do
+      let head ← match clause.head with
+        | .relation atom => reconstructAtom relations atom
+        | .falsity => pure q(False)
+      let premises ← clause.premises.mapM fun premise => match premise with
+        | .relation atom => reconstructAtom relations atom
+        | .guard term => Smt.Reconstruct.reconstructTerm term
+      let body ← premises.foldrM (fun premise body => mkArrow premise body) head
+      mkForallFVars variables body (usedOnly := false)
+    let (value, state) ← reconstruction.run {} { termCache }
+    checkPropositions #[value] state
+    check value
+    return value
+
+/--
+Reconstruct validated CHC clauses with fresh relation parameters.
+Each clause is `∀ variables, premise₁ → … → head`. Inspect the parameters and
+clauses inside the callback, while their Lean context and native terms are alive.
+-/
+def withClauses [Inhabited α] (problem : Chc.Problem)
+    (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
+  let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) => do
+    let sort ← ofExcept relation.term.getSort
+    let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
+    return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
+  withLocalDeclsDND declarations fun parameters => do
+    let mut relations : Std.HashMap cvc5.Term Expr := {}
+    for relation in problem.relations, parameter in parameters do
+      relations := relations.insert relation.term parameter
+    let clauses ← problem.clauses.mapM fun clause => do
+      try
+        let value ← reconstructClause relations clause
+        if (← mkForallFVars parameters value (usedOnly := false)).hasFVar then
+          throwError "clause contains variables outside its relation parameters"
+        return value
+      catch error => throwError "CHC clause {clause.assertionNumber}: {error.toMessageData}"
+    inspect parameters clauses
 
 /--
 Define `Refutation : Prop := ∀ parameters, (assertions) → False` in the Lean environment.

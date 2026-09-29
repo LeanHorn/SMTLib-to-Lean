@@ -53,6 +53,14 @@ each `Query.lean` using only Lean core. Statements have no axiom dependencies;
 only the following proof templates contain admissions. Existing proof work is
 preserved. The tests reuse the combined fixtures below.
 
+The translation test also reconstructs all fifteen CHC clauses from lh_sum_rec
+and the combined CHC fixture. Each clause is compared with a handwritten Lean
+proposition and kernel-checked after closing its relation parameters. Checks cover
+unused variables/relations, shadowed binders, mixed sorts, nullary relations,
+multiple premises, false heads, and isolation between nested reconstructions.
+An unmapped relation named `True` must fail instead of resolving to Lean's builtin.
+CHC reconstruction is currently in memory; it does not yet produce a Lean file.
+
 Run the CLI/demo checks without rebuilding the smoke test:
 
 ```sh
