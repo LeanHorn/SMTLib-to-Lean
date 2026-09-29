@@ -7,7 +7,7 @@ tests/translation/run-demo.sh
 ```
 
 The script builds the CLI, runs the reconstruction smoke test, and runs `cli.py`.
-The CLI checks compile twenty-two generated files and their statement sections using
+The CLI checks compile twenty-five SMT files, five CHC files, and their statement sections using
 Lean core. Boolean contradiction, integer bounds, function congruence, and quantified outputs,
 including their status variants, must match the `expected/Query.lean` in each
 fixture directory. All four README proofs compile with warnings treated as errors
@@ -44,7 +44,12 @@ premise conjunctions in order, distinguishes relation calls from theory guards,
 and rejects hidden or negated relations. A bad later clause never reaches the
 validated-problem callback. Errors identify the file, query, and offending clause;
 parser errors retain command numbers. Status variants produce identical CHC structure.
-The CLI tests verify that HORN input is rejected without creating output.
+The CLI tests translate lh_sum_rec to `Problem`, preserving the target under
+absent/sat/unsat/unknown status metadata. The same clauses under `ALL` or no logic
+produce `Refutation`; HORN text in comments, names, and metadata cannot select
+CHC mode. Empty HORN input also translates. Invalid CHC declarations, later
+clauses/operators, missing checks, and malformed tails fail with source context
+and create no output. Edited CHC proof work survives attempted overwrites.
 `Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
 `Translation.lean` checks variable binding, connectives, independent reconstruction
 contexts, and twenty-two closed Bool/Int refutations against handwritten Lean propositions.
@@ -67,7 +72,7 @@ the same target. All ten `Problem` definitions are closed, kernel-checked, and
 free of axioms. The emitter writes each CHC case to one temporary `Query.lean`
 with Statements before Proofs. The complete file and isolated statements compile
 using only Lean core; only the `problem` theorem depends on `sorryAx`. Edited files
-survive attempted overwrites. CLI integration for HORN input is still pending.
+survive attempted overwrites.
 
 Run the CLI/demo checks without rebuilding the smoke test:
 

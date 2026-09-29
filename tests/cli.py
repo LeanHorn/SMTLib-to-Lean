@@ -36,12 +36,13 @@ def check_lean(lean, source, *, complete=False):
     return result.stdout
 
 
-def check_generated(lean, output):
+def check_generated(lean, output, *, goal="Refutation"):
     assert [p.name for p in output.iterdir()] == ["Query.lean"]
     query = output / "Query.lean"
     source = query.read_text()
     statements, proofs = source.split("-- Proofs\n", 1)
-    assert "-- Statements" in statements and "def Refutation" in statements
+    assert "-- Statements" in statements and f"def {goal} : Prop" in statements
+    assert f"theorem {goal.lower()} : {goal}" in proofs
     assert "sorry" not in statements and "by\n  sorry" in proofs
     check_lean(lean, query)
     # The statement must also compile after removing the unfinished proof entirely.
@@ -61,7 +62,8 @@ def main():
         "congruence": (FUNCTIONS / "expected/Query.lean").read_text(),
         "quantified": (QUANTIFIERS / "expected/Query.lean").read_text(),
     }
-    assert "Usage:" in run("--help").stdout
+    help_text = run("--help").stdout
+    assert all(word in help_text for word in ["Usage:", "HORN", "Problem", "Refutation"])
     for args in [(), ("--unknown",), ("input.smt2",),
                  ("input.smt2", "--out", ""), ("input.smt2", "--out", "--help")]:
         run(*args, code=2)
@@ -124,12 +126,77 @@ def main():
 
         horn = ROOT / "tests/chc/lh_sum_rec.smt2"
         horn_output = tmp / "horn"
+        run(horn, "--out", horn_output)
+        horn_source = check_generated(lean, horn_output, goal="Problem")
+        horn_text = horn.read_text()
+        for status in [None, "unsat", "unknown"]:
+            source, output = tmp / f"horn-{status}.smt2", tmp / f"horn-{status}"
+            metadata = "" if status is None else f"(set-info :status {status})"
+            source.write_text(horn_text.replace("(set-info :status sat)", metadata))
+            run(source, "--out", output)
+            assert check_generated(lean, output, goal="Problem") == horn_source, status
+
+        query = horn_output / "Query.lean"
+        edited = horn_source + "\n-- User CHC proof work.\n"
+        query.write_text(edited)
         result = run(horn, "--out", horn_output, code=1)
-        assert f"{horn}: command 1:" in result.stderr and "unsupported logic" in result.stderr
-        assert not horn_output.exists()
+        assert "output already exists" in result.stderr and query.read_text() == edited
+
+        # Equivalent parsed logic with comments/whitespace; no clauses means True.
+        source, output = tmp / "empty-horn.smt2", tmp / "empty-horn"
+        source.write_text("(set-logic ; parsed as HORN\n HORN)\n(check-sat)")
+        run(source, "--out", output)
+        empty_horn = check_generated(lean, output, goal="Problem")
+        assert "def Problem : Prop :=\n  True\n" in empty_horn
+
+        # The same assertions follow the SMT path without an explicit HORN logic.
+        smt_source = None
+        for logic in ["(set-logic ALL)", ""]:
+            name = "horn-as-smt" if logic else "horn-no-logic"
+            source, output = tmp / f"{name}.smt2", tmp / name
+            source.write_text(horn_text.replace("(set-logic HORN)", logic))
+            run(source, "--out", output)
+            generated = check_generated(lean, output)
+            if smt_source is not None:
+                assert generated == smt_source
+            smt_source = generated
+
+        # HORN text in comments, names, and metadata must never select CHC mode.
+        source, output = tmp / "horn-text.smt2", tmp / "horn-text"
+        source.write_text('''; (set-logic HORN)
+(set-info :source "(set-logic HORN)")
+(set-logic ALL)
+(declare-const |(set-logic HORN)| Int)
+(assert (= |(set-logic HORN)| 0))
+(check-sat)
+(set-info :status sat)
+''')
+        run(source, "--out", output)
+        check_generated(lean, output)
+
+        horn_prefix = "(set-logic HORN)\n(declare-fun P (Int) Bool)\n(assert (P 0))\n"
+        for name, text, location, reason in [
+            ("later-clause", horn_prefix +
+             "(assert (forall ((x Int)) (=> (not (P x)) false)))\n(check-sat)",
+             "clause 2:", "CHC relation inside a theory guard"),
+            ("later-operator", horn_prefix +
+             "(assert (forall ((x Int)) (=> (= (div x 2) 0) (P x))))\n(check-sat)",
+             "command 4: clause 2:", "unsupported operator"),
+            ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
+             "", "unsupported CHC declaration"),
+            ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
+             "command 5:", "EOF_TOK"),
+            ("missing-check", horn_prefix, "command 4:", "expected one check-sat"),
+        ]:
+            source, output = tmp / f"horn-{name}.smt2", tmp / f"horn-{name}"
+            source.write_text(text)
+            result = run(source, "--out", output, code=1)
+            assert f"{source}: query 1: {location}" in result.stderr, result.stderr
+            assert reason in result.stderr, result.stderr
+            assert not output.exists()
 
         invalid = [
-            "(set-logic HORN)\n(check-sat)",
+            "(set-logic QF_LRA)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(assert",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (div x 0) 0))\n(check-sat)",
@@ -146,7 +213,7 @@ def main():
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"
             source.write_text(text)
             result = run(source, "--out", output, code=1)
-            assert str(source) in result.stderr and "command" in result.stderr
+            assert f"{source}: command " in result.stderr
             assert not output.exists()
 
         # Existing empty directories, files, and symlinks must also be refused.
@@ -164,7 +231,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: expected outputs, 22 standalone translations, metadata, and 4 completed proofs")
+    print("Demo passed: 25 SMT and 5 CHC standalone translations, metadata, and 4 completed proofs")
 
 
 if __name__ == "__main__":

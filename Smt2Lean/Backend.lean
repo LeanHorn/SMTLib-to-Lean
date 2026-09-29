@@ -18,10 +18,11 @@ and the reconstruction tests to turn assertion terms into Lean propositions.
 
 namespace Smt2Lean.Backend
 
-/-- CHC mode additionally permits HORN; clause-shape validation is separate. -/
+/-- SMT mode rejects HORN; CHC and auto modes accept it. Clause validation is separate. -/
 inductive ParseMode where
   | smt
   | chc
+  | auto
   deriving BEq
 
 /-- An SMT name and its native identity. No Lean name has been assigned yet. -/
@@ -31,6 +32,7 @@ structure ParsedDeclaration where
 
 /-- One validated query. Use native terms only inside `inspect`. -/
 structure ParsedQuery where
+  logic : Option String := none
   declarations : Array ParsedDeclaration := #[]
   assertions : Array cvc5.Term := #[]
   invoked : Array String := #[]
@@ -148,8 +150,8 @@ def errorWithContext (context : String) : cvc5.Error → cvc5.Error
 A higher-order function that parses and validates SMT-LIB commands without solving.
 Accepts supported Bool/Int declarations and assertions, metadata, and one `check-sat`.
 Only metadata and an optional final `exit` may follow the check.
-Calls `inspect` once with the declarations, assertions, and executed command names.
-HORN requires explicit CHC mode; this parser does not check Horn clause shape.
+Calls `inspect` once with the logic, declarations, assertions, and executed command names.
+HORN requires CHC or auto mode; this parser does not check Horn clause shape.
 -/
 def parseAndInspectQuery
     (input : String)
@@ -167,9 +169,10 @@ def parseAndInspectQuery
   let mut exited := false
   let mut ordinal := 1
   let mut assertionNumber := 0
-  let context := if mode == .chc then s!"{name}: query 1" else name
   while true do
     let commandOrdinal := ordinal
+    let isChc := mode == .chc || query.logic == some "HORN"
+    let context := if isChc then s!"{name}: query 1" else name
     try
       let cmd ← parser.nextCommand
       if cmd.isNull then break
@@ -180,14 +183,15 @@ def parseAndInspectQuery
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
       match commandName with
       | "set-logic" =>
-        let supported := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
-            "UF", "LIA", "NIA", "UFLIA", "UFNIA", "ALL"].any
+        let some logic := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
+            "UF", "LIA", "NIA", "UFLIA", "UFNIA", "ALL", "HORN"].find?
             (fun logic => cmd.toString == s!"(set-logic {logic})")
-        unless supported || (mode == .chc && cmd.toString == "(set-logic HORN)") do
+          | throw (.unsupported s!"unsupported logic: {cmd}")
+        if logic == "HORN" && mode == .smt then
           throw (.unsupported s!"unsupported logic: {cmd}")
         invokeCommand cmd solver symbols
-        allowQuantifiers := !cmd.toString.startsWith "(set-logic QF_"
-        query := { query with invoked := query.invoked.push commandName }
+        allowQuantifiers := !logic.startsWith "QF_"
+        query := { query with logic := some logic, invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
         invokeCommand cmd solver symbols
         let terms ← symbols.getDeclaredTerms
@@ -212,7 +216,7 @@ def parseAndInspectQuery
             | throw (.error "assert command did not store a formula")
           validateAssertion term query.declarations allowQuantifiers
         catch error =>
-          throw (if mode == .chc then errorWithContext s!"clause {assertionNumber}" error else error)
+          throw (if isChc then errorWithContext s!"clause {assertionNumber}" error else error)
         query := { query with invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
       | "check-sat" =>
@@ -225,6 +229,7 @@ def parseAndInspectQuery
       ordinal := ordinal + 1
     catch error => throw (errorWithContext s!"{context}: command {commandOrdinal}" error)
   unless checked do
+    let context := if mode == .chc || query.logic == some "HORN" then s!"{name}: query 1" else name
     throw (errorWithContext s!"{context}: command {ordinal}" (.error "expected one check-sat"))
   inspect query
 

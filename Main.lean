@@ -7,6 +7,7 @@ private def usage : String :=
   "Usage: smt2lean <input.smt2> --out <new-directory>\n" ++
   "       smt2lean --help\n\n" ++
   "Translate one supported Bool/Int SMT-LIB query into Query.lean: statements, then proofs.\n" ++
+  "HORN logic generates Problem (satisfying relations); other supported logics generate Refutation.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++
   "The proof template contains sorry and must be completed in Lean."
 
@@ -15,9 +16,12 @@ private def translateFile (input output : System.FilePath) : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
-  (Backend.parseAndInspectQuery text (name := input.toString) fun query => do
-    let translation : MetaM String := do
-      Emit.render (← Translate.defineRefutation query)
+  (Backend.parseAndInspectQuery text (name := input.toString) (mode := .auto) fun query => do
+    let translation : MetaM String ← if query.logic == some "HORN" then do
+      let problem ← Chc.validateQuery query input.toString
+      pure do Emit.render (← Translate.defineProblem problem) (kind := .problem)
+    else
+      pure do Emit.render (← Translate.defineRefutation query)
     let (source, _, _) ← translation.toIO
       { fileName := input.toString, fileMap := default } { env }
     Emit.writeFile output source

@@ -57,7 +57,8 @@ tests/translation/run-demo.sh
 The script checks the Boolean, integer, function, and quantifier demos: expected outputs, metadata
 variants, standalone statements and templates, and the completed proofs shown here.
 It also checks rejection cases and overwrite protection, using temporary
-directories that are removed afterwards.
+directories that are removed afterwards. CHC checks translate lh_sum_rec and verify
+that the parsed logic selects the target independently of status metadata.
 
 ## Translate integer queries
 
@@ -276,12 +277,13 @@ Supported inputs:
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
 - No `set-logic`, or an initial `UF`, `LIA`, `NIA`, `UFLIA`, `UFNIA`, their `QF_` forms, or `ALL`.
   Every term is validated; accepting a logic does not enable all its operators.
+  The CLI also accepts `HORN`, with the additional CHC restrictions below.
 - `set-info` fields `:status`, `:source`, `:category`, `:license`, `:notes`, and
   `:smt-lib-version 2.6`. Metadata is ignored, never used as an assumption.
 - Exactly one `check-sat`, followed only by metadata and an optional final `exit`.
 
 The driver validates every declaration and assertion, then calls `inspect` once
-with a `ParsedQuery`: declarations (SMT names and native term identities), assertion
+with a `ParsedQuery`: optional logic, declarations (SMT names and native term identities), assertion
 terms, and executed command names. cvc5 reports both declaration spellings as
 `declare-fun` in this trace. No query command is executed.
 
@@ -341,8 +343,11 @@ assertion number; parser errors also identify the command. For example:
 example.smt2: query 1: clause 3: CHC relation inside a theory guard: (P x)
 ```
 
-The CLI still rejects HORN input; CHC files can currently be generated through
-the Lean API.
+The CLI routes `(set-logic HORN)` through CHC validation and emits `Problem`.
+Other supported logics, or no explicit logic, emit the ordinary `Refutation`.
+Routing uses the parsed command; comments, symbol names, and status metadata
+cannot select the goal. The entire input and its Lean definition are checked
+before any output is written.
 
 `Smt2Lean.Translate.withClauses` reconstructs validated CHCs in memory as
 `∀ variables, premise₁ → … → head`. It passes fresh relation parameters and the

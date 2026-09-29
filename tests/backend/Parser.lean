@@ -50,10 +50,12 @@ private def checkAcceptedQueries : IO Unit := do
   let empty ← IO.FS.readFile (fixtureDir / "empty.smt2")
   checkAccepted "contradiction.smt2" contradiction #["p"] 2
     #["set-logic", "declare-fun", "assert", "assert"]
+    fun query => require (query.logic == some "QF_UF") "expected the parsed logic"
   -- Reuse the same scripts for optional logic, empty assertions, and metadata.
   checkAccepted "contradiction.smt2 (no logic)"
     (contradiction.replace "(set-logic QF_UF)" "") #["p"] 2
     #["declare-fun", "assert", "assert"]
+    fun query => require query.logic.isNone "an omitted logic must remain absent"
   checkAccepted "empty.smt2" empty #[] 0 #["set-logic"]
   checkAccepted "empty.smt2 (unused declaration)"
     (empty.replace "(check-sat)" "(declare-const unused Bool)\n(check-sat)")
