@@ -1,14 +1,7 @@
-import cvc5
-import Smt2Lean.Source
+import Smt2Lean.Backend.Validate
+import Smt2Lean.Backend.Hints
 
 namespace Smt2Lean.Backend
-
-/-- A checked definition, with earlier definitions already expanded in its body. -/
-structure ParsedDefinition where
-  symbol : cvc5.Term
-  parameters : Array cvc5.Term
-  body : cvc5.Term
-  source : Source.Ref
 
 private def rebuild (tm : cvc5.TermManager) (term : cvc5.Term)
     (children : Array cvc5.Term) : cvc5.Env cvc5.Term := do
@@ -57,31 +50,28 @@ def expandDefinitions (tm : cvc5.TermManager) (definitions : Array ParsedDefinit
   if definitions.isEmpty then return root
   return (← expand tm definitions root |>.run {}).1
 
-/--
-cvc5 prints aliases with their bodies already resolved. A supported body is Bool,
-Int, or a formal sort parameter. Tokenize this small canonical header, respecting
-quoted names; cvc5 still handles alias syntax, arity, scope, and substitution.
--/
-def validateSortAlias (command : cvc5.Command) : cvc5.Env Unit := do
-  let mut tokens : Array String := #[]
-  let mut token := ""
-  let mut quoted := false
-  for c in command.toString.toList do
-    if c == '|' then quoted := !quoted
-    if !quoted && (c.isWhitespace || c == '(' || c == ')') then
-      if !token.isEmpty then tokens := tokens.push token
-      token := ""
-      if c == '(' || c == ')' then tokens := tokens.push (String.singleton c)
-    else token := token.push c
-  unless token.isEmpty do tokens := tokens.push token
-  let some endParams := (tokens.extract 4 tokens.size).findIdx? (· == ")")
-    | throw (.unsupported s!"unsupported sort alias: {command}")
-  let endParams := endParams + 4
-  let body := tokens[endParams + 1]?.getD ""
-  unless tokens.size == endParams + 3 && tokens[0]? == some "(" &&
-      tokens[1]? == some "define-sort" && tokens[3]? == some "(" &&
-      tokens.back? == some ")" &&
-      (body == "Bool" || body == "Int" || (tokens.extract 4 endParams).contains body) do
-    throw (.unsupported s!"unsupported sort alias: {command}; expected Bool, Int, or a sort parameter")
+/-- cvc5 stores each define-fun as `symbol = body`, using a lambda for parameters. -/
+def readDefinition (equation : cvc5.Term) (source : Source.Ref)
+    (query : ParsedQuery) (tm : cvc5.TermManager) (allowQuantifiers : Bool)
+    : cvc5.Env ParsedDefinition := do
+  unless (← ofExcept equation.getKind) == .EQUAL && equation.getNumChildren == 2 do
+    throw (.error "expected a native defining equation")
+  let symbol := equation[0]!
+  let sort ← ofExcept symbol.getSort
+  unless (← ofExcept symbol.getKind) == .CONSTANT &&
+      (isScalarSort sort || (← isSupportedFunction sort)) do
+    throw (.unsupported s!"unsupported definition signature: {sort}; expected Bool/Int")
+  let value := equation[1]!
+  let (parameters, body) ← if (← ofExcept value.getKind) == .LAMBDA then do
+      unless value.getNumChildren == 2 && (← ofExcept value[0]!.getKind) == .VARIABLE_LIST do
+        throw (.error "expected a native definition lambda")
+      pure (value[0]!.getChildren, value[1]!)
+    else pure (#[], value)
+  let body ← withoutQuantifierHints tm body
+  -- Check before expansion as well: even discarded arguments must be supported.
+  validateTerm body (knownTerms query) allowQuantifiers parameters
+  let body ← expandDefinitions tm query.definitions body
+  validateTerm body query.declarations allowQuantifiers parameters
+  return { symbol, parameters, body, source }
 
 end Smt2Lean.Backend

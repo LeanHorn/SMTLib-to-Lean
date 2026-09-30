@@ -17,7 +17,7 @@ private def translateFile (input output : System.FilePath) : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
-  let source ← Emit.translateSession text env input.toString
+  let source ← Pipeline.translateSession text env input.toString
   Emit.writeFile output source
   IO.println s!"Generated {output / "Query.lean"}"
   IO.println "Proof unfinished: replace sorry in the Proofs section of Query.lean."

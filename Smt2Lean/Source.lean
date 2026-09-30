@@ -65,7 +65,7 @@ private inductive Mode where
   deriving BEq
 
 /-- Read lexemes only; preserve quoted text and skip comments. No term parsing. -/
-private def tokens (input : String) : Array String := Id.run do
+def tokenize (input : String) : Array String := Id.run do
   let mut cursor := input.startPos
   let mut result := #[]
   while cursor != input.endPos do
@@ -96,7 +96,7 @@ private def tokens (input : String) : Array String := Id.run do
 
 /-- Check scope counts before native parsing, which already changes the symbol scope. -/
 def Command.scopeChange (command : Command) : Except String (Option (String × Nat)) := do
-  let parts := tokens command.text
+  let parts := tokenize command.text
   let kind := parts[1]?.getD ""
   unless kind == "push" || kind == "pop" do return none
   let #["(", _, value, ")"] := parts | throw s!"{kind}: expected one SMT-LIB numeral"
@@ -109,7 +109,7 @@ def Command.scopeChange (command : Command) : Except String (Option (String × N
 
 /-- Reject unaudited attributes and recover labels before cvc5 erases or merges them. -/
 def Command.withNames (command : Command) : Except String Command := do
-  let parts := tokens command.text
+  let parts := tokenize command.text
   unless #["assert", "define-fun", "define-const"].contains (parts[1]?.getD "") do
     return command
   let mut names := #[]

@@ -1,4 +1,6 @@
-import Smt2Lean.Backend
+import Smt2Lean.Backend.Parser
+import Smt.Reconstruct.Prop
+import Smt.Reconstruct.Builtin
 import Lean.Util.CollectAxioms
 
 open Lean Qq
@@ -49,8 +51,9 @@ private def checkReconstruction (assertion : cvc5.Term) : MetaM Unit := do
 def main : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
-  -- Load the sort/term handlers registered by Backend's imports.
-  let env ← importModules #[{ module := `Smt2Lean.Backend }] {} (loadExts := true)
+  -- Load the upstream Boolean sort/term handlers explicitly.
+  let env ← importModules #[{ module := `Smt.Reconstruct.Prop },
+    { module := `Smt.Reconstruct.Builtin }] {} (loadExts := true)
   let input := "(set-logic QF_UF)\n(assert (and true (not false)))\n(check-sat)"
   (parseAndInspectQuery input (name := "reconstruction") fun query => do
     unless query.invoked == #["set-logic", "assert"] do

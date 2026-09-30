@@ -17,7 +17,7 @@ def tokenize(s):
 
 
 def parse(tokens):
-    out, stack = [], [[]]
+    stack = [[]]
     for t in tokens:
         if t == "(":
             stack.append([])

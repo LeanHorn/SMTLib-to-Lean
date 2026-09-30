@@ -1,4 +1,4 @@
-import Smt2Lean.Backend
+import Smt2Lean.Backend.Parser
 
 open Smt2Lean.Backend
 

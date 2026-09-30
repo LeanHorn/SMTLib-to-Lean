@@ -1,5 +1,9 @@
 import Smt2Lean.Chc
 import Smt2Lean.Helpers
+import Smt.Reconstruct.Prop
+import Smt.Reconstruct.Builtin
+import Smt.Reconstruct.Int
+import Smt.Reconstruct.UF
 import Lean.Util.CollectAxioms
 
 namespace Smt2Lean.Translate

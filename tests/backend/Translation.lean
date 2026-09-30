@@ -1,4 +1,4 @@
-import Smt2Lean.Emit
+import Smt2Lean.Pipeline
 import Lean.Elab.Frontend
 
 open Lean Meta Qq Classical
@@ -117,32 +117,6 @@ private def checkEmission (value : Expr) (kind : GoalKind := .refutation)
   unless axioms.contains ``sorryAx && axioms.size == statementAxioms.size + 1 &&
       statementAxioms.all axioms.contains do
     throwError "expected an unfinished proof template"
-  IO.FS.withTempDir fun temporary => do
-    let output := temporary / "generated"
-    writeFile output source
-    let #[entry] ← output.readDir
-      | throwError "expected exactly one generated Query.lean"
-    unless entry.fileName == "Query.lean" do
-      throwError "expected exactly one generated Query.lean"
-    -- Check the statement independently, without the admitted theorem.
-    IO.FS.writeFile (temporary / "StatementsOnly.lean") statements
-    let lean := (← findSysroot) / "bin" / "lean"
-    for (directory, file) in #[(output, "Query.lean"), (temporary, "StatementsOnly.lean")] do
-      let result ← IO.Process.output {
-        cmd := lean.toString, args := #[file], cwd := some directory
-        env := #[("LEAN_PATH", some directory.toString)]
-      }
-      unless result.exitCode == 0 do
-        throwError "{file} failed to compile: {result.stdout}{result.stderr}"
-    -- Protect proof work, even when a caller tries to write the same output again.
-    let edited := source ++ "\n-- User proof work.\n"
-    IO.FS.writeFile (output / "Query.lean") edited
-    let refused ← try
-      writeFile output source
-      pure false
-    catch _ => pure true
-    unless refused && (← IO.FS.readFile (output / "Query.lean")) == edited do
-      throwError "existing proof work was overwritten"
 
 private def checkAxioms (name : Name) (usesClassical : Bool) : CoreM Unit := do
   let expected := if usesClassical then #[``propext, ``Classical.choice, ``Quot.sound] else #[]
@@ -184,7 +158,7 @@ private def checkLetBindings (env : Environment) : IO Unit := do
         (∀ (a : Int) (b : Prop), (a + 1 = x) ∧ ((¬b) = p)) ∧
         (∀ (a : Int) (b : Prop), (∃ (c : Int) (d : Prop), c = a ∧ d = b) ∧ a = a ∧ b = b) ∧
         ((True = ((1 : Int) > 0)) ∧ (False = ((2 : Int) > 0)) ∧ (p = (x > 0)))) → False)
-  IO.println "Let bindings passed: 9 Bool/Int assertions match handwritten expansions and standalone output"
+  IO.println "Let bindings passed: 9 Bool/Int assertions match handwritten expansions and emitted propositions"
 
 private def checkDefinitions (env : Environment) : IO Unit := do
   let path := "tests/translation/bindings/definitions.smt2"
@@ -488,7 +462,7 @@ private def checkHornProblems (env : Environment) : IO Unit := do
       checkProblem problem (usesClassical := true) q(∃ (p : Int → Prop) (r : Int → Prop → Prop),
         p 0 ∧ (∀ (x : Int) (b : Prop), p 0 → p x → x > 0 → r (if b then x + 1 else x) b) ∧
         (∀ (x : Int) (b : Prop), r x b → x > 10 → b → False))
-  IO.println "CHC problems passed: 16 complete propositions and standalone files; axiom dependencies checked"
+  IO.println "CHC problems passed: 16 complete propositions and emitted definitions; axiom dependencies checked"
 
 private def checkSessions (env : Environment) : IO Unit := do
   let base := q(∀ p : Prop, p → False)
@@ -514,7 +488,7 @@ private def checkSessions (env : Environment) : IO Unit := do
   ]
   for (fixture, baseName, expected, classicalQueries) in cases do
     let path := s!"tests/translation/sessions/{fixture}.smt2"
-    let source ← translateSession (← IO.FS.readFile path) env path
+    let source ← Smt2Lean.Pipeline.translateSession (← IO.FS.readFile path) env path
     let [statements, proofs] := source.splitOn "-- Proofs\n"
       | throw (IO.userError "wrong session layout")
     unless !statements.contains "sorry" && !proofs.contains "def " &&
@@ -678,4 +652,4 @@ def main : IO Unit := do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
     runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
-  IO.println "Translation passed: 33 refutations and generated files; existing proof work preserved"
+  IO.println "Translation passed: 33 refutations and emitted definitions; types and axiom dependencies checked"

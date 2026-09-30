@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Run all translation demos from any working directory.
+# Run translator checks and demos from any working directory.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-lake build smt2lean testSource testReconstruction
-lake env .lake/build/bin/testSource
-lake env .lake/build/bin/testReconstruction
+lake build smt2lean testSource testParser testReconstruction testHorn testTranslation
+for test_target in testSource testParser testReconstruction testHorn testTranslation; do
+  lake env ".lake/build/bin/$test_target"
+done
 lake env python3 tests/cli.py
 
-echo "All translation demos passed; all generated test files were temporary."
+echo "All translator checks and demos passed; all generated test files were temporary."

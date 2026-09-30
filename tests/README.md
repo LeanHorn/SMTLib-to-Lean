@@ -1,201 +1,72 @@
 # Tests
 
-Run all translation demos from the repository root:
+Run the complete translator suite from any working directory:
 
 ```sh
 tests/translation/run-demo.sh
 ```
 
-The script builds the CLI, runs the source-reader and reconstruction tests, and runs `cli.py`.
-The CLI checks compile twenty-eight SMT files, six CHC files, and their statement sections using
-Lean core. Boolean contradiction, integer bounds, function congruence, quantified,
-and lh_sum_rec outputs must match their `expected/Query.lean`. Status variants
-must match after removing source comments, since inserting metadata can move
-locations without changing a proposition. All four README proofs compile with warnings treated as errors
-and no `sorryAx` dependency. The Boolean, function, and quantifier proofs have no axioms; the
-integer proof uses core's `propext` through its order lemma. Edited templates and
-completed proofs survive attempted overwrites. The combined function/predicate
-fixture also compiles through the CLI. Python 3 is required.
+This builds the CLI and Lean tests, runs each Lean test executable, then runs
+`cli.py`. Python 3 is required. Generated files go into temporary directories.
 
-For the original LiquidHaskell (`lh_*`) and Flux (`flux_*`) queries:
+## What each layer checks
 
-```sh
-tests/run.sh   # replays every file through z3 and checks the recorded answers
-```
+| Command | Coverage |
+| --- | --- |
+| `lake exe testSource` | Exact source bytes, command boundaries, quoting, UTF-8, line endings, labels, and malformed input |
+| `lake exe testParser` | Supported terms and configuration, binding identity, definitions, aliases, hints, session scopes, and rejection locations |
+| `lake exe testReconstruction` | One closed proposition reconstructed by upstream handlers and checked by Lean's kernel |
+| `lake exe testHorn` | Relation identities, ordered clause arguments, leading binders, theory guards, false heads, and unsupported Horn forms |
+| `lake exe testTranslation` | Handwritten expected propositions, operator semantics, capture avoidance, cache isolation, re-elaborated output, and exact axiom dependencies |
+| `lake env python3 tests/cli.py` | CLI results, standalone file compilation, golden outputs, completed proofs, diagnostics, and output protection; build `smt2lean` first |
 
-The translator's own checks run from the repository root without solving in cvc5:
+The Lean test modules stay in `backend/`. Semantic tests elaborate generated text
+in memory and compare it with the reconstructed expressions. The CLI suite owns
+filesystem checks: it compiles both `Query.lean` and its statement section using
+only Lean core, refuses existing destinations, and preserves edited proofs.
 
-```sh
-lake exe testSource          # tests/backend/Source.lean
-lake exe testParser          # tests/backend/Parser.lean
-lake exe testReconstruction  # tests/backend/Reconstruction.lean
-lake exe testTranslation     # tests/backend/Translation.lean
-lake exe testHorn            # tests/backend/Horn.lean
-```
+Statement checks reject admissions and query-specific axioms, including transitive
+dependencies. Classical conditionals may use `propext`, `Classical.choice`, and
+`Quot.sound`. Proof templates use `sorry`; the four completed README proofs must
+compile without it. The integer proof uses `propext`; the other three are axiom-free.
 
-`Source.lean` checks command boundaries, exact bytes, UTF-8 offsets, CR/LF/CRLF,
-quoted identifiers, doubled quotes, literal backslashes in strings, and malformed
-input. `Parser.lean` checks accepted queries, attachment of source ranges, and
-rejection diagnostics. Locations point to command starts or lexical failures;
-reconstruction errors retain the originating assertion/clause location.
-`Horn.lean` parses the unedited `chc/lh_sum_rec.smt2` in explicit CHC mode. It checks
-one typed declaration, three quantified assertions, and an invocation trace with
-no solver query. Unsupported terms/sorts and invalid command sequences still fail
-before inspection. It also recognizes relations and bare facts, checks native
-identity and bound Bool arguments, and rejects unsupported CHC declarations and
-relations nested inside arguments. Clause extraction checks assertion numbers,
-binder identities/sorts, premise order, and relation/false heads. Existential or
-non-leading quantifiers and unsupported heads are rejected. Validation flattens
-premise conjunctions in order, distinguishes relation calls from theory guards,
-and rejects hidden or negated relations. A bad later clause never reaches the
-validated-problem callback. Errors identify the file, query, and offending clause;
-parser errors retain command numbers. Status variants produce identical CHC structure.
-The CLI tests translate lh_sum_rec to `Problem`, preserving the target under
-absent/sat/unsat/unknown status metadata. The same clauses under `ALL` or no logic
-produce `Refutation`; HORN text in comments, names, and metadata cannot select
-CHC mode. Empty HORN input also translates. Invalid CHC declarations, later
-clauses/operators, missing checks, and malformed tails fail with source context
-and create no output. The combined sixteen-clause CHC fixture also compiles through
-the CLI. Source checks cover multiline commands, quoted text, CRLF input, and
-filenames containing newlines. Moving the input changes only source comments.
-Edited CHC proof work survives attempted overwrites.
-`Reconstruction.lean` translates one proposition and checks it with Lean's kernel.
-`Translation.lean` checks variable binding, connectives, independent reconstruction
-contexts, and closed Bool/Int refutations against handwritten Lean propositions.
-It checks all 28 truth assignments for xor with two, three, and four operands
-against odd parity, plus four integer distinct cases, using kernel-checked proofs.
-Eight Boolean ite truth cases and four integer ite cases check branch selection,
-negative/large values, and nesting.
-These cases, a quantified function-argument example, and the combined let fixture
-bring the total to 25 refutations.
-It also compares the printed statements with the original expressions and compiles
-each `Query.lean` and its isolated statement section using only Lean core.
-Used xor/distinct helpers must appear exactly once before the query statement.
-Tests compare the emitted helper bodies with their checked definitions, then
-unfold helpers in each environment separately to compare the complete statements.
-Tests check exact axiom dependencies: none for the earlier examples, and only
-`propext`, `Classical.choice`, and `Quot.sound` for classical conditionals.
-Separate rejection cases check that admissions and fabricated axioms remain
-forbidden, including through another definition. Only proof templates contain
-admissions in generated output. Existing proof work is
-preserved. The tests reuse the combined fixtures below.
+## Combined translation fixtures
 
-The translation test also reconstructs all nineteen CHC clauses from lh_sum_rec
-and the combined CHC fixture. Each clause is compared with a handwritten Lean
-proposition and kernel-checked after closing its relation parameters. Checks cover
-unused variables/relations, shadowed binders, mixed sorts, nullary relations,
-multiple premises, false heads, and isolation between nested reconstructions.
-An unmapped relation named `True` must fail instead of resolving to Lean's builtin.
-Complete CHC problems are compared with handwritten existential propositions,
-including both fixtures, empty inputs, unused relations, nullary facts, and
-inconsistent clauses. Absent/sat/unsat/unknown status variants of lh_sum_rec keep
-the same target. All ten `Problem` definitions are closed, kernel-checked, and
-checked against their expected axiom dependencies. The emitter writes each CHC case to one temporary `Query.lean`
-with Statements before Proofs. The complete file and isolated statements compile
-using only Lean core; only the `problem` theorem depends on `sorryAx`. Edited files
-survive attempted overwrites.
+| Directory | Cases |
+| --- | --- |
+| `translation/bool/` | Contradiction, connectives, empty assertions, solver options, and metadata |
+| `translation/int/` | Exact literals beyond 64 bits, arithmetic, comparisons, distinct, conditionals, and contradictory bounds |
+| `translation/functions/` | Mixed Bool/Int functions and predicates, quoted names, argument order, unused parameters, and congruence |
+| `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |
+| `translation/quantifiers/` | Nested forall/exists, shadowing, Bool binders, unused variables, and quantifier hints |
+| `translation/chc/` | Facts, multiple relation premises, guards, false heads, definitions, and named clauses |
+| `translation/sessions/` | Eight SMT checks and six CHC checks with nested push/pop, reused symbols, definitions, aliases, and shared helpers |
 
-Run the CLI/demo checks without rebuilding the smoke test:
+Quantifier hints `:pattern`, `:no-pattern`, and `:qid` are checked and removed without
+changing the proposition. Unsupported annotations and operators still fail. Short
+invalid scripts remain inline in the test modules: each requires a separate parse
+because validation stops at its first error.
+
+The session tests compare every goal with a handwritten proposition. They check
+that popped declarations disappear, redeclarations get fresh identities, repeated
+checks remain separate, and a later failure produces no output. The strict
+single-query API also retains tests for its callback-after-validation contract.
+
+Five `expected/Query.lean` files preserve reviewed output for the Boolean, integer,
+function, quantified, and `chc/lh_sum_rec.smt2` examples. Metadata variants must leave
+code unchanged after source comments are removed. Root `demo.smt2` and
+`demo-chc.smt2` provide commented feature tours; the commands are in the main README.
+
+## Original frontend queries
 
 ```sh
-lake build smt2lean
-lake env python3 tests/cli.py
+tests/run.sh   # Replay the original SMT/CHC corpus through z3.
 ```
 
-All generated test files go into temporary directories and are removed afterwards.
-
-`translation/bool/` keeps three reusable queries:
-
-- `contradiction.smt2`: the smallest demo, `p` and `not p`.
-- `connectives.smt2`: all supported connectives, both declaration forms, quoted
-  names, an unused declaration, metadata, and exit in one query. Includes xor
-  with two to four operands, Boolean distinct, and nested Boolean conditionals.
-- `empty.smt2`: a query with no assertions.
-
-`translation/int/` keeps three reusable queries:
-
-- `literals.smt2`: mixed Bool/Int declarations, quoted names, unused parameters,
-  chained equality, unary minus, zero, and integers beyond 64 bits.
-- `arithmetic.smt2`: operand order, nonlinear multiplication, nested negation/abs,
-  absolute value at negative/zero/positive inputs, all four comparison chains,
-  pairwise distinct with a repeated nonadjacent operand, and integer conditionals
-  with both symbolic and decidable conditions.
-- `bounds.smt2`: the small contradiction `x ≥ 0` and `x < 0`.
-
-`translation/functions/` keeps two queries:
-
-- `applications.smt2`: Bool/Int functions and predicates, mixed signatures, nested
-  calls, compound Boolean arguments, quoted `Int.add`/`True` names, and unused
-  parameters, and Bool/Int conditional arguments. Tests check argument order, missing mappings, and fresh parameters
-  across nested reconstructions and separate inputs with reused names.
-- `congruence.smt2`: the small contradiction `x = y` and `f(x) ≠ f(y)`.
-
-`translation/bindings/simultaneous.smt2` combines nine Bool/Int let assertions:
-outer-name references, reversed binding order, compound right-hand sides, and
-shadowing that changes a name's sort, plus nested lets, repeated expressions,
-aliases beneath shadowed quantifiers, and restoration of outer scopes.
-The parser checks native outer-variable
-identities; translation compares each assertion and the complete refutation with
-handwritten expansions. The generated file and its isolated statement compile
-using Lean core. Parser rejection cases cover undeclared earlier/later siblings
-and Boolean siblings, escaping local names, and unsupported div/mod in expanded
-binding values or bodies; CLI checks also verify rejection without creating output.
-
-`translation/quantifiers/` keeps two queries:
-
-- `scopes.smt2`: alternating forall/exists, mixed Bool/Int binders, shadowing,
-  premise-only and unused variables, quoted names, and quantified Boolean arguments.
-  A `let` alias keeps an outer variable accessible under an inner binder with the
-  same name. This checks native identity rather than name-based lookup.
-  Conditional branches retain outer variables when their conditions introduce
-  shadowed existential/universal binders.
-- `quantified.smt2`: `∀ x, P x` together with `∃ x, ¬P x`, with a completed README proof.
-
-The parser test also constructs native terms with a dangling variable and a
-different variable with the same name. Both must fail scope validation, even when
-the same subterm was already accepted under a quantifier.
-
-`translation/chc/expected/Query.lean` is the reviewed output for `chc/lh_sum_rec.smt2`:
-one existential relation and all three original clauses, followed by an unfinished
-proof. Its source comments identify the original query and clause ranges.
-
-`translation/chc/clauses.smt2` combines six relation declarations and sixteen clauses:
-five bare facts, a quantified fact, nine rules, and a bare false assertion. It
-covers mixed sorts, arithmetic, quoted names, unused relations/variables, chained
-implications, and shadowed leading binders. Tests preserve argument and premise
-order before and after flattening premise conjunctions. A nonlinear rule combines
-three relation premises with arithmetic, nested conjunctions, and Boolean guards;
-conjunctions inside a guard's `or` stay intact. Another rule combines xor and
-Bool/Int distinct guards with nested operators in a relation argument.
-Conditional guards and both Bool/Int conditional relation arguments are included;
-relations and nested quantifiers hidden inside conditions remain rejected.
-Two let-based rules cover nested scopes, relation aliases, theory guards, repeated
-head expressions, and saved Bool/Int variables beneath shadowed leading binders.
-Their expansions match handwritten clauses and the complete Lean problem.
-Rejection cases ensure let aliases cannot hide unsupported arithmetic, relations
-inside guards or arguments, or non-leading quantifiers. CLI checks retain the
-offending clause location and create no output for invalid expanded clauses.
-The unedited lh_sum_rec fixture
-retains its three clauses with binder counts 3/5/3, heads k_1/k_1/false, and
-relation-premise counts 0/1/1 under absent/sat/unsat/unknown status metadata.
-Short invalid cases stay inline in `Horn.lean`. Separate checks distinguish a bound
-Bool from a same-named nullary relation and reject a different native symbol with
-the same printed name.
-
-The translation test compares each complete formula with a handwritten Lean target.
-Emitted absolute values use only core `if/then/else`; comparison chains retain
-every adjacent pair. The parser test also checks their native binary structure.
-
-`backend/Parser.lean` reuses these for logic and metadata variants. Its short
-rejection cases live together in a table: each needs a separate parse because
-validation stops at the first error. Checks cover declaration identity and error
-locations; invalid input must never reach the inspection callback.
-Div/mod remain rejected for zero and nonzero divisors, including inside supported
-arithmetic. Real, array, and bitvector signatures, higher-order logic, and incorrect
-application arities/types are also rejected.
-Quantifier patterns, unsupported binder sorts (even when unused), unsupported
-operators inside quantified bodies, and quantifiers in `QF_*` logics are rejected
-before file generation.
+This separate script compares solver results with the answers recorded in the
+inputs. It requires z3 and does not test Lean translation. Translator tests never
+invoke cvc5's solving commands. `tools/fqhorn2chc.py` converts liquid-fixpoint Horn
+files into the SMT-LIB fixtures described below.
 
 ## `smt/`: verification conditions (8)
 
