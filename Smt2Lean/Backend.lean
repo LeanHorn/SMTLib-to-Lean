@@ -10,10 +10,10 @@ import Smt.Reconstruct.UF
 /-!
 Parse a restricted SMT-LIB script with cvc5 without solving it.
 
-Accept one Bool/Int query, with declarations, definitions, assertions, and metadata.
-Intercept `check-sat` and pass the validated query to a callback after reading
-the entire input. Report failures with file, line, column, and command number;
-CHC mode adds the query number and, for assertion validation, the clause number.
+Intercept each `check-sat` and inspect its active Bool/Int assertions without solving.
+Native symbol scopes and local assertion/definition scopes follow `push` and `pop`.
+Report failures with source locations, command numbers, and query/clause context.
+The single-query wrapper retains its callback-after-EOF behavior.
 
 The reconstruction imports register the handlers used by `Translate.lean`
 and the reconstruction tests to turn assertion terms into Lean propositions.
@@ -36,6 +36,7 @@ structure ParsedDeclaration where
 
 /-- One validated query. Use native terms only inside `inspect`. -/
 structure ParsedQuery where
+  number : Nat := 1
   logic : Option String := none
   source : Option Source.Ref := none
   commands : Array Source.Command := #[]
@@ -44,6 +45,13 @@ structure ParsedQuery where
   assertions : Array cvc5.Term := #[]
   assertionSources : Array Source.Ref := #[]
   invoked : Array String := #[]
+
+/-- Only the active arrays and native assertion count roll back on pop. -/
+private structure Scope where
+  declarations : Nat
+  definitions : Nat
+  assertions : Nat
+  nativeAssertions : Nat
 
 private def isScalarSort (sort : cvc5.Sort) : Bool :=
   sort.isBoolean || sort.isInteger
@@ -223,32 +231,23 @@ def errorWithContext (context : String) : cvc5.Error → cvc5.Error
   | .option message => .option s!"{context}: {message}"
   | .missingValue => .error s!"{context}: missing native value"
 
-/--
-A higher-order function that parses and validates SMT-LIB commands without solving.
-Accepts Bool/Int declarations, definitions, sort aliases, assertions, metadata,
-audited solver options, and one `check-sat`. Metadata and options are recorded
-without execution. Definitions are expanded before assertions reach `inspect`.
-Only metadata and an optional final `exit` may follow the check.
-Calls `inspect` once with native terms, original command text, source ranges,
-the logic, and executed command names.
-HORN requires CHC or auto mode; this parser does not check Horn clause shape.
--/
-def parseAndInspectQuery
+private def parseScript
     (input : String)
     (inspect : ParsedQuery → cvc5.Env Unit)
-    (name : String := "backend-smoke")
-    (mode : ParseMode := .smt) : cvc5.Env Unit := do
+    (name : String) (mode : ParseMode) (singleQuery : Bool) : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
   let solver  ← cvc5.Solver.new tm
+  if !singleQuery then solver.setOption "incremental" "true"
   let symbols ← cvc5.SymbolManager.new tm
   let parser  ← cvc5.InputParser.new solver (some symbols)
   parser.setStringInput input (name := name)
   let mut query : ParsedQuery := {}
   let mut allowQuantifiers := true
   let mut checked := false
+  let mut checks := 0
+  let mut scopes : Array Scope := #[]
   let mut exited := false
   let mut reader : Source.Reader input := {}
-  let mut assertionNumber := 0
   -- cvc5 counts defining equations too; query.assertions keeps only source assertions.
   let mut nativeCount := 0
   while true do
@@ -259,18 +258,29 @@ def parseAndInspectQuery
         let source : Source.Ref := {
           file := name, number := reader.number
           span := { start := error.position, stop := error.position } }
-        throw (errorWithContext (source.context isChc) (.error error.message))
+        throw (errorWithContext (source.context isChc query.number) (.error error.message))
     reader := rest
     let eof : Source.Ref := {
       file := name, number := reader.number
       span := { start := reader.position, stop := reader.position } }
-    let context := (command?.map (·.source) |>.getD eof).context isChc
+    let context := (command?.map (·.source) |>.getD eof).context isChc query.number
     let command? ← command?.mapM fun command => do
       match command.withNames with
       | .ok command => pure command
       | .error message => throw (errorWithContext context (.unsupported message))
-    let context := (command?.map (·.source) |>.getD eof).context isChc
+    let context := (command?.map (·.source) |>.getD eof).context isChc query.number
     try
+      if !singleQuery && exited && command?.isSome then
+        throw (.unsupported "unexpected command after exit")
+      let scopeChange ← if singleQuery then pure none else do
+        match command? with
+        | none => pure none
+        | some command => match command.scopeChange with
+          | .ok change => pure change
+          | .error message => throw (.unsupported message)
+      if let some ("pop", count) := scopeChange then
+        if count > scopes.size then
+          throw (.error s!"pop {count} exceeds active scope depth {scopes.size}")
       let cmd ← parser.nextCommand
       if cmd.isNull then
         unless command?.isNone do throw (.error "source reader and cvc5 command streams disagree")
@@ -280,7 +290,7 @@ def parseAndInspectQuery
       let commandName := cmd.getCommandName
       if exited then
         throw (.unsupported s!"unexpected command after exit: {commandName}")
-      if checked && commandName != "set-info" && commandName != "exit" then
+      if singleQuery && checked && commandName != "set-info" && commandName != "exit" then
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
       match commandName with
       | "set-logic" =>
@@ -324,7 +334,7 @@ def parseAndInspectQuery
         invokeCommand cmd solver symbols
         query := { query with invoked := query.invoked.push commandName }
       | "assert" =>
-        assertionNumber := assertionNumber + 1
+        let assertionNumber := query.assertions.size + 1
         try
           validateNamedTerms command.source.names tm solver symbols query allowQuantifiers
           invokeCommand cmd solver symbols
@@ -346,12 +356,39 @@ def parseAndInspectQuery
           invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
       | "set-option" => validateSolverOption cmd
+      | "push" | "pop" =>
+        let some (_, count) := scopeChange
+          | throw (.unsupported s!"unsupported command: {commandName}")
+        invokeCommand cmd solver symbols
+        if commandName == "push" then
+          let scope : Scope := {
+            declarations := query.declarations.size, definitions := query.definitions.size
+            assertions := query.assertions.size, nativeAssertions := nativeCount }
+          scopes := scopes ++ Array.replicate count scope
+        else if count > 0 then
+          let remaining := scopes.size - count
+          let some scope := scopes[remaining]? | throw (.error "missing saved scope")
+          query := { query with
+            declarations := query.declarations.extract 0 scope.declarations
+            definitions := query.definitions.extract 0 scope.definitions
+            assertions := query.assertions.extract 0 scope.assertions
+            assertionSources := query.assertionSources.extract 0 scope.assertions }
+          nativeCount := scope.nativeAssertions
+          scopes := scopes.extract 0 remaining
+        unless (← solver.getAssertions).size == nativeCount &&
+            (← symbols.getDeclaredTerms) == query.declarations.map (·.term) do
+          throw (.error "native and translator scopes disagree")
+        query := { query with invoked := query.invoked.push commandName }
       | "check-sat" =>
         let assertions ← solver.getAssertions
         unless assertions.size == nativeCount && query.assertions.size == query.assertionSources.size do
           throw (.error "assertions and source locations disagree")
         query := { query with source := some command.source }
         checked := true
+        checks := checks + 1
+        if !singleQuery then
+          inspect { query with commands := query.commands.push command }
+          query := { query with number := checks + 1 }
       | "exit" =>
         unless checked do throw (.error "exit before check-sat")
         exited := true
@@ -362,8 +399,22 @@ def parseAndInspectQuery
     let source : Source.Ref := {
       file := name, number := reader.number
       span := { start := reader.position, stop := reader.position } }
-    throw (errorWithContext (source.context (mode == .chc || query.logic == some "HORN"))
-      (.error "expected one check-sat"))
-  inspect query
+    throw (errorWithContext (source.context (mode == .chc || query.logic == some "HORN") query.number)
+      (.error (if singleQuery then "expected one check-sat" else "expected at least one check-sat")))
+  if singleQuery then inspect query
+
+/-- Parse one query and call `inspect` after the whole input validates.
+Only metadata and a final exit may follow its check; scope commands are rejected. -/
+def parseAndInspectQuery (input : String) (inspect : ParsedQuery → cvc5.Env Unit)
+    (name : String := "backend-smoke") (mode : ParseMode := .smt) : cvc5.Env Unit :=
+  parseScript input inspect name mode true
+
+/-- Inspect each check while its native scope is active. Never execute a solver query.
+Callbacks see active terms and the command history through that check. Reconstruct
+inside the callback; publish results only after this function succeeds, since a
+later command can still fail. At least one check is required. -/
+def parseAndInspectSession (input : String) (inspect : ParsedQuery → cvc5.Env Unit)
+    (name : String := "session") (mode : ParseMode := .smt) : cvc5.Env Unit :=
+  parseScript input inspect name mode false
 
 end Smt2Lean.Backend

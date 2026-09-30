@@ -14,6 +14,7 @@ FUNCTIONS = ROOT / "tests/translation/functions"
 QUANTIFIERS = ROOT / "tests/translation/quantifiers"
 BINDINGS = ROOT / "tests/translation/bindings"
 CHC = ROOT / "tests/translation/chc"
+SESSIONS = ROOT / "tests/translation/sessions"
 SOLVER_OPTIONS = """(set-option :produce-models true)
 (set-option :produce-proofs true)
 (set-option :produce-unsat-cores true)
@@ -53,15 +54,22 @@ def check_lean(lean, source, *, complete=False):
     return result.stdout
 
 
-def check_generated(lean, output, *, goal="Refutation"):
+def check_generated(lean, output, *, goal="Refutation", count=1):
     assert [p.name for p in output.iterdir()] == ["Query.lean"]
     query = output / "Query.lean"
     source = query.read_text()
     statements, proofs = source.split("-- Proofs\n", 1)
-    assert "-- Statements" in statements and f"def {goal} : Prop" in statements
+    assert statements.count("-- Statements") == 1
     assert "-- Source: " in statements
-    assert f"theorem {goal.lower()} : {goal}" in proofs
     assert "sorry" not in statements and "by\n  sorry" in proofs
+    assert proofs.count("theorem ") == count and "def " not in proofs
+    assert statements.count(f"def {goal}") == count
+    for number in range(1, count + 1):
+        name = goal if count == 1 else f"{goal}_{number}"
+        assert f"def {name} : Prop" in statements
+        assert f"theorem {name.lower()} : {name}" in proofs
+        if count > 1:
+            assert f"(query {number}: check-sat," in statements
     check_lean(lean, query)
     # The statement must also compile after removing the unfinished proof entirely.
     standalone = output / "StatementsOnly.lean"
@@ -89,6 +97,52 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="smt2lean cli ") as temporary:
         tmp = Path(temporary)
+        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6)]:
+            output = tmp / f"session-{fixture}"
+            run(SESSIONS / f"{fixture}.smt2", "--out", output)
+            generated = check_generated(lean, output, goal=goal, count=count)
+            if fixture == "smt":
+                assert generated.count("def SMT.xor ") == generated.count("def SMT.distinct3.{") == 1
+            query = output / "Query.lean"
+            edited = generated + "\n-- User session proof work.\n"
+            query.write_text(edited)
+            run(SESSIONS / f"{fixture}.smt2", "--out", output, code=1)
+            assert query.read_text() == edited
+
+        for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
+            for name, body, count in [
+                ("empty", "(check-sat)\n(check-sat)\n(push 1)", 2),
+                ("single", "(push 1)\n(assert false)\n(pop 1)\n(check-sat)", 1),
+                ("configured", "(assert false)\n(check-sat)\n"
+                 "(set-option :print-success false)\n(set-info :status unknown)\n(check-sat)", 2),
+            ]:
+                source, output = tmp / f"session-{logic}-{name}.smt2", tmp / f"session-{logic}-{name}"
+                source.write_text(f"(set-logic {logic})\n" + body)
+                result = run(source, "--out", output)
+                assert "success" not in result.stdout and "unsat" not in result.stdout
+                generated = check_generated(lean, output, goal=goal, count=count)
+                if name == "single":
+                    expected_body = "True → False" if logic == "ALL" else "True"
+                    assert f"def {goal} : Prop :=\n  {expected_body}\n" in generated
+
+        # A later failure must leave no output, even after reconstructing query 1.
+        for name, text, reason in [
+            ("underflow", "(set-logic ALL)\n(check-sat)\n(pop 1)", "exceeds active scope depth"),
+            ("operator", "(set-logic ALL)\n(check-sat)\n(assert (= (div 1 0) 0))", "unsupported operator"),
+            ("popped-name", "(set-logic ALL)\n(push 1)\n(declare-const p Bool)\n"
+             "(assert p)\n(check-sat)\n(pop 1)\n(assert p)", "not declared"),
+            ("clause", "(set-logic HORN)\n(declare-fun P (Int) Bool)\n(assert (P 0))\n"
+             "(check-sat)\n(assert (=> (not (P 0)) false))\n(check-sat)",
+             "CHC relation inside a theory guard"),
+            ("declaration", "(set-logic HORN)\n(check-sat)\n(declare-const x Int)\n(check-sat)",
+             "unsupported CHC declaration"),
+        ]:
+            source, output = tmp / f"session-bad-{name}.smt2", tmp / f"session-bad-{name}"
+            source.write_text(text)
+            result = run(source, "--out", output, code=1)
+            assert "query 2:" in result.stderr and reason in result.stderr, result.stderr
+            assert not output.exists()
+
         inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty", "options"]]
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
@@ -274,8 +328,8 @@ def main():
             ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
              "2:1: query 1: command 2:", "unsupported CHC declaration"),
             ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
-             "5:8: query 1: command 5:", "unterminated command"),
-            ("missing-check", horn_prefix, "4:1: query 1: command 4:", "expected one check-sat"),
+             "5:8: query 2: command 5:", "unterminated command"),
+            ("missing-check", horn_prefix, "4:1: query 1: command 4:", "expected at least one check-sat"),
         ]:
             source, output = tmp / f"horn-{name}.smt2", tmp / f"horn-{name}"
             source.write_text(text)
@@ -304,15 +358,15 @@ def main():
                 context = "query 1: " if logic == "HORN" else ""
                 assert f"{source}:3:1: {context}command 3:" in result.stderr, result.stderr
                 assert reason in result.stderr and not output.exists(), result.stderr
-            for suffix in ["(set-option :print-success false)", "(get-model)", "(check-sat)"]:
+            for suffix in ["(get-model)", "(reset)", "(check-sat-assuming ())"]:
                 source, output = tmp / f"config-tail-{logic}.smt2", tmp / f"config-tail-{logic}"
                 source.write_text(SOLVER_OPTIONS + f"(set-logic {logic})\n(assert false)\n(check-sat)\n" + suffix)
                 result = run(source, "--out", output, code=1)
-                assert "after check-sat" in result.stderr and not output.exists(), result.stderr
+                assert "unsupported command" in result.stderr and not output.exists(), result.stderr
 
         invalid = [
             "(set-logic QF_LRA)\n(check-sat)",
-            "(set-logic QF_UF)\n(check-sat)\n(check-sat)",
+            "(set-logic QF_UF)\n(check-sat)\n(pop 1)",
             "(set-logic QF_UF)\n(check-sat)\n(assert",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (div x 0) 0))\n(check-sat)",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (mod x 0) 0))\n(check-sat)",
@@ -334,7 +388,7 @@ def main():
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"
             source.write_text(text)
             result = run(source, "--out", output, code=1)
-            assert re.search(re.escape(str(source)) + r":\d+:\d+: command ", result.stderr), result.stderr
+            assert re.search(re.escape(str(source)) + r":\d+:\d+: (?:query \d+: )?command ", result.stderr), result.stderr
             assert not output.exists()
 
         # Quoted names and doubled quotes cannot move source boundaries. Keep CRLF bytes.
@@ -368,7 +422,7 @@ def main():
             ("bad-string", '(set-logic QF_UF)\n(set-info :source "unfinished',
              "2:30: command 2:", "unterminated string"),
             ("extra-close", "(set-logic QF_UF)\n(check-sat)\n  )",
-             "3:3: command 3:", "expected '('"),
+             "3:3: query 2: command 3:", "expected '('"),
         ]:
             source, output = tmp / f"{name}.smt2", tmp / name
             source.write_text(text)
@@ -394,6 +448,7 @@ def main():
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
     print("Demo passed: 33 SMT and 8 CHC standalone translations, source locations, and 4 completed proofs")
+    print("Sessions passed: numbered SMT/CHC goals, standalone statements, later failures, and proof protection")
 
 
 if __name__ == "__main__":

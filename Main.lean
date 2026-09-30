@@ -6,7 +6,8 @@ open Smt2Lean
 private def usage : String :=
   "Usage: smt2lean <input.smt2> --out <new-directory>\n" ++
   "       smt2lean --help\n\n" ++
-  "Translate one supported Bool/Int SMT-LIB query into Query.lean: statements, then proofs.\n" ++
+  "Translate every check-sat in a supported Bool/Int SMT-LIB session into Query.lean.\n" ++
+  "Supports push/pop; all statements come first, followed by their proof templates.\n" ++
   "HORN logic generates Problem (satisfying relations); other supported logics generate Refutation.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++
   "The proof template contains sorry and must be completed in Lean."
@@ -16,20 +17,8 @@ private def translateFile (input output : System.FilePath) : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
-  (Backend.parseAndInspectQuery text (name := input.toString) (mode := .auto) fun query => do
-    let translation : MetaM String ← if query.logic == some "HORN" then do
-      let problem ← Chc.validateQuery query input.toString
-      pure do
-        Emit.render (← Translate.defineProblem problem) (kind := .problem)
-          (source := query.source) (assertions := query.assertionSources)
-    else
-      pure do
-        Emit.render (← Translate.defineRefutation query)
-          (source := query.source) (assertions := query.assertionSources)
-    let (source, _, _) ← translation.toIO
-      { fileName := input.toString, fileMap := default } { env }
-    Emit.writeFile output source
-  ).runIO
+  let source ← Emit.translateSession text env input.toString
+  Emit.writeFile output source
   IO.println s!"Generated {output / "Query.lean"}"
   IO.println "Proof unfinished: replace sorry in the Proofs section of Query.lean."
 

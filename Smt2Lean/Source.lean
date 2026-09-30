@@ -26,9 +26,10 @@ def Ref.namedContext (ref : Ref) : String :=
   if ref.names.isEmpty then "" else
     " (:named " ++ String.intercalate ", " (ref.names.toList.map reprStr) ++ ")"
 
-def Ref.context (ref : Ref) (chc : Bool := false) : String :=
+def Ref.context (ref : Ref) (chc : Bool := false) (queryNumber : Nat := 1) : String :=
   s!"{ref.file}:{ref.span.start.line}:{ref.span.start.column}: " ++
-  (if chc then "query 1: " else "") ++ s!"command {ref.number}" ++ ref.namedContext
+  (if chc || queryNumber > 1 then s!"query {queryNumber}: " else "") ++
+    s!"command {ref.number}" ++ ref.namedContext
 
 structure Command where
   source : Ref
@@ -92,6 +93,19 @@ private def tokens (input : String) : Array String := Id.run do
         cursor := cursor.next!
     result := result.push (String.extract start cursor)
   return result
+
+/-- Check scope counts before native parsing, which already changes the symbol scope. -/
+def Command.scopeChange (command : Command) : Except String (Option (String × Nat)) := do
+  let parts := tokens command.text
+  let kind := parts[1]?.getD ""
+  unless kind == "push" || kind == "pop" do return none
+  let #["(", _, value, ")"] := parts | throw s!"{kind}: expected one SMT-LIB numeral"
+  unless !value.isEmpty && value.toList.all Char.isDigit &&
+      (value == "0" || !value.startsWith "0") do
+    throw s!"{kind}: expected one SMT-LIB numeral"
+  let some count := value.toNat? | throw s!"{kind}: invalid count"
+  if count > 4294967295 then throw s!"{kind}: count exceeds cvc5's UInt32 limit"
+  return some (kind, count)
 
 /-- Reject unaudited attributes and recover labels before cvc5 erases or merges them. -/
 def Command.withNames (command : Command) : Except String Command := do

@@ -2,6 +2,24 @@
 
 A tool to connect SMT-based frontends to Lean4.
 
+## Feature tour
+
+[demo.smt2](demo.smt2) covers the supported SMT feature families in five queries:
+functions, Boolean operators, integer arithmetic, definitions, aliases, let bindings,
+quantifiers and hints, named assertions, and push/pop scopes.
+[demo-chc.smt2](demo-chc.smt2) adds recursive Horn rules, multiple relation premises,
+mixed Bool/Int arguments, and safety clauses in three queries.
+
+```sh
+lake exe smt2lean demo.smt2 --out demo-output
+lake env lean demo-output/Query.lean
+lake exe smt2lean demo-chc.smt2 --out demo-chc-output
+lake env lean demo-chc-output/Query.lean
+```
+
+Choose fresh output directories. Each file explains its queries and which goals
+can hold; typechecking the generated `sorry` templates does not prove them.
+
 ## Translate a Boolean query
 
 From the repository root, after installing the development tools below:
@@ -337,7 +355,7 @@ checks alternating binders, name collisions, and Boolean formulas used as argume
 
 ## Solver options and metadata
 
-These `set-option` commands are accepted before `check-sat`:
+These `set-option` commands are accepted, including between checks:
 
 | Option | Accepted value |
 | --- | --- |
@@ -348,7 +366,7 @@ The translator records their original text and source locations without executin
 them. They do not change the Lean proposition or enable model/proof queries.
 Strings such as `"true"`, negative seeds, and unknown options are rejected.
 Semantic options such as `:global-declarations` remain unsupported, including when
-set to `false`. Options after `check-sat` or `exit` are also rejected.
+set to `false`. Commands after `exit` are rejected.
 
 Metadata support remains `:smt-lib-version 2.6`, `:source`, `:category`, `:license`,
 `:notes`, and `:status`. Status values `sat`, `unsat`, and `unknown` never select
@@ -364,6 +382,69 @@ lake env lean options-demo/Query.lean
 This combined example exercises all five options and six metadata fields. It
 produces the same `∀ p : Prop, (p ∧ ¬p) → False` statement as the contradiction demo,
 with an unfinished `sorry` proof.
+
+## Translate sessions with push/pop
+
+Every `check-sat` captures the assertions and declarations active at that point.
+`push n` opens scopes; `pop n` removes their assertions, declarations, definitions,
+sort aliases, and named bindings. Popped names can be declared again with different
+sorts or signatures. Zero is a no-op; popping past the base scope is an error.
+Counts must be SMT-LIB numerals within cvc5's unsigned 32-bit range.
+These are the default local declaration lifetimes from
+[SMT-LIB 2.6](https://smt-lib.org/papers/smt-lib-reference-v2.6-r2024-09-20.pdf), section 4.2.
+
+```smt2
+(set-logic QF_UF)
+(declare-const p Bool)
+(assert p)
+(check-sat)
+(push 1)
+(assert (not p))
+(check-sat)
+(pop 1)
+(check-sat)
+```
+
+This produces three independent goals in one file:
+
+```lean
+import Init
+
+-- Statements
+
+def Refutation_1 : Prop := ∀ p : Prop, p → False
+def Refutation_2 : Prop := ∀ p : Prop, (p ∧ ¬p) → False
+def Refutation_3 : Prop := ∀ p : Prop, p → False
+
+-- Proofs
+
+theorem refutation_1 : Refutation_1 := by sorry
+theorem refutation_2 : Refutation_2 := by sorry
+theorem refutation_3 : Refutation_3 := by sorry
+```
+
+Only the middle refutation is provable in this example. Translation preserves each
+goal without claiming it holds. HORN sessions use `Problem_1`, `Problem_2`, etc.,
+asking for satisfying relations separately at each check. A script with just one
+check keeps the original `Refutation`/`refutation` or `Problem`/`problem` names.
+Source comments identify each query and its active assertions or clauses.
+Operator helpers are shared once across the file.
+
+Run the combined examples: eight SMT checks and six CHC checks with nested scopes
+and reused names.
+
+```sh
+lake exe smt2lean tests/translation/sessions/smt.smt2 --out session-demo
+lake env lean session-demo/Query.lean
+lake exe smt2lean tests/translation/sessions/chc.smt2 --out chc-session-demo
+lake env lean chc-session-demo/Query.lean
+```
+
+The whole script must succeed before any output is written. A later invalid
+command or unsupported query rejects the session. At least one check is required;
+valid commands after the last check create no extra goal, and scopes need not be
+closed at EOF. `check-sat-assuming`, reset commands, `:global-declarations`, and
+model/proof/result requests remain unsupported. No `check-sat` is sent to the solver.
 
 ## Development build
 
@@ -437,7 +518,7 @@ nonzero.
 
 ## Query validation
 
-The backend accepts one query in the supported Bool/Int fragment. Run its fixtures with:
+The backend accepts sessions in the supported Bool/Int fragment. Run its fixtures with:
 
 ```sh
 lake exe testParser
@@ -469,16 +550,24 @@ Supported inputs:
   `:smt-lib-version 2.6`. Metadata is ignored, never used as an assumption.
 - `set-option` for `:produce-models`, `:produce-proofs`, `:produce-unsat-cores`,
   `:print-success`, and `:random-seed`, validated and recorded without execution.
-- Exactly one `check-sat`, followed only by metadata and an optional final `exit`.
+- One or more `check-sat` commands, `push`/`pop`, and an optional final `exit`.
 
-The driver validates every declaration and assertion, then calls `inspect` once
-with a `ParsedQuery`: optional logic, declarations (SMT names and native term identities), assertion
-terms, checked definitions with their source locations, original command text, and executed command names. cvc5 reports both declaration spellings as
-`declare-fun` in this trace. No query command is executed.
+`parseAndInspectSession` calls `inspect` at each check with a `ParsedQuery`: the
+query number, logic, active declarations (SMT names and native identities), active
+assertions and definitions with source locations, and command history through that
+check. cvc5 reports both declaration spellings as `declare-fun` in the invocation
+trace. No query command is executed. Reconstruct native terms inside the callback,
+before later commands can remove their scope. Keep only closed Lean expressions
+afterward; the CLI uses fresh reconstruction caches for every query.
 
-Unsupported input is rejected before `inspect` runs, including content after
-`check-sat` or `exit`. Errors include `file:line:column` and the command number. cvc5 may
-print a warning when no logic is supplied; the same term validation still applies.
+Callbacks can run before a later error. `Emit.translateSession` collects their
+results and returns generated text only after the whole script succeeds; the CLI
+then writes it. The older `parseAndInspectQuery` API remains strict: exactly one
+check, no scopes, only metadata/exit afterward, and a callback after full validation.
+
+Errors include `file:line:column`, the command number, and the query number for
+CHCs and later SMT queries. cvc5 may print a warning when no logic is supplied;
+the same term validation still applies.
 
 `Smt2Lean.Source` reads command boundaries while preserving the exact input bytes.
 It handles nested parentheses, comments, quoted identifiers, and strings with

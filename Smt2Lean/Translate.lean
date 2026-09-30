@@ -8,10 +8,10 @@ open Lean Meta Qq
 open Backend
 
 private def atSource [Monad m] [MonadError m] (source : Option Source.Ref)
-    (description : String) (action : m α) (chc : Bool := false) : m α := do
+    (description : String) (action : m α) (chc : Bool := false) (queryNumber : Nat := 1) : m α := do
   try action
   catch error =>
-    let context := source.map (·.context chc) |>.getD "translation"
+    let context := source.map (·.context chc queryNumber) |>.getD "translation"
     throwError "{context}: {description}: {error.toMessageData}"
 
 private def checkPropositions (values : Array Expr) (state : Smt.Reconstruct.State)
@@ -91,10 +91,10 @@ def withAssertions [Inhabited α] (query : ParsedQuery)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
   -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
   for h : i in [:query.assertions.size] do
-    atSource query.assertionSources[i]? s!"assertion {i + 1}" do
+    atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
       (validateAssertion query.assertions[i] query.declarations).runIO
   let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
-    atSource declaration.source s!"declaration '{declaration.name}'" do
+    atSource declaration.source s!"declaration '{declaration.name}'" (queryNumber := query.number) do
       let sort ← ofExcept declaration.term.getSort
       let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
       let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
@@ -104,7 +104,7 @@ def withAssertions [Inhabited α] (query : ParsedQuery)
     for declaration in query.declarations, parameter in parameters do
       userNames := userNames.insert (← ofExcept declaration.term.getSymbol) parameter
     let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i term =>
-      atSource query.assertionSources[i]? s!"assertion {i + 1}" do
+      atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
         let value ← Smt.Reconstruct.reconstructTerm term
         checkPropositions #[value] (← get)
         return value
@@ -153,7 +153,7 @@ clauses inside the callback, while their Lean context and native terms are alive
 def withClauses [Inhabited α] (problem : Chc.Problem)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
   let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
-    atSource relation.source s!"relation '{relation.name}'" (chc := true) do
+    atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
       let sort ← ofExcept relation.term.getSort
       let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
       return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
@@ -162,7 +162,7 @@ def withClauses [Inhabited α] (problem : Chc.Problem)
     for relation in problem.relations, parameter in parameters do
       relations := relations.insert relation.term parameter
     let clauses ← problem.clauses.mapM fun clause =>
-      atSource clause.source s!"clause {clause.assertionNumber}" (chc := true) do
+      atSource clause.source s!"clause {clause.assertionNumber}" (chc := true) (queryNumber := problem.number) do
         let value ← reconstructClause relations clause
         if (← mkForallFVars parameters value (usedOnly := false)).hasFVar then
           throwError "clause contains variables outside its relation parameters"
@@ -204,7 +204,7 @@ def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM 
   let value ← withAssertions query fun parameters assertions => do
     let body ← mkArrow (mkAndN assertions.toList) q(False)
     mkForallFVars parameters body (usedOnly := false)
-  atSource query.source "Refutation" (defineProposition name value)
+  atSource query.source "Refutation" (defineProposition name value) (queryNumber := query.number)
 
 /--
 Define `Problem : Prop := ∃ relations, clause₁ ∧ … ∧ clauseₙ` for validated CHCs.
@@ -214,6 +214,6 @@ def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr
   let value ← withClauses problem fun parameters clauses => do
     parameters.foldrM (init := mkAndN clauses.toList) fun parameter body => do
       mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
-  atSource problem.source "Problem" (defineProposition name value) (chc := true)
+  atSource problem.source "Problem" (defineProposition name value) (chc := true) (queryNumber := problem.number)
 
 end Smt2Lean.Translate

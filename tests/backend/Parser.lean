@@ -197,6 +197,71 @@ private def checkSolverOptions : IO Unit := do
     "(set-option :produce-models true)\n(set-logic ALL)\n(check-sat)\n(get-model)"
     4 "after check-sat"
 
+private def checkSessions : IO Unit := do
+  let path := "tests/translation/sessions/smt.smt2"
+  let seen ← IO.mkRef (#[] : Array (Array Nat))
+  (parseAndInspectSession (← IO.FS.readFile path) (name := path) fun query => do
+    let i := (← seen.get).size
+    require (query.number == i + 1) "wrong query number"
+    require (query.assertions.size == #[1, 2, 3, 2, 1, 3, 2, 2][i]!) "wrong active assertion count"
+    require (query.definitions.size == #[0, 1, 1, 1, 0, 1, 1, 1][i]!) "popped definition leaked"
+    require (query.declarations.map (·.name) ==
+      #[#["p"], #["p", "x"], #["p", "x", "q"], #["p", "x"], #["p"], #["p", "x"], #["p", "x"], #["p", "x"]][i]!)
+      "wrong active declarations"
+    require (query.commands.back!.text == "(check-sat)" &&
+      query.source.map (·.number) == some query.commands.back!.source.number &&
+      (query.commands.filter (·.text == "(check-sat)")).size == query.number)
+      "query lost its source or command history"
+    require (!query.invoked.contains "check-sat") "a solver query was invoked"
+    for term in query.assertions do validateAssertion term query.declarations
+    let ids ← query.declarations.mapM (fun d => ofExcept d.term.getId)
+    seen.modify (·.push ids)
+  ).runIO
+  let ids ← seen.get
+  require (ids.size == 8 && ids[1]! == ids[3]! && ids[0]! == ids[4]! && ids[6]! == ids[7]!)
+    "scope restoration changed declaration identities"
+  require (ids[1]![1]! != ids[5]![1]! && ids[1]![1]! != ids[6]![1]!)
+    "redeclared names reused native identities"
+  let calls ← IO.mkRef 0
+  (parseAndInspectSession "(set-logic ALL) (check-sat) (check-sat) (push 2)" fun query => do
+    calls.modify (· + 1)
+    require (query.assertions.isEmpty && query.declarations.isEmpty) "empty checks gained assertions"
+  ).runIO
+  require ((← calls.get) == 2) "repeated checks or an open final scope were lost"
+  for (body, checks, command, reason) in #[
+    ("", 0, 2, "expected at least one check-sat"),
+    ("(pop 1)", 0, 2, "exceeds active scope depth"),
+    ("(push 2)\n(pop 3)", 0, 3, "exceeds active scope depth"),
+    ("(push -1)", 0, 2, "expected one SMT-LIB numeral"),
+    ("(push 01)", 0, 2, "expected one SMT-LIB numeral"),
+    ("(push)", 0, 2, "expected one SMT-LIB numeral"),
+    ("(pop 0 0)", 0, 2, "expected one SMT-LIB numeral"),
+    ("(push 4294967296)", 0, 2, "UInt32 limit"),
+    ("(check-sat)\n(assert (= (div 1 0) 0))", 1, 3, "INTS_DIVISION"),
+    ("(check-sat)\n(assert", 1, 3, "unterminated command"),
+    ("(check-sat)\n(get-model)", 1, 3, "unsupported command"),
+    ("(check-sat)\n(reset)", 1, 3, "unsupported command"),
+    ("(check-sat)\n(check-sat-assuming ())", 1, 3, "unsupported command"),
+    ("(check-sat)\n(exit)\n(pop 1)", 1, 4, "after exit"),
+    ("(push 1)\n(declare-const x Int)\n(check-sat)\n(pop 1)\n(assert (= x 0))", 1, 6, "not declared"),
+    ("(push 1)\n(define-fun f () Int 0)\n(check-sat)\n(pop 1)\n(assert (= f 0))", 1, 6, "not declared"),
+    ("(push 1)\n(define-sort I () Int)\n(check-sat)\n(pop 1)\n(declare-const x I)", 1, 6, "not declared"),
+    ("(push 1)\n(assert (! true :named p))\n(check-sat)\n(pop 1)\n(assert p)", 1, 6, "not declared"),
+    ("(push 1)\n(define-fun bad () Int (div 1 0))\n(pop 1)\n(check-sat)", 0, 3, "INTS_DIVISION")
+  ] do
+    let calls ← IO.mkRef 0
+    let result ← (parseAndInspectSession ("(set-logic ALL)\n" ++ body)
+      (fun _ => calls.modify (· + 1)) (name := "bad-session.smt2")).run
+    require ((← calls.get) == checks) "callback was not called at each valid check"
+    match result with
+    | .ok _ => throw (IO.userError "accepted an invalid session")
+    | .error error =>
+      let message := toString error
+      require (message.contains "bad-session.smt2:" && message.contains s!"command {command}:" &&
+        message.contains reason) s!"wrong session diagnostic: {message}"
+      if checks > 0 then require (message.contains s!"query {checks + 1}:") "lost query number"
+  IO.println "Sessions passed: active scopes, native identities, source history, and later failures"
+
 private def checkDefinitions : IO Unit := do
   let path := "tests/translation/bindings/definitions.smt2"
   checkAccepted path (← IO.FS.readFile path) #["x", "p", "f", "later"] 8
@@ -549,6 +614,7 @@ private def checkSourceLocations : IO Unit := do
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
+  checkSessions
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

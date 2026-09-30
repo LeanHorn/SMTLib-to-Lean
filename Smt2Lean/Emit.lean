@@ -9,6 +9,13 @@ inductive GoalKind where
   | refutation
   | problem
 
+/-- A closed, checked proposition and its source locations. Contains no native terms. -/
+structure Goal where
+  value : Expr
+  kind : GoalKind := .refutation
+  source : Option Source.Ref := none
+  assertions : Array Source.Ref := #[]
+
 private def sourceComment (label : String) (source : Source.Ref) : String :=
   let span := source.span
   -- Quote filenames and names so newlines cannot escape the Lean comment.
@@ -42,38 +49,77 @@ private def renderHelper (name : Name) : MetaM String := do
     return s!"def {name}{universes} " ++ String.intercalate " " binders.toList ++
       " : Prop :=\n  " ++ (← printExpr body).replace "\n" "\n  " ++ "\n\n"
 
-/-- Render one file with statements first, followed by unfinished proofs. -/
-def render (value : Expr) (kind : GoalKind := .refutation)
-    (source : Option Source.Ref := none) (assertions : Array Source.Ref := #[]) : MetaM String := do
-  let (definitionName, theoremName, description, proofTarget) := match kind with
+private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × String) := do
+  let (baseName, baseProof, description, proofTarget) := match goal.kind with
     | .refutation => ("Refutation", "refutation",
         "No interpretation satisfies all assertions of the SMT query.", "the query's refutation")
     | .problem => ("Problem", "problem",
         "There are relation interpretations satisfying every Horn clause.",
         "the existence of satisfying relations")
+  let suffix := number.map (fun n => s!"_{n}") |>.getD ""
+  let definitionName := baseName ++ suffix
+  let theoremName := baseProof ++ suffix
   -- lean-smt's Int.abs is not in Lean core; emit its if/then/else definition.
-  let value ← deltaExpand value (· == ``Int.abs)
+  let value ← deltaExpand goal.value (· == ``Int.abs)
   let needsClassical := (value.find? (·.isConstOf ``Classical.propDecidable)).isSome
-  let helpers := (value.getUsedConstants.filter Helpers.isHelper).qsort Name.lt
-  let helperDefinitions := String.join (← helpers.toList.mapM renderHelper)
   let body ← printExpr value
-  let label := match kind with
+  let label := match goal.kind with
     | .refutation => "assertion"
     | .problem => "clause"
-  let provenance := source.map (sourceComment "check-sat") |>.getD ""
+  let queryLabel := number.map (fun n => s!"query {n}: ") |>.getD ""
+  let provenance := goal.source.map (sourceComment (queryLabel ++ "check-sat")) |>.getD ""
   let provenance := provenance ++ String.join
-    (assertions.mapIdx (fun i ref => sourceComment s!"{label} {i + 1}" ref)).toList
+    (goal.assertions.mapIdx (fun i ref => sourceComment s!"{queryLabel}{label} {i + 1}" ref)).toList
   let definition := if needsClassical then
     s!"noncomputable def {definitionName} : Prop := by\n  classical\n  exact\n    " ++
       body.replace "\n" "\n    " ++ "\n"
     else s!"def {definitionName} : Prop :=\n  " ++ body.replace "\n" "\n  " ++ "\n"
-  let statements := "import Init\n\n-- Statements\n\n" ++
-    helperDefinitions ++ provenance ++
-    s!"/-- {description} -/\n" ++ definition
-  let proofs := "\n-- Proofs\n\n" ++
-    s!"-- Unfinished proof: replace sorry to establish {proofTarget}.\n" ++
+  let statement := provenance ++ s!"/-- {description} -/\n" ++ definition
+  let proof := s!"-- Unfinished proof: replace sorry to establish {proofTarget}.\n" ++
     s!"theorem {theoremName} : {definitionName} := by\n  sorry\n"
-  return statements ++ proofs
+  return (statement, proof)
+
+/-- Emit helpers once, then all statements, then all unfinished proofs.
+Single-query files retain their original names and formatting. -/
+def renderSession (goals : Array Goal) : MetaM String := do
+  if goals.isEmpty then throwError "expected at least one translated query"
+  let mut helpers : Array Name := #[]
+  for goal in goals do
+    for name in goal.value.getUsedConstants.filter Helpers.isHelper do
+      unless helpers.contains name do helpers := helpers.push name
+  let helperDefinitions := String.join (← (helpers.qsort Name.lt).toList.mapM renderHelper)
+  let entries ← goals.mapIdxM fun i goal =>
+    renderGoal goal (if goals.size == 1 then none else some (i + 1))
+  return "import Init\n\n-- Statements\n\n" ++ helperDefinitions ++
+    String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
+    String.intercalate "\n" (entries.toList.map Prod.snd)
+
+/-- Render one file with statements first, followed by unfinished proofs. -/
+def render (value : Expr) (kind : GoalKind := .refutation)
+    (source : Option Source.Ref := none) (assertions : Array Source.Ref := #[]) : MetaM String :=
+  renderSession #[{ value, kind, source, assertions }]
+
+/-- Reconstruct at each check, but return output only after the entire session succeeds. -/
+def translateSession (input : String) (env : Environment) (name : String := "session") : IO String := do
+  let state ← IO.mkRef ({ env } : Core.State)
+  let goals ← IO.mkRef (#[] : Array Goal)
+  let context : Core.Context := { fileName := name, fileMap := default }
+  (Backend.parseAndInspectSession input (name := name) (mode := .auto) fun query => do
+    let problem? ← if query.logic == some "HORN" then
+      some <$> Chc.validateQuery query name else pure none
+    let action : MetaM Goal := do
+      let (value, kind) ← match problem? with
+        | some problem => do
+          pure (← Translate.defineProblem problem (.mkSimple s!"Problem_{query.number}"), .problem)
+        | none => do
+          pure (← Translate.defineRefutation query (.mkSimple s!"Refutation_{query.number}"), .refutation)
+      return { value, kind, source := query.source, assertions := query.assertionSources }
+    let (goal, checkedState, _) ← action.toIO context (← state.get)
+    state.set checkedState
+    goals.modify (·.push goal)
+  ).runIO
+  let (source, _, _) ← (renderSession (← goals.get)).toIO context (← state.get)
+  return source
 
 /-- Write Query.lean in a new directory. Existing destinations are refused. -/
 def writeFile (output : System.FilePath) (source : String) : IO Unit := do

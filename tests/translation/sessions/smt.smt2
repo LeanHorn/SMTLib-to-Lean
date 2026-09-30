@@ -1,0 +1,46 @@
+; Eight checks: nested scopes, definitions/names/aliases, and reused identifiers.
+(set-logic ALL)
+(declare-const p Bool)
+(assert p)
+(push 0)
+(pop 0)
+(check-sat)
+
+(push 2)
+(define-sort I () Int)
+(declare-const x I)
+(define-fun bump ((a I)) I (+ a 1))
+(assert (! (> (bump x) 0) :named positive))
+(check-sat)
+
+(push 1)
+(declare-const q Bool)
+(assert (and q (xor p q) (distinct x 0 (bump x))))
+(check-sat)
+(pop 1)
+(check-sat)
+(pop 2)
+(check-sat)
+
+; The alias, declaration, definition, and :named binding can all be reused.
+(push 1)
+(define-sort I () Bool)
+(declare-const x I)
+(define-fun bump ((a I)) I (not a))
+(assert (! (bump x) :named positive))
+(assert (or positive (xor p x)))
+(check-sat)
+(pop 1)
+
+; Reusing x : Int again must not reuse the first x's identity or cached expression.
+(declare-const x Int)
+(define-fun bump ((a Int)) Int (ite p a (- a)))
+(assert (= (bump x) x))
+(check-sat)
+(check-sat)
+; Valid commands after the last check do not create another goal.
+(push 1)
+(assert true)
+(pop 1)
+(set-info :status unknown)
+(exit)
