@@ -87,35 +87,47 @@ private def withTermReconstruction (action : MetaM α) : MetaM α := do
     modifyEnv fun env => extension.modifyState env fun state =>
       state.insert ``Smt.TermReconstructor previous
 
+/-- Fresh carrier parameters, mapped by native sort identity for this query only. -/
+private def withCarriers [Inhabited α] (sorts : Array ParsedSort)
+    (inspect : Array Expr → Std.HashMap cvc5.Sort Expr → MetaM α) : MetaM α := do
+  let declarations ← sorts.mapIdxM fun i _ => do
+    return (← mkFreshUserName (Name.mkSimple s!"A{i}"), q(Type))
+  withLocalDeclsDND declarations fun carriers => do
+    let mut sortCache := {}
+    for declaration in sorts, carrier in carriers do
+      sortCache := sortCache.insert declaration.sort carrier
+    inspect carriers sortCache
+
 /--
-Reconstruct a parsed query using fresh parameters of each declaration's Lean type.
+Reconstruct a query with carrier parameters followed by declared term parameters.
 Use the parameters and assertions inside `inspect`, while their local context exists.
 -/
 def withAssertions [Inhabited α] (query : ParsedQuery)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
-  -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
-  for h : i in [:query.assertions.size] do
-    atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
-      (validateAssertion query.assertions[i] query.declarations).runIO
-  let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
-    atSource declaration.source s!"declaration '{declaration.name}'" (queryNumber := query.number) do
-      let sort ← ofExcept declaration.term.getSort
-      let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
-      let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
-      return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
-  withLocalDeclsDND declarations fun parameters => do
-    let mut userNames : Std.HashMap String Expr := {}
-    for declaration in query.declarations, parameter in parameters do
-      userNames := userNames.insert (← ofExcept declaration.term.getSymbol) parameter
-    let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i term =>
+  withCarriers query.sorts fun carriers sortCache => do
+    -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
+    for h : i in [:query.assertions.size] do
       atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
-        let value ← Smt.Reconstruct.reconstructTerm term
-        checkPropositions #[value] (← get)
-        return value
-    -- Match the instance scope used when the emitted `if` expressions are elaborated.
-    let (assertions, _) ← withTermReconstruction <|
-      Elab.Tactic.classical <| reconstruction.run { userNames } {}
-    inspect parameters assertions
+        (validateAssertion query.assertions[i] query.declarations (sorts := query.sorts)).runIO
+    let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
+      atSource declaration.source s!"declaration '{declaration.name}'" (queryNumber := query.number) do
+        let sort ← ofExcept declaration.term.getSort
+        let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
+        let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
+        return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
+    withLocalDeclsDND declarations fun parameters => do
+      let mut userNames : Std.HashMap String Expr := {}
+      for declaration in query.declarations, parameter in parameters do
+        userNames := userNames.insert (← ofExcept declaration.term.getSymbol) parameter
+      let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i term =>
+        atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
+          let value ← Smt.Reconstruct.reconstructTerm term
+          checkPropositions #[value] (← get)
+          return value
+      -- Match the instance scope used when the emitted `if` expressions are elaborated.
+      let (assertions, _) ← withTermReconstruction <|
+        Elab.Tactic.classical <| reconstruction.run { userNames } { sortCache }
+      inspect (carriers ++ parameters) assertions
 
 private def reconstructAtom (relations : Std.HashMap cvc5.Term Expr)
     (atom : Chc.RelationAtom) : Smt.ReconstructM Expr := do
@@ -123,10 +135,11 @@ private def reconstructAtom (relations : Std.HashMap cvc5.Term Expr)
     | throwError "unmapped CHC relation: {atom.relation.name}"
   return mkAppN relation (← atom.arguments.mapM Smt.Reconstruct.reconstructTerm)
 
-private def reconstructClause (relations : Std.HashMap cvc5.Term Expr)
+private def reconstructClause (sortCache : Std.HashMap cvc5.Sort Expr)
+    (relations : Std.HashMap cvc5.Term Expr)
     (clause : Chc.Clause Chc.Premise) : MetaM Expr := do
   let declarations ← clause.binders.mapM fun (binder : Chc.Binder) => do
-    let (type, _) ← (Smt.Reconstruct.reconstructSort binder.sort).run {} {}
+    let (type, _) ← (Smt.Reconstruct.reconstructSort binder.sort).run {} { sortCache }
     let name ← mkFreshUserName (Name.mkSimple (← ofExcept binder.term.getSymbol))
     return (name, type)
   withLocalDeclsDND declarations fun variables => do
@@ -144,34 +157,35 @@ private def reconstructClause (relations : Std.HashMap cvc5.Term Expr)
       let body ← premises.foldrM (fun premise body => mkArrow premise body) head
       mkForallFVars variables body (usedOnly := false)
     let (value, state) ← withTermReconstruction <|
-      Elab.Tactic.classical <| reconstruction.run {} { termCache }
+      Elab.Tactic.classical <| reconstruction.run {} { sortCache, termCache }
     checkPropositions #[value] state
     check value
     return value
 
 /--
-Reconstruct validated CHC clauses with fresh relation parameters.
+Reconstruct CHC clauses with carrier parameters followed by relation parameters.
 Each clause is `∀ variables, premise₁ → … → head`. Inspect the parameters and
 clauses inside the callback, while their Lean context and native terms are alive.
 -/
 def withClauses [Inhabited α] (problem : Chc.Problem)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
-  let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
-    atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
-      let sort ← ofExcept relation.term.getSort
-      let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} {}
-      return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
-  withLocalDeclsDND declarations fun parameters => do
-    let mut relations : Std.HashMap cvc5.Term Expr := {}
-    for relation in problem.relations, parameter in parameters do
-      relations := relations.insert relation.term parameter
-    let clauses ← problem.clauses.mapM fun clause =>
-      atSource clause.source s!"clause {clause.assertionNumber}" (chc := true) (queryNumber := problem.number) do
-        let value ← reconstructClause relations clause
-        if (← mkForallFVars parameters value (usedOnly := false)).hasFVar then
-          throwError "clause contains variables outside its relation parameters"
-        return value
-    inspect parameters clauses
+  withCarriers problem.sorts fun carriers sortCache => do
+    let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
+      atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
+        let sort ← ofExcept relation.term.getSort
+        let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
+        return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
+    withLocalDeclsDND declarations fun parameters => do
+      let mut relations : Std.HashMap cvc5.Term Expr := {}
+      for relation in problem.relations, parameter in parameters do
+        relations := relations.insert relation.term parameter
+      let clauses ← problem.clauses.mapM fun clause =>
+        atSource clause.source s!"clause {clause.assertionNumber}" (chc := true) (queryNumber := problem.number) do
+          let value ← reconstructClause sortCache relations clause
+          if (← mkForallFVars (carriers ++ parameters) value (usedOnly := false)).hasFVar then
+            throwError "clause contains variables outside its interpretation parameters"
+          return value
+      inspect (carriers ++ parameters) clauses
 
 /-- Permit Lean's foundations, but no admissions or query-specific axioms. -/
 def checkStatementAxioms (name : Name) : CoreM Unit := do
@@ -201,23 +215,32 @@ private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   return value
 
 /--
-Define `Refutation : Prop := ∀ parameters, (assertions) → False` in the Lean environment.
-An empty assertion set means `True`. Kernel-check the definition, without proving it.
+Define the refutation over nonempty carriers and declared term interpretations.
+No assertions means `True`. Kernel-check the statement without proving it.
 -/
 def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM Expr := do
   let value ← withAssertions query fun parameters assertions => do
     let body ← mkArrow (mkAndN assertions.toList) q(False)
-    mkForallFVars parameters body (usedOnly := false)
+    let carriers := parameters.extract 0 query.sorts.size
+    let body ← mkForallFVars (parameters.extract query.sorts.size parameters.size) body (usedOnly := false)
+    let body ← carriers.foldrM (init := body) fun carrier body => do
+      mkArrow (← mkAppM ``Nonempty #[carrier]) body
+    mkForallFVars carriers body (usedOnly := false)
   atSource query.source "Refutation" (defineProposition name value) (queryNumber := query.number)
 
 /--
-Define `Problem : Prop := ∃ relations, clause₁ ∧ … ∧ clauseₙ` for validated CHCs.
-Retain unused relations; no clauses means `True`. Check the definition without proving it.
+Define CHC model existence: nonempty carriers and relations satisfying every clause.
+Retain unused declarations; no clauses means `True`. Check without proving it.
 -/
 def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr := do
   let value ← withClauses problem fun parameters clauses => do
-    parameters.foldrM (init := mkAndN clauses.toList) fun parameter body => do
+    let carriers := parameters.extract 0 problem.sorts.size
+    let relations := parameters.extract problem.sorts.size parameters.size
+    let body ← relations.foldrM (init := mkAndN clauses.toList) fun parameter body => do
       mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
+    carriers.foldrM (init := body) fun carrier body => do
+      let body := mkApp2 (mkConst ``And) (← mkAppM ``Nonempty #[carrier]) body
+      mkAppM ``Exists #[← mkLambdaFVars #[carrier] body (usedOnly := false)]
   atSource problem.source "Problem" (defineProposition name value) (chc := true) (queryNumber := problem.number)
 
 end Smt2Lean.Translate

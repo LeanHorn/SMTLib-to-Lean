@@ -59,8 +59,8 @@ def readDefinition (equation : cvc5.Term) (source : Source.Ref)
   let symbol := equation[0]!
   let sort ← ofExcept symbol.getSort
   unless (← ofExcept symbol.getKind) == .CONSTANT &&
-      (isScalarSort sort || (← isSupportedFunction sort)) do
-    throw (.unsupported s!"unsupported definition signature: {sort}; expected Bool/Int")
+      (isScalarSort sort query.sorts || (← isSupportedFunction sort query.sorts)) do
+    throw (.unsupported s!"unsupported definition signature: {sort}; expected Bool, Int, or declared uninterpreted sorts")
   let value := equation[1]!
   let (parameters, body) ← if (← ofExcept value.getKind) == .LAMBDA then do
       unless value.getNumChildren == 2 && (← ofExcept value[0]!.getKind) == .VARIABLE_LIST do
@@ -69,9 +69,9 @@ def readDefinition (equation : cvc5.Term) (source : Source.Ref)
     else pure (#[], value)
   let body ← withoutQuantifierHints tm body
   -- Check before expansion as well: even discarded arguments must be supported.
-  validateTerm body (knownTerms query) allowQuantifiers parameters
+  validateTerm body (knownTerms query) allowQuantifiers parameters query.sorts
   let body ← expandDefinitions tm query.definitions body
-  validateTerm body query.declarations allowQuantifiers parameters
+  validateTerm body query.declarations allowQuantifiers parameters query.sorts
   return { symbol, parameters, body, source }
 
 end Smt2Lean.Backend

@@ -2,24 +2,24 @@ import Smt2Lean.Backend.Types
 
 namespace Smt2Lean.Backend
 
-def isScalarSort (sort : cvc5.Sort) : Bool :=
-  sort.isBoolean || sort.isInteger
+def isScalarSort (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : Bool :=
+  sort.isBoolean || sort.isInteger || sorts.any (·.sort == sort)
 
-/-- First-order functions whose arguments and result are Bool or Int. -/
-def isSupportedFunction (sort : cvc5.Sort) : cvc5.Env Bool := do
+/-- First-order functions over Bool, Int, and declared uninterpreted sorts. -/
+def isSupportedFunction (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : cvc5.Env Bool := do
   unless sort.isFunction do return false
   let domains ← ofExcept sort.getFunctionDomainSorts
   let result ← ofExcept sort.getFunctionCodomainSort
-  return !domains.isEmpty && domains.all isScalarSort && isScalarSort result
+  return !domains.isEmpty && domains.all (isScalarSort · sorts) && isScalarSort result sorts
 
 /-- Check sorts, operators, declarations, and bound-variable scope. -/
 def validateTerm (root : cvc5.Term)
     (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool)
-    (bound : Array cvc5.Term := #[]) : cvc5.Env Unit := do
+    (bound : Array cvc5.Term := #[]) (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
   for binder in bound do
     unless (← ofExcept binder.getKind) == .VARIABLE &&
-        isScalarSort (← ofExcept binder.getSort) do
-      throw (.unsupported "definition parameters must be Bool or Int variables")
+        isScalarSort (← ofExcept binder.getSort) sorts do
+      throw (.unsupported "definition parameters must have Bool, Int, or declared uninterpreted sorts")
   let mut pending : Array (cvc5.Term × Array cvc5.Term) := #[(root, bound)]
   let mut visited : Std.HashSet (cvc5.Term × Array cvc5.Term) := {}
   while !pending.isEmpty do
@@ -29,8 +29,8 @@ def validateTerm (root : cvc5.Term)
     if visited.contains (term, bound) then continue
     visited := visited.insert (term, bound)
     let sort ← ofExcept term.getSort
-    unless isScalarSort sort do
-      throw (.unsupported s!"expected Bool or Int, got {sort}")
+    unless isScalarSort sort sorts do
+      throw (.unsupported s!"expected Bool, Int, or a declared uninterpreted sort, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
     if kind == .FORALL || kind == .EXISTS then
@@ -47,8 +47,8 @@ def validateTerm (root : cvc5.Term)
         unless (← ofExcept binder.getKind) == .VARIABLE do
           throw (.unsupported "expected a bound variable")
         let variableSort ← ofExcept binder.getSort
-        unless isScalarSort variableSort do
-          throw (.unsupported s!"unsupported bound variable sort: {variableSort}; expected Bool or Int")
+        unless isScalarSort variableSort sorts do
+          throw (.unsupported s!"unsupported bound variable sort: {variableSort}; expected Bool, Int, or a declared uninterpreted sort")
         scope := scope.push binder
       pending := pending.push (children[1]!, scope)
       continue
@@ -58,7 +58,7 @@ def validateTerm (root : cvc5.Term)
       unless declarations.any (·.term == function) do
         throw (.unsupported s!"undeclared term: {function}")
       let signature ← ofExcept function.getSort
-      unless ← isSupportedFunction signature do
+      unless ← isSupportedFunction signature sorts do
         throw (.unsupported s!"unsupported function signature: {signature}")
       let domains ← ofExcept signature.getFunctionDomainSorts
       let arguments := children.extract 1 children.size
@@ -95,10 +95,11 @@ def validateTerm (root : cvc5.Term)
 
 /-- Assertions must be Boolean and contain only the supported, scoped terms. -/
 def validateAssertion (root : cvc5.Term)
-    (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool := true) : cvc5.Env Unit := do
+    (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool := true)
+    (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
   unless (← ofExcept root.getSort).isBoolean do
     throw (.unsupported "expected a Bool assertion")
-  validateTerm root declarations allowQuantifiers
+  validateTerm root declarations allowQuantifiers (sorts := sorts)
 
 def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
   query.declarations ++ query.definitions.map fun d =>
@@ -106,10 +107,10 @@ def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
 
 /--
 cvc5 prints aliases with their bodies already resolved. A supported body is Bool,
-Int, or a formal sort parameter. Tokenize this small canonical header, respecting
-quoted names; cvc5 still handles alias syntax, arity, scope, and substitution.
+Int, a declared uninterpreted sort, or a formal sort parameter. Tokenize this
+canonical header, respecting quoted names; cvc5 still handles alias syntax, arity, scope, and substitution.
 -/
-def validateSortAlias (command : cvc5.Command) : cvc5.Env Unit := do
+def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
   let tokens := Source.tokenize command.toString
   let some endParams := (tokens.extract 4 tokens.size).findIdx? (· == ")")
     | throw (.unsupported s!"unsupported sort alias: {command}")
@@ -118,8 +119,9 @@ def validateSortAlias (command : cvc5.Command) : cvc5.Env Unit := do
   unless tokens.size == endParams + 3 && tokens[0]? == some "(" &&
       tokens[1]? == some "define-sort" && tokens[3]? == some "(" &&
       tokens.back? == some ")" &&
-      (body == "Bool" || body == "Int" || (tokens.extract 4 endParams).contains body) do
-    throw (.unsupported s!"unsupported sort alias: {command}; expected Bool, Int, or a sort parameter")
+      (body == "Bool" || body == "Int" || sorts.any (·.sort.toString == body) ||
+        (tokens.extract 4 endParams).contains body) do
+    throw (.unsupported s!"unsupported sort alias: {command}; expected Bool, Int, a declared uninterpreted sort, or a sort parameter")
 
 /-- These metadata fields never become assumptions or select a proof target. -/
 def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do

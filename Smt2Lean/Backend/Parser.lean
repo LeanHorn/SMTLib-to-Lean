@@ -9,6 +9,7 @@ namespace Smt2Lean.Backend
 
 /-- Only the active arrays and native assertion count roll back on pop. -/
 private structure Scope where
+  sorts : Nat
   declarations : Nat
   definitions : Nat
   assertions : Nat
@@ -23,7 +24,7 @@ private def validateNamedTerms (names : Array String) (tm : cvc5.TermManager) (s
   for name in names do
     parser.setStringInput s!"|{name}|"
     let body ← withoutQuantifierHints tm (← parser.nextTerm)
-    validateTerm body (knownTerms query) allowQuantifiers
+    validateTerm body (knownTerms query) allowQuantifiers (sorts := query.sorts)
 
 private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) : cvc5.Env Unit := do
@@ -60,9 +61,9 @@ private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
     unless (← ofExcept term.getSort).isBoolean do
       throw (.unsupported s!"check-sat-assuming: expected a Boolean constant: {spelling}")
     let term ← withoutQuantifierHints tm term
-    validateAssertion term (knownTerms query) allowQuantifiers
+    validateAssertion term (knownTerms query) allowQuantifiers query.sorts
     let term ← expandDefinitions tm query.definitions term
-    validateAssertion term query.declarations allowQuantifiers
+    validateAssertion term query.declarations allowQuantifiers query.sorts
     let term ← if negative then tm.mkTerm .NOT #[term] else pure term
     -- Negated nullary relations are Horn safety clauses. Validate the result as usual.
     let term ← if query.logic == some "HORN" && negative then
@@ -160,7 +161,7 @@ private def parseScript
           "get-model", "get-proof", "get-unsat-core", "get-unsat-assumptions", "get-value",
           "get-assignment", "get-assertions", "get-info", "get-option"].contains commandName do
         resultAvailable := false
-      if #["set-logic", "declare-fun", "declare-const", "define-fun", "define-sort",
+      if #["set-logic", "declare-sort", "declare-fun", "declare-const", "define-fun", "define-sort",
           "assert", "push", "pop", "reset-assertions", "check-sat", "check-sat-assuming",
           "get-assertions"].contains commandName then
         inStartMode := false
@@ -175,6 +176,20 @@ private def parseScript
         invokeCommand cmd solver symbols
         allowQuantifiers := !logic.startsWith "QF_"
         query := { query with logic := some logic, invoked := query.invoked.push commandName }
+      | "declare-sort" =>
+        let parts := Source.tokenize command.text
+        unless parts.size == 5 && parts[3]? == some "0" do
+          throw (.unsupported "declare-sort: only arity 0 is supported")
+        invokeCommand cmd solver symbols
+        let sorts ← symbols.getDeclaredSorts
+        unless sorts.size == query.sorts.size + 1 do
+          throw (.error "expected one new sort declaration")
+        let sort := sorts.back!
+        unless sort.isUninterpretedSort do
+          throw (.unsupported s!"expected an uninterpreted sort, got {sort}")
+        query := { query with
+          sorts := query.sorts.push { name := ← ofExcept sort.getSymbol, sort, source := some command.source }
+          invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
         invokeCommand cmd solver symbols
         let terms ← symbols.getDeclaredTerms
@@ -182,8 +197,8 @@ private def parseScript
           throw (.error "expected one new declaration")
         let term := terms.back!
         let sort ← ofExcept term.getSort
-        unless isScalarSort sort || (← isSupportedFunction sort) do
-          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, or a function with Bool/Int arguments and result")
+        unless isScalarSort sort query.sorts || (← isSupportedFunction sort query.sorts) do
+          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, a declared uninterpreted sort, or a first-order function over these sorts")
         let symbol ← ofExcept term.getSymbol
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")
@@ -203,7 +218,7 @@ private def parseScript
           definitions := query.definitions.push definition
           invoked := query.invoked.push commandName }
       | "define-sort" =>
-        validateSortAlias cmd
+        validateSortAlias cmd query.sorts
         invokeCommand cmd solver symbols
         query := { query with invoked := query.invoked.push commandName }
       | "assert" =>
@@ -217,9 +232,9 @@ private def parseScript
             throw (.error "expected one new native assertion")
           let term ← addedAssertion before assertions
           let term ← withoutQuantifierHints tm term
-          validateAssertion term (knownTerms query) allowQuantifiers
+          validateAssertion term (knownTerms query) allowQuantifiers query.sorts
           let term ← expandDefinitions tm query.definitions term
-          validateAssertion term query.declarations allowQuantifiers
+          validateAssertion term query.declarations allowQuantifiers query.sorts
           nativeCount := assertions.size
           query := { query with assertions := query.assertions.push term }
         catch error =>
@@ -260,10 +275,11 @@ private def parseScript
         else
           query := { query with assertions := #[], assertionSources := #[] }
           if !globalDeclarations then
-            query := { query with declarations := #[], definitions := #[] }
+            query := { query with sorts := #[], declarations := #[], definitions := #[] }
           nativeCount := query.definitions.size
           unless (← solver.getAssertions).size == nativeCount &&
-              (← symbols.getDeclaredTerms) == query.declarations.map (·.term) do
+              (← symbols.getDeclaredTerms) == query.declarations.map (·.term) &&
+              (← symbols.getDeclaredSorts) == query.sorts.map (·.sort) do
             throw (.error "native and translator reset states disagree")
         query := { query with invoked := query.invoked.push commandName }
       | "get-model" | "get-proof" | "get-unsat-core" | "get-unsat-assumptions" |
@@ -278,6 +294,7 @@ private def parseScript
         invokeCommand cmd solver symbols
         if commandName == "push" then
           let scope : Scope := {
+            sorts := query.sorts.size
             declarations := query.declarations.size, definitions := query.definitions.size
             assertions := query.assertions.size, nativeAssertions := nativeCount }
           scopes := scopes ++ Array.replicate count scope
@@ -285,6 +302,7 @@ private def parseScript
           let remaining := scopes.size - count
           let some scope := scopes[remaining]? | throw (.error "missing saved scope")
           query := { query with
+            sorts := if globalDeclarations then query.sorts else query.sorts.extract 0 scope.sorts
             declarations := if globalDeclarations then query.declarations else query.declarations.extract 0 scope.declarations
             definitions := if globalDeclarations then query.definitions else query.definitions.extract 0 scope.definitions
             assertions := query.assertions.extract 0 scope.assertions
@@ -292,7 +310,8 @@ private def parseScript
           nativeCount := scope.nativeAssertions + if globalDeclarations then query.definitions.size - scope.definitions else 0
           scopes := scopes.extract 0 remaining
         unless (← solver.getAssertions).size == nativeCount &&
-            (← symbols.getDeclaredTerms) == query.declarations.map (·.term) do
+            (← symbols.getDeclaredTerms) == query.declarations.map (·.term) &&
+            (← symbols.getDeclaredSorts) == query.sorts.map (·.sort) do
           throw (.error "native and translator scopes disagree")
         query := { query with invoked := query.invoked.push commandName }
       | "check-sat" | "check-sat-assuming" =>

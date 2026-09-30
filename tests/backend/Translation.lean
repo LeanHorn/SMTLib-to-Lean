@@ -464,6 +464,44 @@ private def checkHornProblems (env : Environment) : IO Unit := do
         (∀ (x : Int) (b : Prop), r x b → x > 10 → b → False))
   IO.println "CHC problems passed: 16 complete propositions and emitted definitions; axiom dependencies checked"
 
+/-- Carrier quantification and nonemptiness are part of the closed statement. -/
+private def checkUninterpretedSorts (env : Environment) : IO Unit := do
+  let path := "tests/translation/sorts/uninterpreted.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ A B C : Type, Nonempty A → Nonempty B → Nonempty C →
+        ∀ (a b : A) (flag : Prop) (step : A → A) (tag : A → Prop → Int → B) (P : B → Prop),
+          ((if flag then a else b) = (if flag then a else b) ∧
+            (a ≠ b ∧ a ≠ step a ∧ b ≠ step a) ∧
+            (∀ x : A, ∃ y : A, y = step x) ∧
+            (∀ _a : A, a = b) ∧
+            (∀ x : A, x = a → tag x flag 0 = tag a flag 0) ∧
+            P (tag (if flag then a else b) flag 1) ∧
+            P (tag (if flag then a else b) flag 1)) → False)
+  let path := "tests/translation/chc/uninterpreted.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem (usesClassical := true) q(
+      ∃ A : Type, Nonempty A ∧ ∃ B : Type, Nonempty B ∧
+        ∃ (reach : A → Prop) (edge : A → B → Prop → Int → Prop) (_unused : B → Prop),
+          (∀ x : A, reach x) ∧
+          (∀ (x y : A) (l : B) (b : Prop) (i : Int),
+            reach x → x = y → b → i > 0 → edge (if b then x else y) l b i) ∧
+          (∀ (x y : A) (l : B) (b : Prop) (i : Int), edge x l b i → x ≠ y → reach y) ∧
+          (∀ x y : A, reach x → reach y → x ≠ y → False))
+  for logic in #["QF_UF", "UF", "ALL"] do
+    runQuery env "unused sort" s!"(set-logic {logic})(declare-sort S 0)(check-sat)"
+      fun query => checkRefutation query q(∀ A : Type, Nonempty A → True → False)
+  runProblem env "unused CHC sort" "(set-logic HORN)(declare-sort S 0)(check-sat)"
+    fun problem => checkProblem problem q(∃ A : Type, Nonempty A ∧ True)
+  runQuery env "nonempty carrier"
+    "(set-logic UF)(declare-sort S 0)(assert (forall ((x S)) false))(check-sat)"
+    fun query => checkRefutation query q(∀ A : Type, Nonempty A → (∀ _x : A, False) → False)
+  runProblem env "nonempty CHC carrier"
+    "(set-logic HORN)(declare-sort S 0)(assert (forall ((x S)) false))(check-sat)"
+    fun problem => checkProblem problem q(∃ A : Type, Nonempty A ∧ (∀ _x : A, False))
+  IO.println "Uninterpreted sorts passed: arbitrary nonempty carriers, SMT/CHC closure, aliases, and mixed functions"
+
 private def checkSessions (env : Environment) : IO Unit := do
   let base := q(∀ p : Prop, p → False)
   let integer := q(∀ (p : Prop) (x : Int), (p ∧ x + 1 > 0) → False)
@@ -476,6 +514,15 @@ private def checkSessions (env : Environment) : IO Unit := do
       integer, base,
       q(∀ p x : Prop, (p ∧ ¬x ∧ (¬x ∨ exclusive p x)) → False),
       conditional, conditional], #[7, 8]),
+    ("sorts", "Refutation", #[
+      q(∀ A : Type, Nonempty A → ∀ x : A, x = x → False),
+      q(∀ A B : Type, Nonempty A → Nonempty B → ∀ (x : A) (y : B), (x = x ∧ y = y) → False),
+      q(∀ A : Type, Nonempty A → ∀ x : A, x = x → False),
+      q(∀ A B : Type, Nonempty A → Nonempty B → ∀ (x : A) (p : B → Prop),
+        (x = x ∧ ∀ y : B, p y) → False),
+      q(∀ A : Type, Nonempty A → (∀ _x : A, False) → False),
+      q(∀ A : Type, Nonempty A → (∀ x : A, x = x) → False),
+      q(∀ A : Type, Nonempty A → (∀ x : A, x = x) → False), q(True → False)], #[]),
     ("resets", "Refutation", #[
       q(∀ (p : Prop) (x : Int), (p ∧ x + 1 > 0 ∧ p) → False), q(True → False),
       q(∀ p : Int, p = 1 → False), q(∀ p : Prop, ¬p → False),
@@ -538,6 +585,7 @@ def main : IO Unit := do
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
   checkSessions env
+  checkUninterpretedSorts env
   checkAxiomRejection
   checkOperatorSemantics env
   checkLetBindings env

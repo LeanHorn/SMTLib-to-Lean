@@ -357,7 +357,7 @@ private def checkNamedAssertions : IO Unit := do
     ("open", "(assert (forall ((x Int)) (! (> x 0) :named bad)))", 2, "Cannot name a term in a binder"),
     ("operator", "(assert (! (= (div 1 0) 0) :named bad))", 2, "INTS_DIVISION"),
     ("discarded", "(assert (let ((ignored (! (div 1 0) :named bad))) true))", 2, "INTS_DIVISION"),
-    ("discarded-sort", "(assert (let ((ignored (! 1.0 :named bad))) true))", 2, "expected Bool or Int"),
+    ("discarded-sort", "(assert (let ((ignored (! 1.0 :named bad))) true))", 2, "expected Bool, Int, or a declared uninterpreted sort"),
     ("unknown-attribute", "(assert (! true :unknown (:named fake)))", 2, "unsupported annotation"),
     ("after-check", "(check-sat) (assert (! true :named later))", 3, "after check-sat")
   ] do
@@ -417,9 +417,9 @@ private def checkRejectedQueries : IO Unit := do
     ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
       2, "type"),
     ("ite-real", "(set-logic ALL)\n(assert (= (ite true 1.0 2.0) 1.0))\n(check-sat)",
-      2, "expected Bool or Int"),
+      2, "expected Bool, Int, or a declared uninterpreted sort"),
     ("ite-bv", "(set-logic ALL)\n(assert (= (ite true #b00 #b01) #b00))\n(check-sat)",
-      2, "expected Bool or Int"),
+      2, "expected Bool, Int, or a declared uninterpreted sort"),
     ("push", "(set-logic QF_UF)\n(push 1)\n(check-sat)",
       2, "unsupported command: push"),
     ("pop", "(set-logic QF_UF)\n(pop 1)\n(check-sat)",
@@ -433,11 +433,11 @@ private def checkRejectedQueries : IO Unit := do
     ("distinct-mixed", "(set-logic ALL)\n(assert (distinct true 1))\n(check-sat)",
       2, "type"),
     ("distinct-real", "(set-logic ALL)\n(assert (distinct 1.0 2.0))\n(check-sat)",
-      2, "expected Bool or Int"),
+      2, "expected Bool, Int, or a declared uninterpreted sort"),
     ("distinct-bv", "(set-logic ALL)\n(assert (distinct #b00 #b01))\n(check-sat)",
-      2, "expected Bool or Int"),
+      2, "expected Bool, Int, or a declared uninterpreted sort"),
     ("real-equality", "(set-logic ALL)\n(assert (= 1.0 2.0))\n(check-sat)",
-      2, "expected Bool or Int"),
+      2, "expected Bool, Int, or a declared uninterpreted sort"),
     ("assuming", "(set-logic QF_UF)\n(check-sat-assuming (true))",
       2, "expected a user-declared"),
     ("missing-check", "(set-logic QF_UF)\n(assert true)",
@@ -480,7 +480,7 @@ private def checkRejectedQueries : IO Unit := do
       3 s!"unsupported operator: {kind}"
   checkRejected "reject-real-comparison"
     "(set-logic ALL)\n(assert (< 1.0 2.0))\n(check-sat)"
-    2 "expected Bool or Int"
+    2 "expected Bool, Int, or a declared uninterpreted sort"
 
 private def checkQuantifierHints : IO Unit := do
   let path := "tests/translation/quantifiers/hints.smt2"
@@ -661,16 +661,52 @@ private def checkResets : IO Unit := do
     fun query => require query.declarations.isEmpty "global option was not reset").runIO
   IO.println "Resets passed: declaration/definition lifetimes and unexecuted observational requests"
 
+private def checkSorts : IO Unit := do
+  let expected := #[(1, 1), (2, 2), (1, 1), (2, 2), (1, 0), (1, 0), (1, 0), (0, 0)]
+  let identities ← IO.mkRef (#[] : Array (Array UInt64))
+  (parseAndInspectSession (← IO.FS.readFile "tests/translation/sessions/sorts.smt2") fun query => do
+    require ((query.sorts.size, query.declarations.size) == expected[query.number - 1]!)
+      "incorrect sort/declaration lifetimes"
+    identities.modify (·.push (query.sorts.map (fun s => hash s.sort)))
+    for sort in query.sorts do
+      require (sort.source.isSome && sort.sort.isUninterpretedSort) "missing sort identity or source"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "solver query invoked"
+  ).runIO
+  let ids ← identities.get
+  require (ids.size == 8 && ids[0]! == ids[2]! && ids[1]![1]! != ids[3]![1]! &&
+      ids[0]! != ids[4]! && ids[4]! != ids[5]! && ids[5]! == ids[6]!)
+    "sort identity did not follow declaration scopes"
+  for (name, body, ordinal, reason) in #[
+    ("sort-arity", "(declare-sort S 1)", 2, "only arity 0"),
+    ("sort-mismatch", "(declare-sort S 0)(declare-sort T 0)(declare-const s S)(declare-const t T)(assert (= s t))",
+      6, "type"),
+    ("sort-after-check", "(check-sat)(declare-sort S 0)", 3, "after check-sat"),
+    ("sort-alias-hidden-real", "(declare-sort S 0)(define-sort Bad (T) Real)", 3, "unsupported sort alias")
+  ] do
+    checkRejected name ("(set-logic ALL)" ++ body ++ "(check-sat)") ordinal reason
+  for body in #[
+    "(push 1)(declare-sort S 0)(pop 1)(declare-const x S)",
+    "(declare-sort S 0)(reset-assertions)(declare-const x S)",
+    "(declare-sort S 0)(define-sort Alias () S)(reset-assertions)(declare-const x Alias)",
+    "(declare-sort S 0)(reset)(set-logic ALL)(declare-const x S)",
+    "(declare-sort S 0)(set-option :global-declarations true)"
+  ] do
+    match ← (parseAndInspectSession ("(set-logic ALL)" ++ body ++ "(check-sat)") (fun _ => pure ())).run with
+    | .ok _ => throw (IO.userError s!"accepted invalid sort lifetime: {body}")
+    | .error _ => pure ()
+  IO.println "Sort parsing passed: native identity, aliases, local/global scopes, and resets"
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
   checkSessions
   checkAssumptions
   checkResets
+  checkSorts
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions
   checkQuantifierHints
   checkBoundScopes
   checkSourceLocations
-  IO.println "Parser passed: Bool/Int queries, binding identity/scope, and rejection diagnostics"
+  IO.println "Parser passed: Bool/Int/uninterpreted-sort queries, binding identity/scope, and rejection diagnostics"

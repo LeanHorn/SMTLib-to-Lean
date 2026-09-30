@@ -23,6 +23,12 @@ structure ParsedDeclaration where
   term : cvc5.Term
   source : Option Source.Ref := none
 
+/-- A nullary uninterpreted sort, identified independently of its spelling. -/
+structure ParsedSort where
+  name : String
+  sort : cvc5.Sort
+  source : Option Source.Ref := none
+
 /-- One validated query. Use native terms only inside `inspect`. -/
 structure ParsedQuery where
   number : Nat := 1
@@ -31,6 +37,7 @@ structure ParsedQuery where
   assumptionCount : Nat := 0
   source : Option Source.Ref := none
   commands : Array Source.Command := #[]
+  sorts : Array ParsedSort := #[]
   declarations : Array ParsedDeclaration := #[]
   definitions : Array ParsedDefinition := #[]
   assertions : Array cvc5.Term := #[]

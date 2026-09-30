@@ -40,19 +40,21 @@ structure Clause (α : Type := cvc5.Term) where
 structure Problem where
   number : Nat := 1
   source : Option Source.Ref := none
+  sorts : Array ParsedSort := #[]
   relations : Array Relation
   clauses : Array (Clause Premise)
 
 /-- Collect every declared relation, including unused ones. Use within the parser callback. -/
 def collectRelations (declarations : Array ParsedDeclaration) (queryNumber : Nat := 1)
+    (sorts : Array ParsedSort := #[])
     : cvc5.Env (Array Relation) :=
   declarations.mapM fun declaration => do
     try
       let sort ← ofExcept declaration.term.getSort
       let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
       let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
-      unless result.isBoolean && arguments.all (fun s => s.isBoolean || s.isInteger) do
-        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over Bool/Int, got {sort}")
+      unless result.isBoolean && arguments.all (isScalarSort · sorts) do
+        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over Bool, Int, or declared uninterpreted sorts, got {sort}")
       return { toParsedDeclaration := declaration, argumentSorts := arguments }
     catch error =>
       throw (declaration.source.map (fun source => errorWithContext (source.context true queryNumber) error)
@@ -162,7 +164,7 @@ private def validatePremises (relations : Array Relation) (terms : Array cvc5.Te
 
 /-- Validate every clause of an already parsed/scope-checked query before returning a problem. -/
 def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Problem := do
-  let relations ← collectRelations query.declarations query.number
+  let relations ← collectRelations query.declarations query.number query.sorts
   let clauses : Array (Clause Premise) ← query.assertions.mapIdxM fun i assertion => do
     let source := query.assertionSources[i]?
     let context := source.map (·.context true query.number) |>.getD s!"{name}: query {query.number}"
@@ -177,7 +179,7 @@ def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Prob
         head := clause.head
       }
     catch error => throw (errorWithContext s!"{context}: clause {i + 1}" error)
-  return { number := query.number, source := query.source, relations, clauses }
+  return { number := query.number, source := query.source, sorts := query.sorts, relations, clauses }
 
 /-- Parse and validate the whole CHC input, then inspect it once without solving. -/
 def parseAndInspectProblem (input : String) (inspect : Problem → cvc5.Env Unit)

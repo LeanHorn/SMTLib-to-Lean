@@ -112,6 +112,63 @@ def check_resets(lean, tmp):
     check_lean(lean, query)
 
 
+def check_uninterpreted_sorts(lean, tmp):
+    """Prove distinguishing examples, so a fixed or empty carrier cannot pass."""
+    output = tmp / "sort-horn-demo"
+    run(CHC / "uninterpreted.smt2", "--out", output)
+    check_generated(lean, output, goal="Problem")
+    cases = [
+        ("nonempty", "UF", "(assert (forall ((_x S)) false))", "Refutation",
+         "  intro A h allFalse\n  exact h.elim allFalse\n"),
+        ("singleton", "UF", "(assert (forall ((x S) (y S)) (= x y)))", "¬ Refutation",
+         "  intro h\n  exact h Unit ⟨()⟩ (fun x y => Subsingleton.elim x y)\n"),
+        ("two-elements", "QF_UF", "(declare-const a S)(declare-const b S)(assert (distinct a b))",
+         "¬ Refutation", "  intro h\n  exact h Bool ⟨false⟩ true false (by change true ≠ false; decide)\n"),
+        ("infinite", "UF", "(declare-fun next (S) S)(declare-const zero S)"
+         "(assert (forall ((x S) (y S)) (=> (= (next x) (next y)) (= x y))))"
+         "(assert (forall ((x S)) (not (= (next x) zero))))", "¬ Refutation",
+         "  intro h\n  exact h Nat ⟨0⟩ Nat.succ 0 ⟨fun _ _ e => Nat.succ.inj e, fun _ e => Nat.noConfusion e⟩\n"),
+        ("horn-singleton", "HORN", "(declare-fun P (S) Bool)"
+         "(assert (forall ((x S)) (P x)))"
+         "(assert (forall ((x S) (y S)) (=> (and (P x) (P y) (distinct x y)) false)))",
+         "Problem", "  refine ⟨Unit, ⟨()⟩, (fun _ => True), ?_, ?_⟩\n"
+         "  · intro _; trivial\n  · intro x y _ _ different; exact different (Subsingleton.elim x y)\n"),
+        ("horn-nonempty", "HORN", "(assert (forall ((_x S)) false))", "¬ Problem",
+         "  rintro ⟨A, ⟨a⟩, allFalse⟩\n  exact allFalse a\n"),
+    ]
+    for name, logic, body, target, proof in cases:
+        source, output = tmp / f"sort-{name}.smt2", tmp / f"sort-{name}"
+        source.write_text(f"(set-logic {logic})(declare-sort S 0){body}(check-sat)")
+        run(source, "--out", output)
+        goal = "Problem" if logic == "HORN" else "Refutation"
+        generated = check_generated(lean, output, goal=goal)
+        statements = generated.split("-- Proofs\n", 1)[0]
+        completed = output / "Query.lean"
+        completed.write_text(statements + f"theorem checked : {target} := by\n" + proof)
+        check_lean(lean, completed, complete=True)
+    for name, prefix, suffix, reason in [
+        ("arity", "(set-logic ALL)(check-sat)", "(declare-sort S 1)", "only arity 0"),
+        ("popped-sort", "(set-logic ALL)(push 1)(declare-sort S 0)(check-sat)",
+         "(pop 1)(declare-const x S)", "not declared"),
+        ("reset-sort", "(set-option :global-declarations true)(set-logic ALL)(declare-sort S 0)(check-sat)",
+         "(reset)(set-logic ALL)(declare-const x S)", "not declared"),
+        ("removed-alias", "(set-logic ALL)(declare-sort S 0)(define-sort Alias () S)(check-sat)",
+         "(reset-assertions)(declare-const x Alias)", "not declared"),
+        ("horn-constant", "(set-logic HORN)(declare-sort S 0)(check-sat)",
+         "(declare-const x S)(check-sat)", "unsupported CHC declaration"),
+        ("horn-function", "(set-logic HORN)(declare-sort S 0)(check-sat)",
+         "(declare-fun f (S) S)(check-sat)", "unsupported CHC declaration"),
+        ("horn-negative", "(set-logic HORN)(declare-sort S 0)(declare-fun P (S) Bool)(check-sat)",
+         "(assert (forall ((x S)) (=> (not (P x)) false)))(check-sat)", "CHC relation inside"),
+    ]:
+        source, output = tmp / f"sort-bad-{name}.smt2", tmp / f"sort-bad-{name}"
+        source.write_text(prefix + suffix)
+        result = run(source, "--out", output, code=1)
+        assert "query 2:" in result.stderr and reason in result.stderr, result.stderr
+        assert not output.exists()
+    print("Sort semantics passed: nonempty, singleton, two-element, infinite, and Horn models; later failures leave no output")
+
+
 def main():
     prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
     lean = Path(prefix) / "bin/lean"
@@ -130,7 +187,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="smt2lean cli ") as temporary:
         tmp = Path(temporary)
-        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7)]:
+        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7), ("sorts", "Refutation", 8)]:
             output = tmp / f"session-{fixture}"
             run(SESSIONS / f"{fixture}.smt2", "--out", output)
             generated = check_generated(lean, output, goal=goal, count=count)
@@ -141,6 +198,8 @@ def main():
             query.write_text(edited)
             run(SESSIONS / f"{fixture}.smt2", "--out", output, code=1)
             assert query.read_text() == edited
+
+        check_uninterpreted_sorts(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
             for name, body, count in [
@@ -181,6 +240,7 @@ def main():
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
         inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified", "hints"]]
         inputs += [BINDINGS / name for name in ["simultaneous.smt2", "definitions.smt2", "named.smt2"]]
+        inputs += [ROOT / "tests/translation/sorts/uninterpreted.smt2"]
         for fixture in inputs:
             name = fixture.stem
             output = tmp / name
@@ -494,7 +554,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: 33 SMT and 8 CHC standalone translations, source locations, and 4 completed proofs")
+    print("Demo passed: standalone SMT/CHC translations, source locations, and completed proofs")
     print("Sessions passed: numbered SMT/CHC goals, standalone statements, later failures, and proof protection")
 
 
