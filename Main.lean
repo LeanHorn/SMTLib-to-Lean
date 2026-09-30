@@ -7,8 +7,9 @@ private def usage : String :=
   "Usage: smt2lean <input.smt2> --out <new-directory>\n" ++
   "       smt2lean --help\n\n" ++
   "Translate every check-sat/check-sat-assuming in a supported Bool/Int SMT-LIB session into Query.lean.\n" ++
-  "Supports push/pop; all statements come first, followed by their proof templates.\n" ++
+  "Supports push/pop, resets, and global declarations; statements precede proof templates.\n" ++
   "HORN logic generates Problem (satisfying relations); other supported logics generate Refutation.\n" ++
+  "Permitted result requests are recorded as unexecuted comments; no solver is run.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++
   "The proof template contains sorry and must be completed in Lean."
 

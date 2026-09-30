@@ -40,7 +40,7 @@ compile without it. The integer proof uses `propext`; the other three are axiom-
 | `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |
 | `translation/quantifiers/` | Nested forall/exists, shadowing, Bool binders, unused variables, and quantifier hints |
 | `translation/chc/` | Facts, multiple relation premises, guards, false heads, definitions, and named clauses |
-| `translation/sessions/` | Eight SMT checks and six CHC checks with nested push/pop, reused symbols, definitions, aliases, and shared helpers |
+| `translation/sessions/` | SMT/CHC checks with push/pop, temporary assumptions, resets, local/global declarations, reused symbols, and shared helpers |
 
 Quantifier hints `:pattern`, `:no-pattern`, and `:qid` are checked and removed without
 changing the proposition. Unsupported annotations and operators still fail. Short
@@ -109,5 +109,6 @@ declarations/definitions only in global mode. Query numbering continues across r
 The session CLI parses observational `get-*` commands for models, values, proofs,
 cores, assumptions, assignments, assertions, options, and info, and records them as
 `Not executed` comments. It never produces solver responses. Result-dependent
-requests require a preceding check in the current context. The strict single-query
+requests require a preceding check in the current context. Requests cannot introduce
+`:named` bindings. The strict single-query
 API retains its original command restrictions.

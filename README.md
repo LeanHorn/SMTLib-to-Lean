@@ -77,7 +77,7 @@ For broader examples, try [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.sm
 
 ## Research prototype in progress
 
-The translator supports a first-order SMT-LIB fragment over Bool and Int, including uninterpreted functions, quantifiers, nonrecursive definitions, let bindings, and incremental queries with `push`/`pop` and temporary `check-sat-assuming` assumptions.
+The translator supports a first-order SMT-LIB fragment over Bool and Int, including uninterpreted functions, quantifiers, nonrecursive definitions, let bindings, and incremental queries with `push`/`pop`, temporary `check-sat-assuming` assumptions, resets, and global declarations.
 
 Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
 

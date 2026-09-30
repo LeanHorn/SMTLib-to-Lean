@@ -92,10 +92,10 @@ private def parseScript
     (name : String) (mode : ParseMode) (singleQuery : Bool)
     (onSkipped : Source.Command → cvc5.Env Unit := fun _ => pure ()) : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
-  let solver  ← cvc5.Solver.new tm
+  let mut solver ← cvc5.Solver.new tm
   if !singleQuery then solver.setOption "incremental" "true"
-  let symbols ← cvc5.SymbolManager.new tm
-  let parser  ← cvc5.InputParser.new solver (some symbols)
+  let mut symbols ← cvc5.SymbolManager.new tm
+  let mut parser ← cvc5.InputParser.new solver (some symbols)
   parser.setStringInput input (name := name)
   let mut query : ParsedQuery := {}
   let mut allowQuantifiers := true
@@ -105,6 +105,8 @@ private def parseScript
   let mut exited := false
   let mut globalDeclarations := false
   let mut resultAvailable := false
+  -- cvc5 keeps SymbolManager.isLogicSet true after reset. Track script mode here.
+  let mut inStartMode := true
   let mut reader : Source.Reader input := {}
   -- cvc5 counts defining equations too; query.assertions keeps only source assertions.
   let mut nativeCount := 0
@@ -139,6 +141,10 @@ private def parseScript
       if let some ("pop", count) := scopeChange then
         if count > scopes.size then
           throw (.error s!"pop {count} exceeds active scope depth {scopes.size}")
+      if let some command := command? then
+        let parts := Source.tokenize command.text
+        if parts[1]? == some "get-value" && parts.contains ":named" then
+          throw (.unsupported "observational requests cannot introduce named terms")
       let cmd ← parser.nextCommand
       if cmd.isNull then
         unless command?.isNone do throw (.error "source reader and cvc5 command streams disagree")
@@ -154,6 +160,10 @@ private def parseScript
           "get-model", "get-proof", "get-unsat-core", "get-unsat-assumptions", "get-value",
           "get-assignment", "get-assertions", "get-info", "get-option"].contains commandName do
         resultAvailable := false
+      if #["set-logic", "declare-fun", "declare-const", "define-fun", "define-sort",
+          "assert", "push", "pop", "reset-assertions", "check-sat", "check-sat-assuming",
+          "get-assertions"].contains commandName then
+        inStartMode := false
       match commandName with
       | "set-logic" =>
         let some logic := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
@@ -224,7 +234,7 @@ private def parseScript
           unless parts == #["(", "set-option", ":global-declarations", "true", ")"] ||
               parts == #["(", "set-option", ":global-declarations", "false", ")"] do
             throw (.unsupported "global-declarations requires true or false")
-          if ← symbols.isLogicSet then
+          if !inStartMode then
             throw (.unsupported "global-declarations must be set before the logic or declarations")
           invokeCommand cmd solver symbols
           globalDeclarations := parts[3]! == "true"
@@ -235,9 +245,16 @@ private def parseScript
         invokeCommand cmd solver symbols
         scopes := #[]
         if commandName == "reset" then
+          -- The native SymbolManager retains configuration after reset. Recreate the
+          -- native session, keeping the original source reader and query numbering.
+          solver ← cvc5.Solver.new tm
           solver.setOption "incremental" "true"
+          symbols ← cvc5.SymbolManager.new tm
+          parser ← cvc5.InputParser.new solver (some symbols)
+          parser.setStringInput (String.extract reader.cursor input.endPos) (name := name)
           query := { number := checks + 1, commands := query.commands, invoked := query.invoked }
           globalDeclarations := false
+          inStartMode := true
           allowQuantifiers := true
           nativeCount := 0
         else

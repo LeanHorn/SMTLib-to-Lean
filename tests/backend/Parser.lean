@@ -628,11 +628,45 @@ private def checkAssumptions : IO Unit := do
       seen.modify (·.push query.assertions.size)).runIO
   require ((← seen.get) == #[2, 1]) "assumptions leaked into next check"
 
+private def checkResets : IO Unit := do
+  let path := "tests/translation/sessions/resets.smt2"
+  let seen ← IO.mkRef (#[] : Array (Nat × Nat × Nat))
+  let skipped ← IO.mkRef (#[] : Array String)
+  (parseAndInspectSession (← IO.FS.readFile path) (name := path)
+      (onSkipped := fun command => skipped.modify (·.push command.text)) fun query => do
+    require (!query.invoked.any (fun command => command.startsWith "get-" || command.startsWith "check-sat"))
+      "an observational request or solver query was invoked"
+    seen.modify (·.push (query.declarations.size, query.definitions.size, query.assertions.size))).runIO
+  require ((← seen.get) == #[(2, 1, 3), (0, 0, 0), (1, 0, 1), (1, 1, 1),
+      (1, 1, 0), (2, 1, 1), (0, 0, 0)]) "reset/global scopes changed active bindings"
+  require ((← skipped.get) == #["(get-model)", "(get-value (p neg))", "(get-proof)",
+      "(get-info :name)", "(get-assertions)"]) "lost unexecuted requests, including after the final check"
+  for body in #[
+    "(declare-const p Bool)(reset-assertions)(check-sat-assuming (p))",
+    "(define-sort I () Int)(reset-assertions)(declare-const x I)",
+    "(assert (! true :named label))(reset-assertions)(assert label)",
+    "(check-sat)(reset)(get-model)",
+    "(check-sat)(get-value ((! true :named unexpected)))",
+    "(check-sat)(get-value (missing))",
+    "(check-sat)(get-model extra)",
+    "(reset-assertions)(set-option :global-declarations true)",
+    "(reset)(set-info :smt-lib-version 2.7)"
+  ] do
+    match ← (parseAndInspectSession ("(set-logic ALL)" ++ body) (fun _ => pure ())).run with
+    | .ok _ => throw (IO.userError s!"accepted invalid reset/request: {body}")
+    | .error _ => pure ()
+  -- An explicit false option, including after reset, retains local lifetimes.
+  (parseAndInspectSession
+    "(set-option :global-declarations false)(set-logic ALL)(reset)(set-option :global-declarations false)(set-logic ALL)(push 1)(declare-const p Bool)(pop 1)(check-sat)"
+    fun query => require query.declarations.isEmpty "global option was not reset").runIO
+  IO.println "Resets passed: declaration/definition lifetimes and unexecuted observational requests"
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
   checkSessions
   checkAssumptions
+  checkResets
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

@@ -531,7 +531,7 @@ private def checkSessions (env : Environment) : IO Unit := do
         unless statements.contains s!"(query {i + 1}: check-sat" do
           throwError "missing query source for {name}"
     discard <| check.toIO { fileName := path, fileMap := default } { env := emitted }
-  IO.println "Session translation passed: 8 SMT and 6 CHC goals match handwritten propositions"
+  IO.println "Session translation passed: SMT/CHC goals match handwritten propositions"
 
 def main : IO Unit := do
   initSearchPath (← findSysroot)
