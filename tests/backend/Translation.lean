@@ -476,6 +476,9 @@ private def checkSessions (env : Environment) : IO Unit := do
       integer, base,
       q(∀ p x : Prop, (p ∧ ¬x ∧ (¬x ∨ exclusive p x)) → False),
       conditional, conditional], #[7, 8]),
+    ("assuming", "Refutation", #[q(∀ p : Prop, (p ∧ ¬p) → False), base, base,
+      q(∀ p : Prop, (p ∧ p ∧ p ∧ p) → False),
+      q(∀ p q : Prop, (p ∧ q ∧ ¬p) → False), q(∀ (p : Prop) (_q : Int), p → False)], #[]),
     ("chc", "Problem", #[fact,
       q(∃ (p : Int → Prop) (r : Int → Prop → Prop),
         p 0 ∧ (∀ x : Int, p x → x > 0 → r (x + 1) True)),
@@ -521,7 +524,7 @@ private def checkSessions (env : Environment) : IO Unit := do
         unless axioms.contains ``sorryAx && axioms.size == statementAxioms.size + 1 &&
             statementAxioms.all axioms.contains do
           throwError "unexpected proof axioms for {name}"
-        unless statements.contains s!"(query {i + 1}: check-sat," do
+        unless statements.contains s!"(query {i + 1}: check-sat" do
           throwError "missing query source for {name}"
     discard <| check.toIO { fileName := path, fileMap := default } { env := emitted }
   IO.println "Session translation passed: 8 SMT and 6 CHC goals match handwritten propositions"

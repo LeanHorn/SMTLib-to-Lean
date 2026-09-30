@@ -14,6 +14,8 @@ inductive GoalKind where
 /-- A closed, checked proposition and its source locations. Contains no native terms. -/
 structure Goal where
   value : Expr
+  checkCommand : String := "check-sat"
+  assumptionCount : Nat := 0
   kind : GoalKind := .refutation
   source : Option Source.Ref := none
   assertions : Array Source.Ref := #[]
@@ -69,9 +71,10 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
     | .refutation => "assertion"
     | .problem => "clause"
   let queryLabel := number.map (fun n => s!"query {n}: ") |>.getD ""
-  let provenance := goal.source.map (sourceComment (queryLabel ++ "check-sat")) |>.getD ""
+  let provenance := goal.source.map (sourceComment (queryLabel ++ goal.checkCommand)) |>.getD ""
   let provenance := provenance ++ String.join
-    (goal.assertions.mapIdx (fun i ref => sourceComment s!"{queryLabel}{label} {i + 1}" ref)).toList
+    (goal.assertions.mapIdx (fun i ref => sourceComment (if i < goal.assertions.size - goal.assumptionCount then s!"{queryLabel}{label} {i + 1}"
+        else s!"{queryLabel}assumption {i + 1 - (goal.assertions.size - goal.assumptionCount)}") ref)).toList
   let definition := if needsClassical then
     s!"noncomputable def {definitionName} : Prop := by\n  classical\n  exact\n    " ++
       body.replace "\n" "\n    " ++ "\n"

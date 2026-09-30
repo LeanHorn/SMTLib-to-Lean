@@ -189,7 +189,7 @@ private def checkSolverOptions : IO Unit := do
   ] do checkRejected "invalid-configuration" input ordinal reason
   -- Enabling output production must not enable query commands.
   for command in #["(get-model)", "(get-proof)", "(get-unsat-core)", "(get-option :produce-models)",
-      "(push 1)", "(reset)", "(check-sat-assuming ())"] do
+      "(push 1)", "(reset)"] do
     let input := "(set-option :produce-models true)\n(set-option :produce-proofs true)\n" ++
       "(set-option :produce-unsat-cores true)\n(set-logic ALL)\n" ++ command ++ "\n(check-sat)"
     checkRejected s!"configured-{command}" input 5 "unsupported command"
@@ -241,7 +241,6 @@ private def checkSessions : IO Unit := do
     ("(check-sat)\n(assert", 1, 3, "unterminated command"),
     ("(check-sat)\n(get-model)", 1, 3, "unsupported command"),
     ("(check-sat)\n(reset)", 1, 3, "unsupported command"),
-    ("(check-sat)\n(check-sat-assuming ())", 1, 3, "unsupported command"),
     ("(check-sat)\n(exit)\n(pop 1)", 1, 4, "after exit"),
     ("(push 1)\n(declare-const x Int)\n(check-sat)\n(pop 1)\n(assert (= x 0))", 1, 6, "not declared"),
     ("(push 1)\n(define-fun f () Int 0)\n(check-sat)\n(pop 1)\n(assert (= f 0))", 1, 6, "not declared"),
@@ -442,8 +441,8 @@ private def checkRejectedQueries : IO Unit := do
       2, "expected Bool or Int"),
     ("real-equality", "(set-logic ALL)\n(assert (= 1.0 2.0))\n(check-sat)",
       2, "expected Bool or Int"),
-    ("assuming", "(set-logic QF_UF)\n(check-sat-assuming ())",
-      2, "unsupported command: check-sat-assuming"),
+    ("assuming", "(set-logic QF_UF)\n(check-sat-assuming (true))",
+      2, "expected a user-declared"),
     ("missing-check", "(set-logic QF_UF)\n(assert true)",
       3, "expected one check-sat"),
     ("repeated-check", "(set-logic QF_UF)\n(check-sat)\n(check-sat)",
@@ -611,10 +610,32 @@ private def checkSourceLocations : IO Unit := do
         (toString error).contains reason) s!"wrong located error: {error}"
     require (!(← inspected.get)) "invalid located query reached inspect"
 
+private def checkAssumptions : IO Unit := do
+  for input in #["(check-sat-assuming ())", "(check-sat-assuming (p))",
+      "(check-sat-assuming ((not p) p p))"] do
+    checkAccepted "assuming" ("(set-logic ALL)(declare-const p Bool)" ++ input)
+      #["p"] (if input == "(check-sat-assuming ())" then 0 else if input == "(check-sat-assuming (p))" then 1 else 3)
+      #["set-logic", "declare-fun"] fun query => do
+        require (query.checkCommand == "check-sat-assuming" &&
+          query.assumptionCount == query.assertions.size) "lost assumptions"
+  for literal in #["true", "false", "(not true)", "(and p p)", "(not (not p))", "x", "f", "missing"] do
+    let input := "(set-logic ALL)(declare-const p Bool)(declare-const x Int)" ++
+      "(declare-fun f (Bool) Bool)(check-sat-assuming (" ++ literal ++ "))"
+    match ← (parseAndInspectSession input (fun _ => pure ())).run with
+    | .ok _ => throw (IO.userError s!"accepted invalid assumption {literal}")
+    | .error _ => pure ()
+  let seen ← IO.mkRef (#[] : Array Nat)
+  (parseAndInspectSession "(set-logic ALL)(declare-const p Bool)(assert p)(check-sat-assuming ((not p)))(check-sat)"
+    fun query => do
+      require (!query.invoked.contains "check-sat-assuming") "solver invoked"
+      seen.modify (·.push query.assertions.size)).runIO
+  require ((← seen.get) == #[2, 1]) "assumptions leaked into next check"
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
   checkSessions
+  checkAssumptions
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

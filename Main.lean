@@ -6,7 +6,7 @@ open Smt2Lean
 private def usage : String :=
   "Usage: smt2lean <input.smt2> --out <new-directory>\n" ++
   "       smt2lean --help\n\n" ++
-  "Translate every check-sat in a supported Bool/Int SMT-LIB session into Query.lean.\n" ++
+  "Translate every check-sat/check-sat-assuming in a supported Bool/Int SMT-LIB session into Query.lean.\n" ++
   "Supports push/pop; all statements come first, followed by their proof templates.\n" ++
   "HORN logic generates Problem (satisfying relations); other supported logics generate Refutation.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++

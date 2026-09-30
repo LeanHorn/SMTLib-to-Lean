@@ -31,6 +31,48 @@ private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
   unless response.isEmpty || response == "success" do
     throw (.error s!"{command.getCommandName}: {response}")
 
+/-- SMT-LIB 2.6 assumptions are user-defined Boolean constants or their negations. -/
+private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
+    (solver : cvc5.Solver) (symbols : cvc5.SymbolManager) (query : ParsedQuery)
+    (allowQuantifiers : Bool) : cvc5.Env (Array cvc5.Term) := do
+  let parts := Source.tokenize command.text
+  unless parts.size ≥ 5 && parts[2]? == some "(" &&
+      parts[parts.size - 2]? == some ")" && parts.back? == some ")" do
+    throw (.unsupported "check-sat-assuming: expected a list of Boolean literals")
+  let parser ← cvc5.InputParser.new solver (some symbols)
+  let mut terms := #[]
+  let mut i := 3
+  while i < parts.size - 2 do
+    let negative := parts[i]? == some "("
+    if negative then
+      unless parts[i + 1]? == some "not" && parts[i + 3]? == some ")" do
+        throw (.unsupported "check-sat-assuming: expected a symbol or (not symbol)")
+      i := i + 2
+    let spelling := parts[i]!
+    let symbol := if spelling.startsWith "|" then
+      ((spelling.drop 1).dropEnd 1).toString else spelling
+    let declared := (knownTerms query).any (fun declaration => declaration.term.getSymbol! == symbol) ||
+      query.commands.any (·.source.names.contains symbol)
+    unless declared do
+      throw (.unsupported s!"check-sat-assuming: expected a user-declared or defined Boolean constant: {spelling}")
+    parser.setStringInput spelling
+    let term ← parser.nextTerm
+    unless (← ofExcept term.getSort).isBoolean do
+      throw (.unsupported s!"check-sat-assuming: expected a Boolean constant: {spelling}")
+    let term ← withoutQuantifierHints tm term
+    validateAssertion term (knownTerms query) allowQuantifiers
+    let term ← expandDefinitions tm query.definitions term
+    validateAssertion term query.declarations allowQuantifiers
+    let term ← if negative then tm.mkTerm .NOT #[term] else pure term
+    -- Negated nullary relations are Horn safety clauses. Validate the result as usual.
+    let term ← if query.logic == some "HORN" && negative then
+      tm.mkTerm .IMPLIES #[term[0]!, ← tm.mkFalse] else pure term
+    terms := terms.push term
+    i := i + if negative then 2 else 1
+  unless i == parts.size - 2 do
+    throw (.unsupported "check-sat-assuming: malformed literal list")
+  return terms
+
 private def parseScript
     (input : String)
     (inspect : ParsedQuery → cvc5.Env Unit)
@@ -179,15 +221,22 @@ private def parseScript
             (← symbols.getDeclaredTerms) == query.declarations.map (·.term) do
           throw (.error "native and translator scopes disagree")
         query := { query with invoked := query.invoked.push commandName }
-      | "check-sat" =>
+      | "check-sat" | "check-sat-assuming" =>
         let assertions ← solver.getAssertions
         unless assertions.size == nativeCount && query.assertions.size == query.assertionSources.size do
           throw (.error "assertions and source locations disagree")
-        query := { query with source := some command.source }
+        let assumptions ← if commandName == "check-sat-assuming" then
+          readAssumptions command tm solver symbols query allowQuantifiers else pure #[]
+        let snapshot := { query with
+          source := some command.source, checkCommand := commandName
+          assumptionCount := assumptions.size
+          assertions := query.assertions ++ assumptions
+          assertionSources := query.assertionSources ++ Array.replicate assumptions.size command.source }
+        if singleQuery then query := snapshot
         checked := true
         checks := checks + 1
         if !singleQuery then
-          inspect { query with commands := query.commands.push command }
+          inspect { snapshot with commands := query.commands.push command }
           query := { query with number := checks + 1 }
       | "exit" =>
         unless checked do throw (.error "exit before check-sat")

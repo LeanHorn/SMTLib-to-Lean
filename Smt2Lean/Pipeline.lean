@@ -19,7 +19,9 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
           pure (← Translate.defineProblem problem (.mkSimple s!"Problem_{query.number}"), .problem)
         | none => do
           pure (← Translate.defineRefutation query (.mkSimple s!"Refutation_{query.number}"), .refutation)
-      return { value, kind, source := query.source, assertions := query.assertionSources }
+      return {
+        value, kind, source := query.source, assertions := query.assertionSources
+        checkCommand := query.checkCommand, assumptionCount := query.assumptionCount }
     let (goal, checkedState, _) ← action.toIO context (← state.get)
     state.set checkedState
     goals.modify (·.push goal)

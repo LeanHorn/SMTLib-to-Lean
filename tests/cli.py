@@ -69,7 +69,7 @@ def check_generated(lean, output, *, goal="Refutation", count=1):
         assert f"def {name} : Prop" in statements
         assert f"theorem {name.lower()} : {name}" in proofs
         if count > 1:
-            assert f"(query {number}: check-sat," in statements
+            assert re.search(rf"\(query {number}: check-sat(?:-assuming)?,", statements)
     check_lean(lean, query)
     # The statement must also compile after removing the unfinished proof entirely.
     standalone = output / "StatementsOnly.lean"
@@ -97,7 +97,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="smt2lean cli ") as temporary:
         tmp = Path(temporary)
-        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6)]:
+        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6)]:
             output = tmp / f"session-{fixture}"
             run(SESSIONS / f"{fixture}.smt2", "--out", output)
             generated = check_generated(lean, output, goal=goal, count=count)
@@ -358,11 +358,23 @@ def main():
                 context = "query 1: " if logic == "HORN" else ""
                 assert f"{source}:3:1: {context}command 3:" in result.stderr, result.stderr
                 assert reason in result.stderr and not output.exists(), result.stderr
-            for suffix in ["(get-model)", "(reset)", "(check-sat-assuming ())"]:
+            for suffix in ["(get-model)", "(reset)"]:
                 source, output = tmp / f"config-tail-{logic}.smt2", tmp / f"config-tail-{logic}"
                 source.write_text(SOLVER_OPTIONS + f"(set-logic {logic})\n(assert false)\n(check-sat)\n" + suffix)
                 result = run(source, "--out", output, code=1)
                 assert "unsupported command" in result.stderr and not output.exists(), result.stderr
+
+        for logic, literal in [("ALL", "true"), ("ALL", "(and p p)"), ("ALL", "missing"),
+                               ("HORN", "true")]:
+            source, output = tmp / "bad-assumption.smt2", tmp / "bad-assumption"
+            source.write_text(f"(set-logic {logic})(declare-const p Bool)(check-sat)(check-sat-assuming ({literal}))")
+            run(source, "--out", output, code=1)
+            assert not output.exists()
+        source, output = tmp / "horn-assuming.smt2", tmp / "horn-assuming"
+        source.write_text("(set-logic HORN)(declare-const p Bool)(check-sat-assuming (p (not p)))(check-sat)")
+        run(source, "--out", output)
+        text = check_generated(lean, output, goal="Problem", count=2)
+        assert "check-sat-assuming," in text and "assumption 2" in text
 
         invalid = [
             "(set-logic QF_LRA)\n(check-sat)",

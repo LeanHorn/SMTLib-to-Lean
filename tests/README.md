@@ -85,3 +85,15 @@ These use `(set-logic HORN)`. The expected answer is in `(set-info :status …)`
 They were converted from liquid-fixpoint's Horn format with `tools/fqhorn2chc.py`.
 
 Each file's header gives its source, the command that produced it and the theories it uses.
+
+## Temporary assumptions
+
+`translation/sessions/assuming.smt2` checks temporary positive/negative Boolean
+literals, definitions, empty assumption lists, duplicates, quoted names, and
+scoped redeclarations. The Lean suite compares every goal with a handwritten
+proposition; CLI tests compile the output and reject invalid later assumptions.
+
+The input follows [SMT-LIB 2.6, section 4.2.5](https://smt-lib.org/papers/smt-lib-reference-v2.6-r2024-09-20.pdf):
+assumptions are user-declared/defined Boolean constants or their negations.
+They apply to one check only. Neither check command invokes the solver.
+HORN negated literals become safety clauses and still undergo Horn validation.

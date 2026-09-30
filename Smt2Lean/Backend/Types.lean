@@ -27,6 +27,8 @@ structure ParsedDeclaration where
 structure ParsedQuery where
   number : Nat := 1
   logic : Option String := none
+  checkCommand : String := "check-sat"
+  assumptionCount : Nat := 0
   source : Option Source.Ref := none
   commands : Array Source.Command := #[]
   declarations : Array ParsedDeclaration := #[]
