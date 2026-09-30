@@ -766,7 +766,6 @@ private def checkBitvectors : IO Unit := do
     ("(declare-fun f ((_ BitVec 4)) Bool)(assert (f #x00))", 3, "type"),
     ("(assert (bvcomp #x0 #x0))", 2, "Bool"),
     ("(assert (= (bvsub #x5 #x3 #x1) #x1))", 2, "invalid kind"),
-    ("(assert (= (bvshl #x1 #x1) #x2))", 2, "BITVECTOR_SHL"),
     ("(assert (= (bvudiv #x1 #x1) #x1))", 2, "BITVECTOR_UDIV"),
     ("(assert (= ((_ int_to_bv 4) 1) #x1))", 2, "INT_TO_BITVECTOR")
   ] do
@@ -799,6 +798,36 @@ private def checkBitvectorWidths : IO Unit := do
   ] do
     checkRejected "invalid-bv-width" s!"(set-logic ALL)(assert {body})(check-sat)" 2 reason
 
+private def checkBitvectorShifts : IO Unit := do
+  let path := "tests/translation/bitvec/shifts.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 8 && query.definitions.size == 2) "lost shift/rotation terms"
+    let some amount := query.declarations[1]? | throw (.error "missing shift amount")
+    let shift := query.assertions[0]![0]!
+    require (shift.getKind! == .BITVECTOR_SHL && shift.getNumChildren == 2 &&
+      shift[1]! == amount.term) "shift lost its variable amount"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "shift query invoked a solver"
+  ).runIO
+  for (body, reason) in #[
+    ("(= (bvshl #x1 #b1) #x2)", "comparable bit-vector"),
+    ("(= (bvashr #x8 1) #xc)", "expecting a bit-vector"),
+    ("(= (bvlshr #x8 #x1 #x1) #x2)", "invalid kind"),
+    ("(= ((_ rotate_left -1) #x8) #x1)", "Negative numerals"),
+    ("(= ((_ rotate_right 1 2) #x8) #x4)", "invalid number of indices"),
+    ("(= ((_ rotate_left 1) #x8 #x1) #x1)", "invalid kind"),
+    ("(= ((_ rotate_right 1) true) #b1)", "expecting a bit-vector"),
+    ("(= (rotate_left #x8 #x1) #x1)", "not declared"),
+    ("(= ((_ rotate_left 4294967296) #x8) #x8)", "rotation index exceeds"),
+    ("(= ((_ |rotate_right| 99999999999999999999999) #x8) #x8)", "rotation index exceeds")
+  ] do
+    checkRejected "invalid-bv-shift" s!"(set-logic ALL)(assert {body})(check-sat)" 2 reason
+  -- The guard must respect comments, strings, and quoted symbols.
+  (parseAndInspectQuery "(set-logic ALL)\
+    (set-info :source \"(_ rotate_left 4294967296)\")\
+    (declare-const |(_ rotate_right 4294967296)| Bool)\
+    (assert |(_ rotate_right 4294967296)|)\n; (_ rotate_left 4294967296)\n\
+    (assert (= ((_ |rotate_left| 0) #x1) #x1))(check-sat)" fun _ => pure ()).runIO
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
@@ -811,6 +840,7 @@ def main : IO Unit := do
   checkConversions
   checkBitvectors
   checkBitvectorWidths
+  checkBitvectorShifts
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

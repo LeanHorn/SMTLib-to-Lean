@@ -237,8 +237,8 @@ compared with handwritten propositions and with their reloaded output.
 Five completed CLI proofs check 21 exact/associative/boundary cases, signed versus
 unsigned ordering, function congruence, a Horn model, and wraparound that makes a
 Horn model impossible. Invalid widths, overflowing decimal literals, stale aliases,
-and later unsupported operators must fail before output. Shifts,
-rotations, BV division/remainder, and BV/Int conversions remain outside this fragment.
+and later unsupported operators must fail before output. BV division/remainder
+and BV/Int conversions remain outside this fragment.
 
 `translation/bitvec/widths.smt2` and `translation/chc/widths.smt2` combine concat,
 extract, zero/sign extension, and repeat through functions, definitions, quantifiers,
@@ -257,4 +257,27 @@ foundational axioms `propext` and `Quot.sound`, with no admissions.
 ```sh
 lake exe smt2lean tests/translation/bitvec/widths.smt2 --out bitvec-widths-demo
 lake env lean bitvec-widths-demo/Query.lean
+```
+
+`translation/bitvec/shifts.smt2` and `translation/chc/shifts.smt2` combine variable
+`bvshl`/`bvlshr`/`bvashr` amounts with indexed `rotate_left`/`rotate_right`,
+functions, definitions, binders, and Horn guards/arguments. The shift helpers bound
+the unsigned amount by the operand width to avoid huge intermediate integers.
+Three general Lean proofs check equivalence to the unbounded core operations.
+
+The Lean suite checks 2,016 cases against an independent bit-by-bit reference:
+exhaustive operands/amounts at widths 1–4, boundaries at 32/64/129, oversized shifts,
+and rotations through index 4294967295. Whole targets and four query snapshots
+check scope, helper emission, and re-elaboration. Five completed CLI query proofs
+cover 24 exact cases, variable amounts, signedness, and possible/impossible Horn
+models. Standalone files import only `Init`.
+
+Indices above 4294967295 are rejected before native parsing: the pinned cvc5
+silently saturates them. Regression cases include quoted operator names, erased
+let bodies, unused definitions, comments/strings, malformed indices, wrong widths,
+and later failures that must leave no output.
+
+```sh
+lake exe smt2lean tests/translation/bitvec/shifts.smt2 --out bitvec-shifts-demo
+lake env lean bitvec-shifts-demo/Query.lean
 ```

@@ -1,0 +1,13 @@
+; All five operators in Horn guards and relation arguments.
+(set-logic HORN)
+(define-sort Word () (_ BitVec 4))
+(declare-fun P (Word) Bool)
+(declare-fun R (Word Word Word) Bool)
+(assert (P #x8))
+(assert (forall ((x Word) (y Word))
+  (=> (P x) (R (bvudiv x y) (bvurem x y) (bvsdiv x y)))))
+(assert (forall ((x Word) (y Word) (z Word))
+  (=> (and (R x y z) (= (bvsrem x y) #x0)) (P (bvsmod z y)))))
+(assert (forall ((x Word))
+  (=> (and (P x) (distinct (bvurem x #x0) x)) false)))
+(check-sat)

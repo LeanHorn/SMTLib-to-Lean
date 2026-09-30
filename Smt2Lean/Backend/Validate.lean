@@ -6,6 +6,16 @@ def isScalarSort (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : Bool :=
   sort.isBoolean || sort.isInteger || sort.isReal ||
     (sort.isBitVector && sort.getBitVectorSize! != 0) || sorts.any (·.sort == sort)
 
+/-- cvc5 silently saturates oversized rotation indices; reject before native parsing. -/
+def validateRotationIndices (tokens : Array String) : cvc5.Env Unit := do
+  for i in [:tokens.size] do
+    if tokens[i]? == some "(" && tokens[i + 1]? == some "_" &&
+        #["rotate_left", "rotate_right", "|rotate_left|", "|rotate_right|"].contains
+          (tokens[i + 2]?.getD "") then
+      if let some amount := (tokens[i + 3]?.getD "").toNat? then
+        if amount > 4294967295 then
+          throw (.unsupported "rotation index exceeds the native parser limit 4294967295")
+
 /-- cvc5 may retain signed integer numerals inside Real arithmetic. -/
 def integerLiteral? (term : cvc5.Term) : Option Int := Id.run do
   let mut value := term
@@ -96,7 +106,8 @@ def validateTerm (root : cvc5.Term)
         pure children.isEmpty
       | .NOT | .NEG | .ABS | .TO_INTEGER | .IS_INTEGER => pure (children.size == 1)
       | .BITVECTOR_NEG | .BITVECTOR_NOT | .BITVECTOR_EXTRACT | .BITVECTOR_REPEAT
-      | .BITVECTOR_ZERO_EXTEND | .BITVECTOR_SIGN_EXTEND => pure (children.size == 1)
+      | .BITVECTOR_ZERO_EXTEND | .BITVECTOR_SIGN_EXTEND
+      | .BITVECTOR_ROTATE_LEFT | .BITVECTOR_ROTATE_RIGHT => pure (children.size == 1)
       | .TO_REAL => do
         -- cvc5 also accepts Real here; SMT-LIB specifies an Int argument.
         unless children.size == 1 && children[0]!.getSort!.isInteger do
@@ -109,6 +120,8 @@ def validateTerm (root : cvc5.Term)
       | .BITVECTOR_CONCAT =>
         pure (children.size >= 2)
       | .BITVECTOR_SUB | .BITVECTOR_NAND | .BITVECTOR_NOR | .BITVECTOR_XNOR | .BITVECTOR_COMP
+      | .BITVECTOR_SHL | .BITVECTOR_LSHR | .BITVECTOR_ASHR
+      | .BITVECTOR_UDIV | .BITVECTOR_UREM | .BITVECTOR_SDIV | .BITVECTOR_SREM | .BITVECTOR_SMOD
       | .BITVECTOR_ULT | .BITVECTOR_ULE | .BITVECTOR_UGT | .BITVECTOR_UGE
       | .BITVECTOR_SLT | .BITVECTOR_SLE | .BITVECTOR_SGT | .BITVECTOR_SGE =>
         pure (children.size == 2)

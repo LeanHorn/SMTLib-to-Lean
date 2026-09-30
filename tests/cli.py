@@ -438,12 +438,12 @@ def check_bitvectors(lean, tmp):
         check_lean(lean, completed, complete=True)
     # Reject the entire session on a later unsupported operator or stale width alias.
     for name, tail, reason in [
-        ("operator", "(assert (= (bvshl #x1 #x1) #x2))", "BITVECTOR_SHL"),
+        ("operator", "(assert (= (bvurem #x1 #x1) #x0))", "BITVECTOR_UREM"),
         ("width", "(assert (= (bvadd #x1 #b1) #x2))", "comparable bit-vector"),
         ("scope", "(push 1)(define-sort Byte () (_ BitVec 8))(pop 1)(declare-const x Byte)", "declared"),
         ("reset", "(define-sort Byte () (_ BitVec 8))(reset)(set-logic ALL)(declare-const x Byte)", "declared"),
         ("hidden", "(define-fun ignore ((x (_ BitVec 4))) Bool true)"
-         "(assert (ignore (bvshl #x1 #x1)))", "BITVECTOR_SHL"),
+         "(assert (ignore (bvurem #x1 #x1)))", "BITVECTOR_UREM"),
     ]:
         source, output = tmp / f"bv-invalid-{name}.smt2", tmp / f"bv-invalid-{name}"
         source.write_text("(set-logic ALL)(assert (= #x1 #x1))(check-sat)" + tail)
@@ -508,7 +508,7 @@ def check_bitvector_widths(lean, tmp):
         ("repeat", "(assert (= ((_ repeat 0) #xf) #xf))", "number of repeats > 0"),
         ("width", "(assert (= ((_ zero_extend 4) #xf) #xf))", "same type"),
         ("hidden", "(define-fun ignore ((x (_ BitVec 8))) Bool true)"
-         "(assert (ignore ((_ zero_extend 4) (bvshl #x1 #x1))))", "BITVECTOR_SHL"),
+         "(assert (ignore ((_ zero_extend 4) (bvurem #x1 #x1))))", "BITVECTOR_UREM"),
         ("unused", "(define-fun bad () (_ BitVec 8) ((_ zero_extend 4) (bvudiv #x1 #x1)))", "BITVECTOR_UDIV"),
     ]:
         source, output = tmp / f"widths-invalid-{name}.smt2", tmp / f"widths-invalid-{name}"
@@ -516,6 +516,104 @@ def check_bitvector_widths(lean, tmp):
         assert reason in run(source, "--out", output, code=1).stderr
         assert not output.exists()
     print("Bitvector widths CLI passed: standalone SMT/CHC output, five completed proofs, and later-error protection")
+
+
+def check_bitvector_shifts(lean, tmp):
+    """Variable shifts, indexed rotations, and huge amounts in standalone output."""
+    for fixture, goal in [(ROOT / "tests/translation/bitvec/shifts.smt2", "Refutation"),
+                          (CHC / "shifts.smt2", "Problem")]:
+        output = tmp / f"shifts-{goal}"
+        run(fixture, "--out", output)
+        generated = check_generated(lean, output, goal=goal)
+        assert generated.startswith("import Init\n")
+        for helper in ["bvshl", "bvlshr", "bvashr"]:
+            assert generated.count(f"def SMT.{helper} ") == 1
+        if goal == "Refutation":
+            # Prove the bounded helpers agree with the unbounded core operations
+            # for arbitrary widths and operands, not only the numeric samples.
+            proofs = ""
+            for name, op, zero in [("bvshl", "<<<", "shiftLeft_eq_zero"),
+                                   ("bvlshr", ">>>", "ushiftRight_eq_zero")]:
+                proofs += f"""
+theorem checked_{name} {{w : Nat}} (x y : BitVec w) : SMT.{name} x y = x {op} y.toNat := by
+  change x {op} min y.toNat w = x {op} y.toNat
+  by_cases h : y.toNat ≤ w
+  · simp [Nat.min_eq_left h]
+  · have hn : w ≤ y.toNat := by omega
+    rw [Nat.min_eq_right hn, BitVec.{zero} (Nat.le_refl w), BitVec.{zero} hn]
+"""
+            proofs += """
+theorem checked_bvashr {w : Nat} (x y : BitVec w) : SMT.bvashr x y = x.sshiftRight y.toNat := by
+  change x.sshiftRight (min y.toNat w) = x.sshiftRight y.toNat
+  by_cases h : y.toNat ≤ w
+  · simp [Nat.min_eq_left h]
+  · rw [Nat.min_eq_right (by omega : w ≤ y.toNat)]
+    ext i hi
+    simp only [BitVec.getElem_sshiftRight]
+    simp [show ¬ w + i < w by omega, show ¬ y.toNat + i < w by omega]
+"""
+            laws = output / "ShiftLaws.lean"
+            laws.write_text(generated.split("-- Proofs\n", 1)[0] + proofs)
+            check_lean(lean, laws, complete=True)
+    exact = [
+        "(= (bvshl #x9 #x1) #x2)", "(= (bvlshr #x8 #x1) #x4)",
+        "(= (bvashr #x8 #x1) #xc)", "(= (bvashr #x7 #x1) #x3)",
+        "(= (bvshl #x1 #x4) #x0)", "(= (bvshl #x1 #x5) #x0)",
+        "(= (bvlshr #xf #x4) #x0)", "(= (bvashr #x8 #x4) #xf)",
+        "(= ((_ rotate_left 1) #x9) #x3)", "(= ((_ rotate_right 1) #x9) #xc)",
+        "(= ((_ rotate_left 4) #x9) #x9)", "(= ((_ rotate_right 5) #x9) #xc)",
+        "(= ((_ rotate_left 4294967295) #b1) #b1)",
+        "(= (bvshl #b1 #b1) #b0)", "(= (bvashr #b1 #b1) #b1)",
+    ]
+    for width in [32, 64, 129]:
+        maximum, half = 2 ** width - 1, 2 ** (width - 1)
+        exact.extend([
+            f"(= (bvshl (_ bv1 {width}) (_ bv{maximum} {width})) (_ bv0 {width}))",
+            f"(= (bvlshr (_ bv{maximum} {width}) (_ bv{maximum} {width})) (_ bv0 {width}))",
+            f"(= (bvashr (_ bv{half} {width}) (_ bv{maximum} {width})) (_ bv{maximum} {width}))",
+        ])
+    cases = [
+        ("exact", "QF_BV", "(assert (not (and " + " ".join(exact) + ")))", "Refutation",
+         "  intro h\n  apply h\n  decide\n"),
+        ("variable", "QF_BV", "(declare-const x (_ BitVec 4))(declare-const n (_ BitVec 4))"
+         "(assert (= n #x0))(assert (distinct (bvshl x n) x))", "Refutation",
+         "  intro x n h\n  rcases h with ⟨rfl, h⟩\n  apply h\n  simp [SMT.bvshl]\n"),
+        ("signedness", "QF_BV", "(assert (= (bvashr #x8 #x1) (bvlshr #x8 #x1)))", "Refutation",
+         "  intro h\n  exact (by decide : (12 : BitVec 4) ≠ 4) h\n"),
+        ("horn-model", "HORN", "(declare-fun P ((_ BitVec 4)) Bool)(assert (P #x8))"
+         "(assert (forall ((x (_ BitVec 4))) (=> (P x) (P ((_ rotate_left 4) x)))))"
+         "(assert (forall ((x (_ BitVec 4))) (=> (and (P x) (distinct (bvshl x #xf) #x0)) false)))", "Problem",
+         "  refine ⟨(fun _ => True), True.intro, (fun _ _ => True.intro), ?_⟩\n"
+         "  intro x _ h\n  apply h\n  exact BitVec.shiftLeft_eq_zero (by decide)\n"),
+        ("horn-rotate", "HORN", "(declare-fun P ((_ BitVec 4)) Bool)(assert (P #x8))"
+         "(assert (forall ((x (_ BitVec 4))) (=> (P x) (P ((_ rotate_left 1) x)))))"
+         "(assert (=> (P #x1) false))", "¬ Problem",
+         "  rintro ⟨p, fact, step, safety⟩\n  exact safety (step 8 fact)\n"),
+    ]
+    for name, logic, body, target, proof in cases:
+        source, output = tmp / f"shifts-{name}.smt2", tmp / f"shifts-{name}"
+        source.write_text(f"(set-logic {logic}){body}(check-sat)")
+        run(source, "--out", output)
+        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        assert generated.startswith("import Init\n")
+        completed = output / "Query.lean"
+        completed.write_text(generated.split("-- Proofs\n", 1)[0]
+                             + f"theorem checked : {target} := by\n" + proof)
+        check_lean(lean, completed, complete=True)
+    for name, tail, reason in [
+        ("width", "(assert (= (bvshl #x1 #b1) #x2))", "comparable bit-vector"),
+        ("index", "(assert (= ((_ rotate_left -1) #x8) #x1))", "Negative numerals"),
+        ("overflow", "(assert (= ((_ rotate_left 4294967296) #x8) #x8))", "rotation index exceeds"),
+        ("unused", "(define-fun bad () (_ BitVec 4) ((_ |rotate_right| 4294967296) #x8))", "rotation index exceeds"),
+        ("erased", "(assert (let ((unused ((_ rotate_left 4294967296) #x8))) true))", "rotation index exceeds"),
+        ("hidden", "(define-fun ignore ((x (_ BitVec 4))) Bool true)"
+         "(assert (ignore (bvshl (bvudiv #x1 #x1) #x1)))", "BITVECTOR_UDIV"),
+    ]:
+        source, output = tmp / f"shifts-invalid-{name}.smt2", tmp / f"shifts-invalid-{name}"
+        source.write_text("(set-logic ALL)(assert (= (bvshl #x1 #x1) #x2))(check-sat)" + tail)
+        assert reason in run(source, "--out", output, code=1).stderr
+        assert not output.exists()
+    print("Shift CLI passed: three general helper proofs, five completed query proofs, standalone output, and error protection")
 
 
 def main():
@@ -554,6 +652,7 @@ def main():
         check_conversions(lean, tmp)
         check_bitvectors(lean, tmp)
         check_bitvector_widths(lean, tmp)
+        check_bitvector_shifts(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
             for name, body, count in [

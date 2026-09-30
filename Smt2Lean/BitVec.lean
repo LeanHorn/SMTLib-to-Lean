@@ -46,11 +46,17 @@ def reconstruct : Smt.TermReconstructor := fun term => do
       .BITVECTOR_MULT, .BITVECTOR_AND, .BITVECTOR_OR, .BITVECTOR_XOR, .BITVECTOR_NAND,
       .BITVECTOR_NOR, .BITVECTOR_XNOR, .BITVECTOR_COMP, .BITVECTOR_ULT, .BITVECTOR_ULE,
       .BITVECTOR_UGT, .BITVECTOR_UGE, .BITVECTOR_SLT, .BITVECTOR_SLE,
-      .BITVECTOR_SGT, .BITVECTOR_SGE].contains kind do return none
+      .BITVECTOR_SGT, .BITVECTOR_SGE, .BITVECTOR_SHL, .BITVECTOR_LSHR, .BITVECTOR_ASHR,
+      .BITVECTOR_UDIV, .BITVECTOR_UREM, .BITVECTOR_SDIV, .BITVECTOR_SREM, .BITVECTOR_SMOD,
+      .BITVECTOR_ROTATE_LEFT, .BITVECTOR_ROTATE_RIGHT].contains kind do return none
   let width : Q(Nat) ← pure <| toExpr term[0]!.getSort!.getBitVectorSize!.toNat
   let x : Q(BitVec $width) ← Smt.Reconstruct.reconstructTerm term[0]!
   if kind == .BITVECTOR_NEG then return q(-$x)
   if kind == .BITVECTOR_NOT then return q(~~~$x)
+  if kind == .BITVECTOR_ROTATE_LEFT || kind == .BITVECTOR_ROTATE_RIGHT then
+    let amount : Q(Nat) ← pure <| toExpr term.getOp![0]!.getIntegerValue!.toNat
+    if kind == .BITVECTOR_ROTATE_LEFT then return q(BitVec.rotateLeft $x $amount)
+    return q(BitVec.rotateRight $x $amount)
   if #[cvc5.Kind.BITVECTOR_ADD, .BITVECTOR_MULT, .BITVECTOR_AND,
       .BITVECTOR_OR, .BITVECTOR_XOR].contains kind then
     let mut value : Q(BitVec $width) := x
@@ -66,7 +72,14 @@ def reconstruct : Smt.TermReconstructor := fun term => do
   let y : Q(BitVec $width) ← Smt.Reconstruct.reconstructTerm term[1]!
   match kind with
   | .BITVECTOR_SUB => return q($x - $y)
-  | .BITVECTOR_NAND | .BITVECTOR_NOR | .BITVECTOR_XNOR | .BITVECTOR_COMP =>
+  -- SMT fixes division by zero; ordinary Lean BV division returns zero instead.
+  | .BITVECTOR_UDIV => return q(BitVec.smtUDiv $x $y)
+  | .BITVECTOR_UREM => return q($x % $y)
+  | .BITVECTOR_SDIV => return q(BitVec.smtSDiv $x $y)
+  | .BITVECTOR_SREM => return q(BitVec.srem $x $y)
+  | .BITVECTOR_SMOD => return q(BitVec.smod $x $y)
+  | .BITVECTOR_NAND | .BITVECTOR_NOR | .BITVECTOR_XNOR | .BITVECTOR_COMP
+  | .BITVECTOR_SHL | .BITVECTOR_LSHR | .BITVECTOR_ASHR =>
     return mkApp3 (mkConst (← Helpers.bitvec kind)) width x y
   | .BITVECTOR_ULT => return q($x < $y)
   | .BITVECTOR_ULE => return q($x ≤ $y)

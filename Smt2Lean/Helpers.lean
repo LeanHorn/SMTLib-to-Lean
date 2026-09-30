@@ -12,7 +12,8 @@ open Lean Meta Qq
 /-- Names reserved for the operator definitions copied into generated files. -/
 def isHelper (name : Name) : Bool :=
   #[`SMT.xor, `SMT.intDiv, `SMT.intMod, `SMT.realDiv,
-    `SMT.bvnand, `SMT.bvnor, `SMT.bvxnor, `SMT.bvcomp].contains name || match name with
+    `SMT.bvnand, `SMT.bvnor, `SMT.bvxnor, `SMT.bvcomp,
+    `SMT.bvshl, `SMT.bvlshr, `SMT.bvashr].contains name || match name with
     | .str `SMT suffix => suffix.startsWith "distinct" &&
         (suffix.drop 8).toString.toNat?.isSome
     | _ => false
@@ -30,13 +31,17 @@ private def define (name : Name) (levels : List Name) (value : Expr) : MetaM Nam
 def xor : MetaM Name :=
   define `SMT.xor [] q(fun (p q : Prop) => (p ∧ ¬q) ∨ (¬p ∧ q))
 
-/-- Preserve the names of derived bitvector operators in the generated statement. -/
+/-- Keep bitvector operators named in generated statements. -/
 def bitvec (kind : cvc5.Kind) : MetaM Name := do
   match kind with
   | .BITVECTOR_NAND => define `SMT.bvnand [] q(fun {w : Nat} (x y : BitVec w) => ~~~(x &&& y))
   | .BITVECTOR_NOR => define `SMT.bvnor [] q(fun {w : Nat} (x y : BitVec w) => ~~~(x ||| y))
   | .BITVECTOR_XNOR => define `SMT.bvxnor [] q(fun {w : Nat} (x y : BitVec w) => ~~~(x ^^^ y))
   | .BITVECTOR_COMP => define `SMT.bvcomp [] q(fun {w : Nat} (x y : BitVec w) => BitVec.ofBool (x == y))
+  -- All shifts saturate at the width. Bounding the amount avoids huge intermediates.
+  | .BITVECTOR_SHL => define `SMT.bvshl [] q(fun {w : Nat} (x y : BitVec w) => x <<< min y.toNat w)
+  | .BITVECTOR_LSHR => define `SMT.bvlshr [] q(fun {w : Nat} (x y : BitVec w) => x >>> min y.toNat w)
+  | .BITVECTOR_ASHR => define `SMT.bvashr [] q(fun {w : Nat} (x y : BitVec w) => x.sshiftRight (min y.toNat w))
   | _ => throwError "unsupported bitvector helper: {kind}"
 
 /-- SMT integer division has an unconstrained, input-dependent result at zero. -/

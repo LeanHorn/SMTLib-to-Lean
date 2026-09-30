@@ -7,6 +7,9 @@ open Smt2Lean.Backend Smt2Lean.Translate Smt2Lean.Emit
 local notation "smtDiv" => (fun (zero : Int → Int) (x y : Int) => ite (y = 0) (zero x) (x / y))
 local notation "smtRealDiv" => (fun (zero : Real → Real) (x y : Real) => ite (y = 0) (zero x) (x / y))
 local notation "smtMod" => (fun (zero : Int → Int) (x y : Int) => ite (y = 0) (zero x) (x % y))
+local notation "smtShl" => (fun {w : Nat} (x y : BitVec w) => x <<< min (BitVec.toNat y) w)
+local notation "smtLshr" => (fun {w : Nat} (x y : BitVec w) => x >>> min (BitVec.toNat y) w)
+local notation "smtAshr" => (fun {w : Nat} (x y : BitVec w) => BitVec.sshiftRight x (min (BitVec.toNat y) w))
 
 local notation "exclusive" => (fun p q : Prop => (p ∧ ¬q) ∨ (¬p ∧ q))
 
@@ -894,6 +897,100 @@ private def checkBitvectorWidths (env : Environment) : IO Unit := do
   discard <| check.toIO { fileName := "width-changing session", fileMap := default } { env := emitted }
   IO.println "Bitvector widths passed: complete SMT/CHC targets and scoped width changes"
 
+/-- Read each destination bit independently of Lean's shift/rotation operations. -/
+private def shiftReference (width x amount : Nat) (op : String) : Nat := Id.run do
+  let bit (i : Nat) := if i < width then x / 2 ^ i % 2 == 1 else false
+  let mut result := 0
+  for i in [:width] do
+    let on := match op with
+      | "bvshl" => amount ≤ i && bit (i - amount)
+      | "bvlshr" => bit (i + amount)
+      | "bvashr" => if i + amount < width then bit (i + amount) else bit (width - 1)
+      | "rotate_left" => bit ((i + width - amount % width) % width)
+      | _ => bit ((i + amount) % width)
+    if on then result := result + 2 ^ i
+  return result
+
+private def checkBitvectorShiftValues (env : Environment) : IO Unit := do
+  let mut total := 0
+  for width in #[1, 2, 3, 4, 32, 64, 129] do
+    let modulus := 2 ^ width
+    let values := if width ≤ 4 then (List.range modulus).toArray
+      else #[0, 1, modulus / 2 - 1, modulus / 2, modulus / 2 + 1, modulus - 1]
+    let amounts := if width ≤ 4 then (List.range modulus).toArray
+      else #[0, 1, width - 1, width, width + 1, modulus - 1]
+    let literal (n : Nat) := s!"(_ bv{n} {width})"
+    let mut rows := #[]
+    for x in values do
+      let mut checks := #[]
+      for amount in amounts do
+        for op in #["bvshl", "bvlshr", "bvashr"] do
+          checks := checks.push s!"(= ({op} {literal x} {literal amount}) {literal (shiftReference width x amount op)})"
+      for amount in #[0, 1, width - 1, width, width + 1, 2 * width + 3, 4294967295] do
+        for op in #["rotate_left", "rotate_right"] do
+          checks := checks.push s!"(= ((_ {op} {amount}) {literal x}) {literal (shiftReference width x amount op)})"
+      total := total + checks.size
+      rows := rows.push ("(and " ++ String.intercalate " " checks.toList ++ ")")
+    let input := "(set-logic QF_BV)" ++ String.join (rows.toList.map (s!"(assert {·})")) ++ "(check-sat)"
+    runQuery env s!"bitvector shifts {width}" input fun query =>
+      withAssertions query fun parameters assertions => do
+        unless parameters.isEmpty && assertions.size == rows.size do
+          throwError "shifts introduced parameters or lost assertions"
+        for value in assertions do
+          checkWithKernel (← mkDecideProof (← deltaExpand value Smt2Lean.Helpers.isHelper))
+  IO.println s!"Bitvector shifts passed: {total} kernel-checked cases; exhaustive widths 1–4 and 32/64/129-bit boundaries"
+
+private def checkBitvectorShifts (env : Environment) : IO Unit := do
+  checkBitvectorShiftValues env
+  let path := "tests/translation/bitvec/shifts.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ (x n : BitVec 4) (p : Prop) (f : BitVec 4 → BitVec 4) (named : BitVec 4 → BitVec 4 → BitVec 4),
+      (smtShl x n = smtLshr x n ∧
+        smtAshr x n = (if BitVec.slt x 0 = true then 15 else 0) ∧
+        x.rotateLeft 5 = x.rotateRight 3 ∧
+        x.rotateRight 4294967295 = x.rotateRight 3 ∧
+        f (smtShl (if p then x else 1) n) = (smtAshr x (smtLshr n 1)).rotateLeft 1 ∧
+        smtLshr (smtShl x n) (n.rotateRight 1) = named (smtShl x n) (n.rotateRight 1) ∧
+        (∀ x : BitVec 4, ∃ n : BitVec 4, smtShl x n = 0) ∧
+        (∀ x n : BitVec 4, smtAshr x n = x.rotateLeft 0)) → False)
+  let path := "tests/translation/chc/shifts.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem (extraAxioms := #[``propext, ``Quot.sound]) q(
+      ∃ (p : BitVec 4 → Prop) (r : BitVec 4 → BitVec 4 → BitVec 4 → Prop),
+      p 8 ∧
+      (∀ x n : BitVec 4, p x → n < 4 → r (smtShl x n) (smtLshr x n) (smtAshr x n)) ∧
+      (∀ x y z : BitVec 4, r x y z → x.rotateLeft 1 = x.rotateRight 3 → p (z.rotateLeft 1)) ∧
+      (∀ x : BitVec 4, p x → smtShl x 15 ≠ 0 → False))
+  let source ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(declare-const x (_ BitVec 4))(declare-const n (_ BitVec 4))(push 1)\
+     (define-fun p () Bool (= (bvshl x n) #x0))(check-sat-assuming (p))(check-sat)(pop 1)\
+     (reset)(set-logic ALL)(declare-const x (_ BitVec 8))\
+     (assert (= ((_ rotate_right 9) x) #x80))(check-sat)\
+     (reset)(set-logic HORN)(declare-fun P ((_ BitVec 1)) Bool)\
+     (assert (P (bvashr #b1 #b1)))(check-sat)" env
+  unless source.startsWith "import Init" &&
+      (source.splitOn "def SMT.bvshl ").length == 2 &&
+      (source.splitOn "def SMT.bvashr ").length == 2 && !source.contains "def SMT.bvlshr " do
+    throw (IO.userError "shift session emitted the wrong imports/helpers")
+  unsafe enableInitializersExecution
+  let some emitted ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throw (IO.userError "shift session did not elaborate")
+  let check : MetaM Unit := do
+    for (name, expected) in #[
+      (`Refutation_1, q(∀ x n : BitVec 4, smtShl x n = 0 → False)),
+      (`Refutation_2, q(∀ _x _n : BitVec 4, True → False)),
+      (`Refutation_3, q(∀ x : BitVec 8, x.rotateRight 9 = 128 → False)),
+      (`Problem_4, q(∃ p : BitVec 1 → Prop, p (smtAshr 1 1)))
+    ] do
+      let .defnInfo definition ← getConstInfo name | throwError "missing {name}"
+      checkEqual (← deltaExpand definition.value Smt2Lean.Helpers.isHelper) expected
+      checkStatementAxioms name
+  discard <| check.toIO { fileName := "shift session", fileMap := default } { env := emitted }
+  IO.println "Shift translation passed: complete SMT/CHC targets, helper names, and four scoped snapshots"
+
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
   let path := "tests/translation/sorts/uninterpreted.smt2"
@@ -1043,6 +1140,7 @@ def main : IO Unit := do
   checkConversions env
   checkBitvectors env
   checkBitvectorWidths env
+  checkBitvectorShifts env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env
