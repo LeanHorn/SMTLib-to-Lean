@@ -79,9 +79,9 @@ For broader examples, try [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.sm
 
 The translator supports a first-order SMT-LIB fragment over Bool, Int, Real, fixed-width bitvectors, and nonempty uninterpreted sorts (`declare-sort` of arity zero), including exact integer and real arithmetic, uninterpreted functions, quantifiers, nonrecursive definitions, let bindings, and incremental queries with `push`/`pop`, temporary `check-sat-assuming` assumptions, resets, and global declarations.
 
-Mixed Int/Real expressions support exact `to_real` casts, floor-based `to_int`, and `is_int`. Real output uses the pinned Mathlib; other output uses Lean core. Division at zero preserves arbitrary, shared interpretations.
+Mixed Int/Real expressions support exact `to_real` casts, floor-based `to_int`, and `is_int`. Real output uses the pinned Mathlib; other output uses Lean core. Int/Real division at zero preserves arbitrary, shared interpretations.
 
-Bitvectors support modular arithmetic, bitwise operations, signed/unsigned comparisons, `bvcomp`, concatenation, extraction, zero/sign extension, repetition, logical/arithmetic shifts, and indexed rotations. Rotation indices are limited to `0…4294967295` by the native parser. BV division/remainder and BV/Int conversions remain unsupported.
+Bitvectors support modular arithmetic, bitwise operations, signed/unsigned comparisons, `bvcomp`, concatenation, extraction, zero/sign extension, repetition, shifts, rotations, and signed/unsigned division and remainders, including `bvsmod`. Division preserves SMT-LIB's specified zero-divisor and overflow behavior. Rotation indices are limited to `0…4294967295` by the native parser. BV/Int conversions and overflow predicates remain unsupported.
 
 Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
 

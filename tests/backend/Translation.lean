@@ -991,6 +991,65 @@ private def checkBitvectorShifts (env : Environment) : IO Unit := do
   discard <| check.toIO { fileName := "shift session", fileMap := default } { env := emitted }
   IO.println "Shift translation passed: complete SMT/CHC targets, helper names, and four scoped snapshots"
 
+/-- Independent integer arithmetic oracle, including all zero-divisor cases. -/
+private def checkBitvectorDivisionValues (env : Environment) : IO Unit := do
+  let mut total := 0
+  for width in #[1, 2, 3, 4, 32, 64, 129] do
+    let modulus := 2 ^ width
+    let half := modulus / 2
+    let values := if width ≤ 4 then (List.range modulus).toArray
+      else #[0, 1, half - 1, half, half + 1, modulus - 1]
+    let literal (n : Nat) := s!"(_ bv{n} {width})"
+    let signed (n : Nat) : Int := if n < half then (n : Int) else (n : Int) - modulus
+    let wrap (n : Int) := (n % (modulus : Int)).toNat
+    let mut rows := #[]
+    for x in values do
+      for y in values do
+        let a := signed x
+        let b := signed y
+        let magnitude : Int := a.natAbs / b.natAbs
+        let quotient := if (a < 0) != (b < 0) then -magnitude else magnitude
+        let remainder := if y == 0 then a else a - quotient * b
+        let modulo := if remainder != 0 && (remainder < 0) != (b < 0) then remainder + b else remainder
+        let results := #[
+          ("bvudiv", if y == 0 then modulus - 1 else x / y),
+          ("bvurem", if y == 0 then x else x % y),
+          ("bvsdiv", if y == 0 then (if a < 0 then 1 else modulus - 1) else wrap quotient),
+          ("bvsrem", wrap remainder), ("bvsmod", wrap modulo)]
+        let checks := results.map fun (op, expected) =>
+          s!"(= ({op} {literal x} {literal y}) {literal expected})"
+        rows := rows.push ("(and " ++ String.intercalate " " checks.toList ++ ")")
+        total := total + checks.size
+    let input := "(set-logic QF_BV)" ++ String.join (rows.toList.map (s!"(assert {·})")) ++ "(check-sat)"
+    runQuery env s!"bitvector division {width}" input fun query =>
+      withAssertions query fun parameters assertions => do
+        unless parameters.isEmpty && assertions.size == rows.size do
+          throwError "BV division introduced parameters or lost assertions"
+        for value in assertions do checkWithKernel (← mkDecideProof value)
+  IO.println s!"Bitvector division passed: {total} kernel-checked cases; exhaustive widths 1–4 and 32/64/129-bit boundaries"
+
+private def checkBitvectorDivision (env : Environment) : IO Unit := do
+  checkBitvectorDivisionValues env
+  let path := "tests/translation/bitvec/division.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ (x y : BitVec 4) (p : Prop) (f : BitVec 4 → BitVec 4) (named : BitVec 4 → BitVec 4 → BitVec 4),
+      (BitVec.smtUDiv x y = f x ∧ x % y = BitVec.srem x y ∧
+        BitVec.smtSDiv (if p then x else y) y = BitVec.smod x y ∧
+        BitVec.smod (BitVec.smtSDiv x y) (x % y) = named (BitVec.smtSDiv x y) (x % y) ∧
+        (∀ x : BitVec 4, ∃ y : BitVec 4, BitVec.smtUDiv x y = x) ∧
+        (∀ x y : BitVec 4, BitVec.srem x y = x % y)) → False)
+  let path := "tests/translation/chc/bv-division.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem (extraAxioms := #[``propext]) q(
+      ∃ (p : BitVec 4 → Prop) (r : BitVec 4 → BitVec 4 → BitVec 4 → Prop),
+      p 8 ∧
+      (∀ x y : BitVec 4, p x → r (BitVec.smtUDiv x y) (x % y) (BitVec.smtSDiv x y)) ∧
+      (∀ x y z : BitVec 4, r x y z → BitVec.srem x y = 0 → p (BitVec.smod z y)) ∧
+      (∀ x : BitVec 4, p x → x % 0 ≠ x → False))
+  IO.println "BV division translation passed: complete SMT/CHC targets, symbolic operands, and binding scope"
+
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
   let path := "tests/translation/sorts/uninterpreted.smt2"
@@ -1141,6 +1200,7 @@ def main : IO Unit := do
   checkBitvectors env
   checkBitvectorWidths env
   checkBitvectorShifts env
+  checkBitvectorDivision env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env

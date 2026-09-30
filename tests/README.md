@@ -38,6 +38,7 @@ compile without it. The integer proof uses `propext`; the other three are axiom-
 | `translation/bool/` | Contradiction, connectives, empty assertions, solver options, and metadata |
 | `translation/int/` | Exact literals beyond 64 bits, arithmetic including div/mod, comparisons, distinct, conditionals, and contradictory bounds |
 | `translation/real/` | Exact rationals, arithmetic, comparisons, conditionals, mixed function signatures, bindings, and shared division-at-zero interpretations |
+| `translation/bitvec/` | Modular arithmetic, bitwise operations, comparisons, width changes, shifts, rotations, and signed/unsigned division and remainders |
 | `translation/sorts/` | Nonempty uninterpreted carriers, mixed functions, aliases, definitions, equality/distinct, conditionals, and quantifiers |
 | `translation/functions/` | Mixed Bool/Int functions and predicates, quoted names, argument order, unused parameters, and congruence |
 | `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |
@@ -238,7 +239,7 @@ Five completed CLI proofs check 21 exact/associative/boundary cases, signed vers
 unsigned ordering, function congruence, a Horn model, and wraparound that makes a
 Horn model impossible. Invalid widths, overflowing decimal literals, stale aliases,
 and later unsupported operators must fail before output. BV division/remainder
-and BV/Int conversions remain outside this fragment.
+are covered below; BV/Int conversions and overflow predicates remain unsupported.
 
 `translation/bitvec/widths.smt2` and `translation/chc/widths.smt2` combine concat,
 extract, zero/sign extension, and repeat through functions, definitions, quantifiers,
@@ -280,4 +281,26 @@ and later failures that must leave no output.
 ```sh
 lake exe smt2lean tests/translation/bitvec/shifts.smt2 --out bitvec-shifts-demo
 lake env lean bitvec-shifts-demo/Query.lean
+```
+
+## Bitvector division and remainders
+
+`translation/bitvec/division.smt2` and `translation/chc/bv-division.smt2` combine
+`bvudiv`, `bvurem`, `bvsdiv`, `bvsrem`, and `bvsmod` with bindings, functions,
+quantifiers, and Horn guards/arguments. Generated files use core `smtUDiv`, `%`,
+`smtSDiv`, `srem`, and `smod`, preserving SMT-LIB's specified zero-divisor behavior.
+Signed division truncates toward zero; nonzero `bvsrem` follows the dividend's
+sign, while nonzero `bvsmod` follows the divisor's sign. Signed overflow wraps.
+
+The Lean suite proves 2,240 cases against an independent integer oracle, covering
+every operand pair at widths 1–4 and boundaries at widths 32/64/129. Whole SMT/CHC
+targets are compared with handwritten propositions and re-elaborated output.
+Five completed CLI proofs check 22 explicit cases, remainder signs, zero divisors,
+a Horn overflow model, and an impossible Horn modulo model. All output compiles
+with only `Init`; the core operators use the already permitted `propext`.
+Invalid arities/widths and hidden unsupported conversions fail before output.
+
+```sh
+lake exe smt2lean tests/translation/bitvec/division.smt2 --out bitvec-division-demo
+lake env lean bitvec-division-demo/Query.lean
 ```

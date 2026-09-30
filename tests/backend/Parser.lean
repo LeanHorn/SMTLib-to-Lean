@@ -766,7 +766,6 @@ private def checkBitvectors : IO Unit := do
     ("(declare-fun f ((_ BitVec 4)) Bool)(assert (f #x00))", 3, "type"),
     ("(assert (bvcomp #x0 #x0))", 2, "Bool"),
     ("(assert (= (bvsub #x5 #x3 #x1) #x1))", 2, "invalid kind"),
-    ("(assert (= (bvudiv #x1 #x1) #x1))", 2, "BITVECTOR_UDIV"),
     ("(assert (= ((_ int_to_bv 4) 1) #x1))", 2, "INT_TO_BITVECTOR")
   ] do
     checkRejected "invalid-bv" s!"(set-logic ALL){body}(check-sat)" ordinal reason
@@ -828,6 +827,22 @@ private def checkBitvectorShifts : IO Unit := do
     (assert |(_ rotate_right 4294967296)|)\n; (_ rotate_left 4294967296)\n\
     (assert (= ((_ |rotate_left| 0) #x1) #x1))(check-sat)" fun _ => pure ()).runIO
 
+private def checkBitvectorDivision : IO Unit := do
+  let path := "tests/translation/bitvec/division.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 6 && query.definitions.size == 1) "lost BV division terms"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "BV division invoked a solver"
+  ).runIO
+  for op in #["bvudiv", "bvurem", "bvsdiv", "bvsrem", "bvsmod"] do
+    for (args, reason) in #[
+      ("#x1 #b1", "comparable bit-vector"),
+      ("1 #x1", "expecting a bit-vector"),
+      ("#x1", "invalid kind"),
+      ("#x1 #x1 #x1", "invalid kind")
+    ] do
+      checkRejected "invalid-bv-division"
+        s!"(set-logic ALL)(assert (= ({op} {args}) #x1))(check-sat)" 2 reason
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
@@ -841,6 +856,7 @@ def main : IO Unit := do
   checkBitvectors
   checkBitvectorWidths
   checkBitvectorShifts
+  checkBitvectorDivision
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions
