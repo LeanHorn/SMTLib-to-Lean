@@ -42,17 +42,26 @@ def reconstruct : Smt.TermReconstructor := fun term => do
     let some value := (← ofExcept (term.getBitVectorValue 10)).toNat?
       | throwError "invalid native bitvector numeral"
     return ← mkNumeral q(BitVec $width) value
+  if kind == .INT_TO_BITVECTOR then
+    let width : Q(Nat) ← pure <| toExpr term.getSort!.getBitVectorSize!.toNat
+    let value : Q(Int) ← Smt.Reconstruct.reconstructTerm term[0]!
+    return q(BitVec.ofInt $width $value)
   unless #[cvc5.Kind.BITVECTOR_NEG, .BITVECTOR_NOT, .BITVECTOR_ADD, .BITVECTOR_SUB,
       .BITVECTOR_MULT, .BITVECTOR_AND, .BITVECTOR_OR, .BITVECTOR_XOR, .BITVECTOR_NAND,
       .BITVECTOR_NOR, .BITVECTOR_XNOR, .BITVECTOR_COMP, .BITVECTOR_ULT, .BITVECTOR_ULE,
       .BITVECTOR_UGT, .BITVECTOR_UGE, .BITVECTOR_SLT, .BITVECTOR_SLE,
       .BITVECTOR_SGT, .BITVECTOR_SGE, .BITVECTOR_SHL, .BITVECTOR_LSHR, .BITVECTOR_ASHR,
       .BITVECTOR_UDIV, .BITVECTOR_UREM, .BITVECTOR_SDIV, .BITVECTOR_SREM, .BITVECTOR_SMOD,
+      .BITVECTOR_UBV_TO_INT, .BITVECTOR_SBV_TO_INT, .BITVECTOR_NEGO,
+      .BITVECTOR_UADDO, .BITVECTOR_SADDO, .BITVECTOR_UMULO, .BITVECTOR_SMULO,
       .BITVECTOR_ROTATE_LEFT, .BITVECTOR_ROTATE_RIGHT].contains kind do return none
   let width : Q(Nat) ← pure <| toExpr term[0]!.getSort!.getBitVectorSize!.toNat
   let x : Q(BitVec $width) ← Smt.Reconstruct.reconstructTerm term[0]!
   if kind == .BITVECTOR_NEG then return q(-$x)
   if kind == .BITVECTOR_NOT then return q(~~~$x)
+  if kind == .BITVECTOR_UBV_TO_INT then return q((BitVec.toNat $x : Int))
+  if kind == .BITVECTOR_SBV_TO_INT then return q(BitVec.toInt $x)
+  if kind == .BITVECTOR_NEGO then return q(BitVec.negOverflow $x = true)
   if kind == .BITVECTOR_ROTATE_LEFT || kind == .BITVECTOR_ROTATE_RIGHT then
     let amount : Q(Nat) ← pure <| toExpr term.getOp![0]!.getIntegerValue!.toNat
     if kind == .BITVECTOR_ROTATE_LEFT then return q(BitVec.rotateLeft $x $amount)
@@ -78,6 +87,10 @@ def reconstruct : Smt.TermReconstructor := fun term => do
   | .BITVECTOR_SDIV => return q(BitVec.smtSDiv $x $y)
   | .BITVECTOR_SREM => return q(BitVec.srem $x $y)
   | .BITVECTOR_SMOD => return q(BitVec.smod $x $y)
+  | .BITVECTOR_UADDO => return q(BitVec.uaddOverflow $x $y = true)
+  | .BITVECTOR_SADDO => return q(BitVec.saddOverflow $x $y = true)
+  | .BITVECTOR_UMULO => return q(BitVec.umulOverflow $x $y = true)
+  | .BITVECTOR_SMULO => return q(BitVec.smulOverflow $x $y = true)
   | .BITVECTOR_NAND | .BITVECTOR_NOR | .BITVECTOR_XNOR | .BITVECTOR_COMP
   | .BITVECTOR_SHL | .BITVECTOR_LSHR | .BITVECTOR_ASHR =>
     return mkApp3 (mkConst (← Helpers.bitvec kind)) width x y

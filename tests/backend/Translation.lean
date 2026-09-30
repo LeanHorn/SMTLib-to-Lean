@@ -1050,6 +1050,112 @@ private def checkBitvectorDivision (env : Environment) : IO Unit := do
       (∀ x : BitVec 4, p x → x % 0 ≠ x → False))
   IO.println "BV division translation passed: complete SMT/CHC targets, symbolic operands, and binding scope"
 
+/-- Compare conversions and overflow flags with unbounded integer arithmetic. -/
+private def checkBitvectorConversionValues (env : Environment) : IO Unit := do
+  let mut total := 0
+  for width in #[1, 2, 3, 4, 32, 64, 129] do
+    let modulus := 2 ^ width
+    let half := modulus / 2
+    let values := if width ≤ 4 then (List.range modulus).toArray
+      else #[0, 1, half - 1, half, half + 1, modulus - 1]
+    let literal (n : Nat) := s!"(_ bv{n} {width})"
+    let integer (n : Int) := if n < 0 then s!"(- {n.natAbs})" else toString n
+    let signed (n : Nat) : Int := if n < half then (n : Int) else (n : Int) - modulus
+    let overflow (n : Int) := decide (n < -(half : Int) ∨ (half : Int) ≤ n)
+    let test (term : String) (truth : Bool) := if truth then term else s!"(not {term})"
+    let inputs : Array Int := if width ≤ 4 then
+        (List.range (4 * modulus + 1)).toArray.map (fun (n : Nat) => (n : Int) - 2 * modulus)
+      else #[0, 1, -1, (half : Int) - 1, half, -(half : Int), -(half : Int) - 1,
+        (modulus : Int) - 1, modulus, (modulus : Int) + 1, -(modulus : Int),
+        -(modulus : Int) - 1, (modulus : Int) ^ 2 + 1, -(modulus : Int) ^ 2 - 1]
+    let mut rows : Array (Array String) := #[]
+    for n in inputs do
+      let residue := (n % (modulus : Int)).toNat
+      let cast := s!"((_ int_to_bv {width}) {integer n})"
+      rows := rows.push #[s!"(= {cast} {literal residue})",
+        s!"(= ((_ int2bv {width}) {integer n}) {literal residue})",
+        s!"(= (ubv_to_int {cast}) {residue})", s!"(= (sbv_to_int {cast}) {integer (signed residue)})"]
+    for x in values do
+      let a := literal x
+      rows := rows.push #[s!"(= (ubv_to_int {a}) {x})", s!"(= (bv2nat {a}) {x})",
+        s!"(= (sbv_to_int {a}) {integer (signed x)})",
+        s!"(= ((_ int_to_bv {width}) (ubv_to_int {a})) {a})",
+        s!"(= ((_ int_to_bv {width}) (sbv_to_int {a})) {a})",
+        test s!"(bvnego {a})" (overflow (-signed x))]
+      for y in values do
+        let b := literal y
+        rows := rows.push #[test s!"(bvuaddo {a} {b})" (x + y ≥ modulus),
+          test s!"(bvsaddo {a} {b})" (overflow (signed x + signed y)),
+          test s!"(bvumulo {a} {b})" (x * y ≥ modulus),
+          test s!"(bvsmulo {a} {b})" (overflow (signed x * signed y))]
+    let input := "(set-logic ALL)" ++ String.join (rows.toList.map fun checks =>
+      "(assert (and " ++ String.intercalate " " checks.toList ++ "))") ++ "(check-sat)"
+    total := total + rows.foldl (fun n checks => n + checks.size) 0
+    runQuery env s!"bitvector conversions {width}" input fun query =>
+      withAssertions query fun parameters assertions => do
+        unless parameters.isEmpty && assertions.size == rows.size do
+          throwError "BV conversions introduced parameters or lost assertions"
+        for value in assertions do checkWithKernel (← mkDecideProof value)
+  IO.println s!"BV conversions passed: {total} kernel-checked cases; exhaustive widths 1–4 and 32/64/129-bit boundaries"
+
+private def checkBitvectorConversions (env : Environment) : IO Unit := do
+  checkBitvectorConversionValues env
+  let path := "tests/translation/bitvec/conversions.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ (n : Int) (x y : BitVec 8) (p : Prop) (f : BitVec 8 → Int → Prop → BitVec 8) (named : Int → BitVec 8),
+      (BitVec.ofInt 8 n = BitVec.ofInt 8 n ∧ (x.toNat : Int) = (x.toNat : Int) ∧
+        x.toInt = (x.toNat : Int) - 256 ∧
+        (x.negOverflow = true ∧ x.uaddOverflow y = true ∧ ¬x.saddOverflow y = true ∧
+          x.umulOverflow y = true ∧ x.smulOverflow y = true) ∧
+        f (if p then BitVec.ofInt 8 n else x) y.toInt (x.uaddOverflow y = true) = named n ∧
+        BitVec.ofInt 8 x.toInt = BitVec.ofInt 8 n ∧
+        (∀ n : Int, ∃ x : BitVec 8, x.toInt = (BitVec.ofInt 8 n).toInt)) → False)
+  let path := "tests/translation/chc/bv-conversions.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem (extraAxioms := #[``propext]) q(
+      ∃ (p : BitVec 8 → Prop) (r : Int → Int → Prop → Prop),
+      p (BitVec.ofInt 8 (-1)) ∧
+      (∀ x y : BitVec 8, p x → x.uaddOverflow y = true → (¬x.saddOverflow y = true) →
+        r (x.toNat : Int) y.toInt (x.negOverflow = true)) ∧
+      (∀ (n m : Int) (b : Prop), r n m b → (BitVec.ofInt 8 n).umulOverflow (BitVec.ofInt 8 m) = true →
+        p (BitVec.ofInt 8 (n + m))) ∧
+      (∀ x y : BitVec 8, p x → x.smulOverflow y = true → False))
+  runQuery env "BV conversions with Real and arbitrary Int division"
+    "(set-logic ALL)(declare-const n Int)(declare-const r Real)(declare-const x (_ BitVec 8))\
+     (assert (= ((_ int_to_bv 8) (div n 0)) x))\
+     (assert (= (to_real (ubv_to_int x)) r))\
+     (assert (= ((_ int_to_bv 8) (to_int r)) x))(check-sat)"
+    fun query => checkRefutation query (usesClassical := true) q(
+      ∀ (d : Int → Int) (n : Int) (r : Real) (x : BitVec 8),
+      (BitVec.ofInt 8 (smtDiv d n 0) = x ∧ ((x.toNat : Int) : Real) = r ∧
+        BitVec.ofInt 8 (Int.floor r) = x) → False)
+  let source ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(declare-const x Int)(push 1)\
+     (define-fun p () Bool (= ((_ int_to_bv 4) x) #xf))(check-sat-assuming (p))(check-sat)(pop 1)\
+     (reset)(set-logic ALL)(declare-const x (_ BitVec 8))\
+     (assert (= (sbv_to_int x) (- 1)))(check-sat)\
+     (reset)(set-logic HORN)(declare-fun P (Int) Bool)(assert (P (ubv_to_int #x80)))(check-sat)" env
+  unless source.startsWith "import Init" && !source.contains "def SMT." do
+    throw (IO.userError "conversion session added unexpected imports or helpers")
+  unsafe enableInitializersExecution
+  let some emitted ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throw (IO.userError "conversion session did not elaborate")
+  let check : MetaM Unit := do
+    for (name, expected) in #[
+      (`Refutation_1, q(∀ x : Int, BitVec.ofInt 4 x = 15 → False)),
+      (`Refutation_2, q(∀ _x : Int, True → False)),
+      (`Refutation_3, q(∀ x : BitVec 8, x.toInt = -1 → False)),
+      (`Problem_4, q(∃ p : Int → Prop, p ((128 : BitVec 8).toNat : Int)))
+    ] do
+      let .defnInfo definition ← getConstInfo name | throwError "missing {name}"
+      checkEqual definition.value expected
+      checkStatementAxioms name
+  discard <| check.toIO { fileName := "BV conversion session", fileMap := default } { env := emitted }
+  IO.println "BV conversion translation passed: complete SMT/CHC targets, aliases, overflow guards, and four scoped snapshots"
+
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
   let path := "tests/translation/sorts/uninterpreted.smt2"
@@ -1201,6 +1307,7 @@ def main : IO Unit := do
   checkBitvectorWidths env
   checkBitvectorShifts env
   checkBitvectorDivision env
+  checkBitvectorConversions env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env

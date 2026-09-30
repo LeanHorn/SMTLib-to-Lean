@@ -38,7 +38,7 @@ compile without it. The integer proof uses `propext`; the other three are axiom-
 | `translation/bool/` | Contradiction, connectives, empty assertions, solver options, and metadata |
 | `translation/int/` | Exact literals beyond 64 bits, arithmetic including div/mod, comparisons, distinct, conditionals, and contradictory bounds |
 | `translation/real/` | Exact rationals, arithmetic, comparisons, conditionals, mixed function signatures, bindings, and shared division-at-zero interpretations |
-| `translation/bitvec/` | Modular arithmetic, bitwise operations, comparisons, width changes, shifts, rotations, and signed/unsigned division and remainders |
+| `translation/bitvec/` | Modular arithmetic, bitwise operations, comparisons, width changes, shifts, rotations, division/remainders, Int conversions, and overflow predicates |
 | `translation/sorts/` | Nonempty uninterpreted carriers, mixed functions, aliases, definitions, equality/distinct, conditionals, and quantifiers |
 | `translation/functions/` | Mixed Bool/Int functions and predicates, quoted names, argument order, unused parameters, and congruence |
 | `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |
@@ -239,7 +239,7 @@ Five completed CLI proofs check 21 exact/associative/boundary cases, signed vers
 unsigned ordering, function congruence, a Horn model, and wraparound that makes a
 Horn model impossible. Invalid widths, overflowing decimal literals, stale aliases,
 and later unsupported operators must fail before output. BV division/remainder
-are covered below; BV/Int conversions and overflow predicates remain unsupported.
+and BV/Int conversions and overflow predicates are covered below.
 
 `translation/bitvec/widths.smt2` and `translation/chc/widths.smt2` combine concat,
 extract, zero/sign extension, and repeat through functions, definitions, quantifiers,
@@ -303,4 +303,34 @@ Invalid arities/widths and hidden unsupported conversions fail before output.
 ```sh
 lake exe smt2lean tests/translation/bitvec/division.smt2 --out bitvec-division-demo
 lake env lean bitvec-division-demo/Query.lean
+```
+
+## Bitvector/Int conversions and overflow predicates
+
+`translation/bitvec/conversions.smt2` and `translation/chc/bv-conversions.smt2`
+combine conversions and five overflow predicates with definitions, simultaneous
+let, quantifiers, mixed function signatures, and Horn guards/arguments.
+`int_to_bv`/`int2bv` wrap modulo 2^w; `ubv_to_int`/`bv2nat` return a nonnegative
+Int, and `sbv_to_int` interprets two's complement. For eight bits, −1 becomes #xff;
+#xff converts back to 255 unsigned or −1 signed. Overflow predicates cover
+negation and signed/unsigned addition and multiplication.
+
+The Lean suite proves 2,744 cases using an independent integer oracle: exhaustive
+small widths 1–4, two wraps in either direction, and boundaries at 32/64/129 bits.
+It compares full SMT/CHC targets and four scoped query snapshots with handwritten
+propositions, and checks composition with Real floor/casts and arbitrary integer
+division at zero. Six completed CLI proofs cover 22 explicit cases, a symbolic
+signed round trip, signedness, overflow, and possible/impossible Horn models.
+Pure BV/Int output compiles using only `Init`.
+
+Zero, negative, malformed, or oversized conversion widths and wrong operand
+sorts/arities fail. The source guard rejects widths above 4294967295 before cvc5
+can silently saturate them, including aliases, quoted names, erased let terms,
+unused definitions, and observational requests. Text inside strings/comments is
+unaffected. Later errors leave no output. Subtraction/division overflow predicates
+remain rejected; previous unsupported-conversion tests now reject exponentiation.
+
+```sh
+lake exe smt2lean tests/translation/bitvec/conversions.smt2 --out bitvec-conversions-demo
+lake env lean bitvec-conversions-demo/Query.lean
 ```

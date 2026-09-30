@@ -81,7 +81,9 @@ The translator supports a first-order SMT-LIB fragment over Bool, Int, Real, fix
 
 Mixed Int/Real expressions support exact `to_real` casts, floor-based `to_int`, and `is_int`. Real output uses the pinned Mathlib; other output uses Lean core. Int/Real division at zero preserves arbitrary, shared interpretations.
 
-Bitvectors support modular arithmetic, bitwise operations, signed/unsigned comparisons, `bvcomp`, concatenation, extraction, zero/sign extension, repetition, shifts, rotations, and signed/unsigned division and remainders, including `bvsmod`. Division preserves SMT-LIB's specified zero-divisor and overflow behavior. Rotation indices are limited to `0…4294967295` by the native parser. BV/Int conversions and overflow predicates remain unsupported.
+Bitvectors support modular arithmetic, bitwise operations, signed/unsigned comparisons, `bvcomp`, concatenation, extraction, zero/sign extension, repetition, shifts, rotations, and signed/unsigned division and remainders, including `bvsmod`. Division preserves SMT-LIB's specified zero-divisor and overflow behavior.
+
+BV/Int conversions support `int_to_bv` (`int2bv`), `ubv_to_int` (`bv2nat`), and `sbv_to_int`. Overflow predicates include `bvnego`, `bvuaddo`, `bvsaddo`, `bvumulo`, and `bvsmulo`. Rotation indices and conversion widths cannot exceed `4294967295`; conversion widths must be positive.
 
 Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
 

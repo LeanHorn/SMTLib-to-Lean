@@ -438,12 +438,12 @@ def check_bitvectors(lean, tmp):
         check_lean(lean, completed, complete=True)
     # Reject the entire session on a later unsupported operator or stale width alias.
     for name, tail, reason in [
-        ("operator", "(assert (= ((_ int_to_bv 4) 1) #x0))", "INT_TO_BITVECTOR"),
+        ("operator", "(assert (= ((_ int_to_bv 4) (^ 2 3)) #x0))", "POW"),
         ("width", "(assert (= (bvadd #x1 #b1) #x2))", "comparable bit-vector"),
         ("scope", "(push 1)(define-sort Byte () (_ BitVec 8))(pop 1)(declare-const x Byte)", "declared"),
         ("reset", "(define-sort Byte () (_ BitVec 8))(reset)(set-logic ALL)(declare-const x Byte)", "declared"),
         ("hidden", "(define-fun ignore ((x (_ BitVec 4))) Bool true)"
-         "(assert (ignore ((_ int_to_bv 4) 1)))", "INT_TO_BITVECTOR"),
+         "(assert (ignore ((_ int_to_bv 4) (^ 2 3))))", "POW"),
     ]:
         source, output = tmp / f"bv-invalid-{name}.smt2", tmp / f"bv-invalid-{name}"
         source.write_text("(set-logic ALL)(assert (= #x1 #x1))(check-sat)" + tail)
@@ -508,8 +508,8 @@ def check_bitvector_widths(lean, tmp):
         ("repeat", "(assert (= ((_ repeat 0) #xf) #xf))", "number of repeats > 0"),
         ("width", "(assert (= ((_ zero_extend 4) #xf) #xf))", "same type"),
         ("hidden", "(define-fun ignore ((x (_ BitVec 8))) Bool true)"
-         "(assert (ignore ((_ zero_extend 4) ((_ int_to_bv 4) 1))))", "INT_TO_BITVECTOR"),
-        ("unused", "(define-fun bad () (_ BitVec 8) ((_ zero_extend 4) ((_ int_to_bv 4) 1)))", "INT_TO_BITVECTOR"),
+         "(assert (ignore ((_ zero_extend 4) ((_ int_to_bv 4) (^ 2 3)))))", "POW"),
+        ("unused", "(define-fun bad () (_ BitVec 8) ((_ zero_extend 4) ((_ int_to_bv 4) (^ 2 3))))", "POW"),
     ]:
         source, output = tmp / f"widths-invalid-{name}.smt2", tmp / f"widths-invalid-{name}"
         source.write_text("(set-logic ALL)(assert (= ((_ repeat 2) #xa) #xaa))(check-sat)" + tail)
@@ -607,7 +607,7 @@ theorem checked_bvashr {w : Nat} (x y : BitVec w) : SMT.bvashr x y = x.sshiftRig
         ("unused", "(define-fun bad () (_ BitVec 4) ((_ |rotate_right| 4294967296) #x8))", "rotation index exceeds"),
         ("erased", "(assert (let ((unused ((_ rotate_left 4294967296) #x8))) true))", "rotation index exceeds"),
         ("hidden", "(define-fun ignore ((x (_ BitVec 4))) Bool true)"
-         "(assert (ignore (bvshl ((_ int_to_bv 4) 1) #x1)))", "INT_TO_BITVECTOR"),
+         "(assert (ignore (bvshl ((_ int_to_bv 4) (^ 2 3)) #x1)))", "POW"),
     ]:
         source, output = tmp / f"shifts-invalid-{name}.smt2", tmp / f"shifts-invalid-{name}"
         source.write_text("(set-logic ALL)(assert (= (bvshl #x1 #x1) #x2))(check-sat)" + tail)
@@ -671,15 +671,91 @@ def check_bitvector_division(lean, tmp):
     for name, tail, reason in [
         ("width", "(assert (= (bvsdiv #x1 #b1) #x1))", "comparable bit-vector"),
         ("arity", "(assert (= (bvsmod #x1 #x1 #x1) #x0))", "invalid kind"),
-        ("unused", "(define-fun bad () (_ BitVec 4) (bvudiv ((_ int_to_bv 4) 1) #x1))", "INT_TO_BITVECTOR"),
+        ("unused", "(define-fun bad () (_ BitVec 4) (bvudiv ((_ int_to_bv 4) (^ 2 3)) #x1))", "POW"),
         ("hidden", "(define-fun ignore ((x (_ BitVec 4))) Bool true)"
-         "(assert (ignore (bvsrem ((_ int_to_bv 4) 1) #x1)))", "INT_TO_BITVECTOR"),
+         "(assert (ignore (bvsrem ((_ int_to_bv 4) (^ 2 3)) #x1)))", "POW"),
     ]:
         source, output = tmp / f"bv-div-invalid-{name}.smt2", tmp / f"bv-div-invalid-{name}"
         source.write_text("(set-logic ALL)(assert (= (bvudiv #x1 #x0) #xf))(check-sat)" + tail)
         assert reason in run(source, "--out", output, code=1).stderr
         assert not output.exists()
     print("BV division CLI passed: five completed proofs, standalone SMT/CHC output, and later-error protection")
+
+
+def check_bitvector_conversions(lean, tmp):
+    """Wrapping, signedness, and overflow flags through standalone generated code."""
+    for fixture, goal in [(ROOT / "tests/translation/bitvec/conversions.smt2", "Refutation"),
+                          (CHC / "bv-conversions.smt2", "Problem")]:
+        output = tmp / f"bv-conversions-{goal}"
+        run(fixture, "--out", output)
+        generated = check_generated(lean, output, goal=goal)
+        assert generated.startswith("import Init\n")
+        for operation in ["ofInt", "toNat", "toInt", "negOverflow", "uaddOverflow",
+                          "saddOverflow", "umulOverflow", "smulOverflow"]:
+            assert operation in generated
+    exact = [
+        "(= ((_ int_to_bv 8) (- 1)) #xff)", "(= ((_ int2bv 8) 257) #x01)",
+        "(= ((_ int_to_bv 8) (- 257)) #xff)", "(= (ubv_to_int #xff) 255)",
+        "(= (bv2nat #x80) 128)", "(= (sbv_to_int #xff) (- 1))",
+        "(= (sbv_to_int #x80) (- 128))", "(= (sbv_to_int #x7f) 127)",
+        "(= ((_ int_to_bv 1) (- 1)) #b1)", "(= (sbv_to_int #b1) (- 1))",
+        "(bvnego #x80)", "(not (bvnego #x7f))",
+        "(bvuaddo #xff #x01)", "(not (bvsaddo #xff #x01))",
+        "(bvsaddo #x7f #x01)", "(not (bvuaddo #x7f #x01))",
+        "(bvumulo #x80 #x02)", "(bvsmulo #x80 #xff)",
+        "(not (bvumulo #x0f #x02))", "(not (bvsmulo #x0f #x02))",
+        "(= ((_ int_to_bv 129) 680564733841876926926749214863536422913) (_ bv1 129))",
+        "(= ((_ int_to_bv 129) (- 680564733841876926926749214863536422913))"
+        " (_ bv680564733841876926926749214863536422911 129))",
+    ]
+    cases = [
+        ("exact", "ALL", "(assert (not (and " + " ".join(exact) + ")))", "Refutation",
+         "  intro h\n  apply h\n  decide\n"),
+        ("round-trip", "ALL", "(declare-const x (_ BitVec 8))"
+         "(assert (distinct ((_ int_to_bv 8) (sbv_to_int x)) x))", "Refutation",
+         "  intro x bad\n  exact bad BitVec.ofInt_toInt\n"),
+        ("signedness", "ALL", "(declare-const x (_ BitVec 8))"
+         "(assert (= (ubv_to_int x) 255))(assert (= (sbv_to_int x) (- 1)))", "¬ Refutation",
+         "  intro h\n  apply h (255 : BitVec 8)\n  decide\n"),
+        ("overflow", "QF_BV", "(declare-const x (_ BitVec 8))"
+         "(assert (bvsaddo x #x01))(assert (not (bvuaddo x #x01)))", "¬ Refutation",
+         "  intro h\n  apply h (127 : BitVec 8)\n  decide\n"),
+        ("horn-model", "HORN", "(declare-fun P ((_ BitVec 8)) Bool)(assert (P #xff))"
+         "(assert (forall ((x (_ BitVec 8))) (=> (P x) (P ((_ int_to_bv 8) (ubv_to_int x))))))"
+         "(assert (forall ((x (_ BitVec 8))) (=> (and (P x) (< (ubv_to_int x) 0)) false)))",
+         "Problem", "  refine ⟨(fun _ => True), True.intro, (fun _ _ => True.intro), ?_⟩\n"
+         "  intro x _ bad\n  exact Int.not_lt.mpr (Int.natCast_nonneg x.toNat) bad\n"),
+        ("horn-overflow", "HORN", "(declare-fun P ((_ BitVec 8)) Bool)(assert (P #x7f))"
+         "(assert (forall ((x (_ BitVec 8))) (=> (and (P x) (bvsaddo x #x01)) false)))",
+         "¬ Problem", "  rintro ⟨p, fact, safety⟩\n  exact safety 127 fact (by decide)\n"),
+    ]
+    for name, logic, body, target, proof in cases:
+        source, output = tmp / f"bv-conv-{name}.smt2", tmp / f"bv-conv-{name}"
+        source.write_text(f"(set-logic {logic}){body}(check-sat)")
+        run(source, "--out", output)
+        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        assert generated.startswith("import Init\n")
+        completed = output / "Query.lean"
+        completed.write_text(generated.split("-- Proofs\n", 1)[0]
+                             + f"theorem checked : {target} := by\n" + proof)
+        check_lean(lean, completed, complete=True)
+    for name, tail, reason in [
+        ("width", "(assert (= ((_ int_to_bv 0) 1) #b1))", "expecting bit-width > 0"),
+        ("sort", "(assert (= (ubv_to_int 1) 1))", "expecting bit-vector term"),
+        ("overflow", "(assert (bvuaddo #x1 #b1))", "comparable bit-vector"),
+        ("unused", "(define-fun bad () (_ BitVec 4) ((_ int_to_bv 4) (^ 2 3)))", "POW"),
+        ("hidden", "(define-fun ignore ((x (_ BitVec 4))) Bool true)"
+         "(assert (ignore ((_ int_to_bv 4) (^ 2 3))))", "POW"),
+        ("wide", "(assert (= ((_ int_to_bv 4294967296) 1) #b1))", "conversion width exceeds"),
+        ("wide-alias", "(define-fun bad () (_ BitVec 8) ((_ |int2bv| 4294967296) 1))", "conversion width exceeds"),
+        ("erased", "(assert (let ((unused ((_ int_to_bv 4294967296) 1))) true))", "conversion width exceeds"),
+        ("observation", "(get-value (((_ int2bv 4294967296) 1)))", "conversion width exceeds"),
+    ]:
+        source, output = tmp / f"bv-conv-invalid-{name}.smt2", tmp / f"bv-conv-invalid-{name}"
+        source.write_text("(set-logic ALL)(assert (= ((_ int_to_bv 8) (- 1)) #xff))(check-sat)" + tail)
+        assert reason in run(source, "--out", output, code=1).stderr
+        assert not output.exists()
+    print("BV conversion CLI passed: six completed proofs, standalone SMT/CHC output, and later-error protection")
 
 
 def main():
@@ -720,6 +796,7 @@ def main():
         check_bitvector_widths(lean, tmp)
         check_bitvector_shifts(lean, tmp)
         check_bitvector_division(lean, tmp)
+        check_bitvector_conversions(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
             for name, body, count in [

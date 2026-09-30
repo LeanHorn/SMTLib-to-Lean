@@ -145,7 +145,7 @@ private def parseScript
       if let some command := command? then
         let parts := Source.tokenize command.text
         if #["assert", "define-fun", "check-sat-assuming", "get-value"].contains (parts[1]?.getD "") then
-          validateRotationIndices parts
+          validateBitvectorIndices parts
         if parts[1]? == some "get-value" && parts.contains ":named" then
           throw (.unsupported "observational requests cannot introduce named terms")
       let cmd ← parser.nextCommand

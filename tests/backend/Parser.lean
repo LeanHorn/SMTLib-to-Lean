@@ -766,7 +766,7 @@ private def checkBitvectors : IO Unit := do
     ("(declare-fun f ((_ BitVec 4)) Bool)(assert (f #x00))", 3, "type"),
     ("(assert (bvcomp #x0 #x0))", 2, "Bool"),
     ("(assert (= (bvsub #x5 #x3 #x1) #x1))", 2, "invalid kind"),
-    ("(assert (= ((_ int_to_bv 4) 1) #x1))", 2, "INT_TO_BITVECTOR")
+    ("(assert (bvsdivo #x8 #xf))", 2, "BITVECTOR_SDIVO")
   ] do
     checkRejected "invalid-bv" s!"(set-logic ALL){body}(check-sat)" ordinal reason
   checkRejected "qf-bv-quantifier"
@@ -843,6 +843,49 @@ private def checkBitvectorDivision : IO Unit := do
       checkRejected "invalid-bv-division"
         s!"(set-logic ALL)(assert (= ({op} {args}) #x1))(check-sat)" 2 reason
 
+private def checkBitvectorConversions : IO Unit := do
+  let path := "tests/translation/bitvec/conversions.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 7 && query.definitions.size == 2) "lost BV conversion terms"
+    for i in [:2] do
+      let equality := query.assertions[i]!
+      let expected := if i == 0 then cvc5.Kind.INT_TO_BITVECTOR else .BITVECTOR_UBV_TO_INT
+      require (equality[0]!.getKind! == expected && equality[1]!.getKind! == expected)
+        "legacy conversion alias changed its native kind"
+    require (query.assertions[2]![0]!.getKind! == .BITVECTOR_SBV_TO_INT) "lost signed conversion"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "conversion invoked a solver"
+  ).runIO
+  for (body, reason) in #[
+    ("(= ((_ int_to_bv 0) 1) #b1)", "expecting bit-width > 0"),
+    ("(= ((_ int_to_bv -1) 1) #x1)", "Negative numerals"),
+    ("(= ((_ int_to_bv 4 4) 1) #x1)", "invalid number of indices"),
+    ("(= ((_ int_to_bv 4) 1.0) #x1)", "expecting integer term"),
+    ("(= ((_ int_to_bv 4) true) #x1)", "expecting integer term"),
+    ("(= ((_ int_to_bv 4) 1 2) #x1)", "invalid kind"),
+    ("(= (ubv_to_int 1) 1)", "expecting bit-vector term"),
+    ("(= (ubv_to_int #x1 #x2) 1)", "invalid kind"),
+    ("(= (sbv_to_int true) 1)", "expecting bit-vector term"),
+    ("(bvnego #x1 #x2)", "invalid kind"),
+    ("(bvnego 1)", "expecting a bit-vector term"),
+    ("(= (bv2int #xff) 255)", "not declared")
+  ] do
+    checkRejected "invalid-bv-conversion" s!"(set-logic ALL)(assert {body})(check-sat)" 2 reason
+  for op in #["bvuaddo", "bvsaddo", "bvumulo", "bvsmulo"] do
+    for (args, reason) in #[
+      ("#x1 #b1", "comparable bit-vector"), ("#x1 1", "comparable bit-vector"),
+      ("#x1", "invalid kind"), ("#x1 #x1 #x1", "invalid kind")
+    ] do
+      checkRejected "invalid-bv-overflow" s!"(set-logic QF_BV)(assert ({op} {args}))(check-sat)" 2 reason
+  for op in #["int_to_bv", "int2bv", "|int_to_bv|", "|int2bv|"] do
+    checkRejected "wide-bv-conversion"
+      s!"(set-logic ALL)(assert (= ((_ {op} 4294967296) 1) #x1))(check-sat)" 2 "conversion width exceeds"
+  -- The index guard must ignore text inside comments, strings, and quoted names.
+  (parseAndInspectQuery "(set-logic ALL)\
+    (set-info :source \"(_ int_to_bv 4294967296)\")\
+    (declare-const |(_ int2bv 4294967296)| Bool)\
+    (assert |(_ int2bv 4294967296)|)\n; (_ int_to_bv 4294967296)\n\
+    (assert (= ((_ |int2bv| 8) (- 1)) #xff))(check-sat)" fun _ => pure ()).runIO
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
@@ -857,6 +900,7 @@ def main : IO Unit := do
   checkBitvectorWidths
   checkBitvectorShifts
   checkBitvectorDivision
+  checkBitvectorConversions
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions
