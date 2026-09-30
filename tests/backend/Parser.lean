@@ -147,6 +147,56 @@ private def checkAcceptedQueries : IO Unit := do
     "(set-logic UF)\n(assert (forall ((p Bool)) (exists ((q Bool)) (= p q))))\n(check-sat)"
     #[] 1 #["set-logic", "assert"]
 
+private def checkSolverOptions : IO Unit := do
+  let path := "tests/translation/bool/options.smt2"
+  checkAccepted path (← IO.FS.readFile path) #["p"] 2
+    #["set-logic", "declare-fun", "assert", "assert"] fun query => do
+    require (query.commands.size == 23 &&
+      (query.commands.filter (·.text.startsWith "(set-option")).size == 10)
+      "configuration commands were lost or executed"
+    require (query.commands[17]!.text.contains "preserve comments" &&
+      query.commands[17]!.source.number == 18 &&
+      query.assertionSources.map (·.number) == #[14, 20] &&
+      query.source.map (·.number) == some 21) "configuration lost its original source"
+    let #[declaration] := query.declarations | throw (.error "expected one declaration")
+    let p := declaration.term
+    require (query.assertions[0]! == p && (← ofExcept query.assertions[1]!.getKind) == .NOT &&
+      query.assertions[1]![0]! == p) "configuration changed the assertions"
+  for key in #[":produce-models", ":produce-proofs", ":produce-unsat-cores", ":print-success"] do
+    for value in #["1", "yes", "TRUE", "\"true\"", "|true|", "(true)", "falsehood"] do
+      checkRejected s!"invalid-{key}"
+        s!"(set-logic ALL)\n(set-option {key} {value})\n(check-sat)"
+        2 s!"invalid value for {key}"
+  for value in #["-1", "+1", "01", "1.0", "true", "\"42\"", "|42|", "#x2a", "(42)", "(- 1)"] do
+    checkRejected "invalid-seed"
+      s!"(set-logic ALL)\n(set-option :random-seed {value})\n(check-sat)"
+      2 "invalid value for :random-seed"
+  for (key, value) in #[(":global-declarations", "true"), (":global-declarations", "false"),
+      (":incremental", "true"), (":produce-assertions", "true"), (":produce-models-extra", "true"),
+      (":unknown", "false"), (":regular-output-channel", "\"ignored.log\"")] do
+    checkRejected s!"unsupported-{key}"
+      s!"(set-logic ALL)\n(set-option {key} {value})\n(check-sat)"
+      2 "unsupported solver option"
+  for (input, ordinal, reason) in #[
+    ("(set-option :produce-models)", 1, "Mismatched parentheses"),
+    ("(set-option :random-seed 1 2)", 1, "Expected a RPAREN_TOK"),
+    ("(set-info :unknown true)\n(check-sat)", 1, "unsupported metadata"),
+    ("(set-info :global-declarations true)\n(check-sat)", 1, "unsupported metadata"),
+    ("(set-info :smt-lib-version 2.7)\n(check-sat)", 1, "unsupported metadata"),
+    ("(set-option :produce-models true)\n(set-logic ALL)", 3, "expected one check-sat"),
+    ("(set-logic ALL)\n(check-sat)\n(set-option :print-success false)", 3, "after check-sat"),
+    ("(set-logic ALL)\n(check-sat)\n(exit)\n(set-option :produce-models true)", 4, "after exit")
+  ] do checkRejected "invalid-configuration" input ordinal reason
+  -- Enabling output production must not enable query commands.
+  for command in #["(get-model)", "(get-proof)", "(get-unsat-core)", "(get-option :produce-models)",
+      "(push 1)", "(reset)", "(check-sat-assuming ())"] do
+    let input := "(set-option :produce-models true)\n(set-option :produce-proofs true)\n" ++
+      "(set-option :produce-unsat-cores true)\n(set-logic ALL)\n" ++ command ++ "\n(check-sat)"
+    checkRejected s!"configured-{command}" input 5 "unsupported command"
+  checkRejected "configured-model-after-check"
+    "(set-option :produce-models true)\n(set-logic ALL)\n(check-sat)\n(get-model)"
+    4 "after check-sat"
+
 private def checkDefinitions : IO Unit := do
   let path := "tests/translation/bindings/definitions.smt2"
   checkAccepted path (← IO.FS.readFile path) #["x", "p", "f", "later"] 8
@@ -345,8 +395,8 @@ private def checkRejectedQueries : IO Unit := do
       3, "unexpected EOF"),
     ("undeclared", "(set-logic QF_UF)\n(assert p)\n(check-sat)",
       2, "p"),
-    ("option", "(set-logic QF_UF)\n(set-option :produce-models true)\n(check-sat)",
-      2, "unsupported command: set-option"),
+    ("option", "(set-logic QF_UF)\n(set-option :global-declarations true)\n(check-sat)",
+      2, "unsupported solver option"),
     ("metadata", "(set-info :smt-lib-version 2.0)\n(set-logic QF_UF)\n(check-sat)",
       1, "unsupported metadata"),
     ("duplicate", "(set-logic QF_UF)\n(declare-const p Bool)\n(declare-const p Bool)\n(check-sat)",
@@ -498,6 +548,7 @@ private def checkSourceLocations : IO Unit := do
 
 def main : IO Unit := do
   checkAcceptedQueries
+  checkSolverOptions
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

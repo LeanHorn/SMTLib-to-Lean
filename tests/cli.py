@@ -14,6 +14,12 @@ FUNCTIONS = ROOT / "tests/translation/functions"
 QUANTIFIERS = ROOT / "tests/translation/quantifiers"
 BINDINGS = ROOT / "tests/translation/bindings"
 CHC = ROOT / "tests/translation/chc"
+SOLVER_OPTIONS = """(set-option :produce-models true)
+(set-option :produce-proofs true)
+(set-option :produce-unsat-cores true)
+(set-option :print-success true)
+(set-option :random-seed 42)
+"""
 
 
 def run(*args, code=0):
@@ -83,7 +89,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="smt2lean cli ") as temporary:
         tmp = Path(temporary)
-        inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty"]]
+        inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty", "options"]]
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
         inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified", "hints"]]
@@ -94,6 +100,9 @@ def main():
             result = run(fixture, "--out", output)
             assert "Proof unfinished" in result.stdout
             source = check_generated(lean, output)
+            if name == "options":
+                assert without_sources(source) == without_sources(expected["contradiction"])
+                assert "success" not in result.stdout and "unsat" not in result.stdout
             if name == "named":
                 assert '(:named "positive")' in source and '(:named "same body")' in source
                 assert '(:named "line\\nname", "also")' in source
@@ -118,7 +127,7 @@ def main():
             name = fixture.stem
             for status in ["sat", "unsat", "unknown"]:
                 source, output = tmp / f"{name}-{status}.smt2", tmp / f"{name}-{status}"
-                source.write_text(f"(set-info :status {status})\n" + fixture.read_text())
+                source.write_text(SOLVER_OPTIONS + f"(set-info :status {status})\n" + fixture.read_text())
                 run(source, "--out", output)
                 generated = check_generated(lean, output)
                 assert without_sources(generated) == without_sources(expected[name]), f"{name}: {status} changed the target"
@@ -165,7 +174,7 @@ def main():
         for status in [None, "unsat", "unknown"]:
             source, output = tmp / f"horn-{status}.smt2", tmp / f"horn-{status}"
             metadata = "" if status is None else f"(set-info :status {status})"
-            source.write_text(horn_text.replace("(set-info :status sat)", metadata))
+            source.write_text(SOLVER_OPTIONS + horn_text.replace("(set-info :status sat)", metadata))
             run(source, "--out", output)
             generated = check_generated(lean, output, goal="Problem")
             assert without_sources(generated) == without_sources(horn_source), status
@@ -277,6 +286,30 @@ def main():
             assert reason in result.stderr, result.stderr
             assert not output.exists()
 
+        # Bad configuration rejects the whole query, with locations, in either mode.
+        for logic in ["ALL", "HORN"]:
+            for number, (command, reason) in enumerate([
+                ('(set-option :produce-models "true")', "invalid value for :produce-models"),
+                ("(set-option :random-seed -1)", "invalid value for :random-seed"),
+                ("(set-option :global-declarations true)", "unsupported solver option"),
+                ("(set-option :unknown false)", "unsupported solver option"),
+                ("(set-info :unknown true)", "unsupported metadata"),
+                ("(get-proof)", "unsupported command"),
+                ("(get-model)", "unsupported command"),
+                ("(get-unsat-core)", "unsupported command"),
+            ]):
+                source, output = tmp / f"config-{logic}-{number}.smt2", tmp / f"config-{logic}-{number}"
+                source.write_text(f"(set-logic {logic})\n(assert false)\n{command}\n(check-sat)")
+                result = run(source, "--out", output, code=1)
+                context = "query 1: " if logic == "HORN" else ""
+                assert f"{source}:3:1: {context}command 3:" in result.stderr, result.stderr
+                assert reason in result.stderr and not output.exists(), result.stderr
+            for suffix in ["(set-option :print-success false)", "(get-model)", "(check-sat)"]:
+                source, output = tmp / f"config-tail-{logic}.smt2", tmp / f"config-tail-{logic}"
+                source.write_text(SOLVER_OPTIONS + f"(set-logic {logic})\n(assert false)\n(check-sat)\n" + suffix)
+                result = run(source, "--out", output, code=1)
+                assert "after check-sat" in result.stderr and not output.exists(), result.stderr
+
         invalid = [
             "(set-logic QF_LRA)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(check-sat)",
@@ -360,7 +393,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: 32 SMT and 8 CHC standalone translations, source locations, and 4 completed proofs")
+    print("Demo passed: 33 SMT and 8 CHC standalone translations, source locations, and 4 completed proofs")
 
 
 if __name__ == "__main__":

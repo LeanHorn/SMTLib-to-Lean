@@ -431,8 +431,12 @@ private def checkHornProblems (env : Environment) : IO Unit := do
       k r → (ok1 = (0 ≤ r)) → (v = (0 ≤ r)) → v = ok1 → ¬v → False))
   for status in #["", "sat", "unsat", "unknown"] do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})"
-    runProblem env s!"{path} ({status})" (input.replace "(set-info :status sat)" metadata)
-      fun problem => checkProblem problem expected
+    let plain := input.replace "(set-info :status sat)" metadata
+    let configured := "(set-option :produce-models true)\n(set-option :produce-proofs true)\n" ++
+      "(set-option :produce-unsat-cores true)\n(set-option :print-success true)\n" ++
+      "(set-option :random-seed 42)\n" ++ plain
+    for text in #[plain, configured] do
+      runProblem env s!"{path} ({status})" text fun problem => checkProblem problem expected
   let path := "tests/translation/chc/clauses.smt2"
   runProblem env path (← IO.FS.readFile path) fun problem =>
     checkProblem problem (usesClassical := true) q(∃ (p : Int → Prop) (r : Int → Prop → Int → Prop)
@@ -484,7 +488,7 @@ private def checkHornProblems (env : Environment) : IO Unit := do
       checkProblem problem (usesClassical := true) q(∃ (p : Int → Prop) (r : Int → Prop → Prop),
         p 0 ∧ (∀ (x : Int) (b : Prop), p 0 → p x → x > 0 → r (if b then x + 1 else x) b) ∧
         (∀ (x : Int) (b : Prop), r x b → x > 10 → b → False))
-  IO.println "CHC problems passed: 12 complete propositions and standalone files; axiom dependencies checked"
+  IO.println "CHC problems passed: 16 complete propositions and standalone files; axiom dependencies checked"
 
 def main : IO Unit := do
   initSearchPath (← findSysroot)
@@ -511,10 +515,12 @@ def main : IO Unit := do
         (if p then q else r) ∧ (if (if p then q else r) then ¬False else False) ∧
         (if p = q then p else ¬p)) → False)
   let contradiction ← IO.FS.readFile "tests/translation/bool/contradiction.smt2"
+  let configured ← IO.FS.readFile "tests/translation/bool/options.smt2"
   for status in #["", "sat", "unsat", "unknown"] do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
-    runQuery env s!"contradiction ({status})" (metadata ++ contradiction) fun query =>
-      checkRefutation query q(∀ p : Prop, (p ∧ ¬p) → False)
+    for input in #[metadata ++ contradiction, configured.replace "(set-info :status unknown)" metadata] do
+      runQuery env s!"contradiction ({status})" input fun query =>
+        checkRefutation query q(∀ p : Prop, (p ∧ ¬p) → False)
   runQuery env "single assertion" (contradiction.replace "(assert (not p))" "") fun query =>
     checkRefutation query q(∀ p : Prop, p → False)
   let empty ← IO.FS.readFile "tests/translation/bool/empty.smt2"
@@ -609,4 +615,4 @@ def main : IO Unit := do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
     runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
-  IO.println "Translation passed: 29 refutations and generated files; existing proof work preserved"
+  IO.println "Translation passed: 33 refutations and generated files; existing proof work preserved"

@@ -335,6 +335,36 @@ input. Quantifiers in `QF_*` logics and unsupported binder sorts are rejected.
 The combined [scope fixture](tests/translation/quantifiers/scopes.smt2)
 checks alternating binders, name collisions, and Boolean formulas used as arguments.
 
+## Solver options and metadata
+
+These `set-option` commands are accepted before `check-sat`:
+
+| Option | Accepted value |
+| --- | --- |
+| `:produce-models`, `:produce-proofs`, `:produce-unsat-cores`, `:print-success` | `true` or `false` |
+| `:random-seed` | An SMT-LIB numeral: `0` or digits starting with `1`–`9`, with no size limit |
+
+The translator records their original text and source locations without executing
+them. They do not change the Lean proposition or enable model/proof queries.
+Strings such as `"true"`, negative seeds, and unknown options are rejected.
+Semantic options such as `:global-declarations` remain unsupported, including when
+set to `false`. Options after `check-sat` or `exit` are also rejected.
+
+Metadata support remains `:smt-lib-version 2.6`, `:source`, `:category`, `:license`,
+`:notes`, and `:status`. Status values `sat`, `unsat`, and `unknown` never select
+or prove the goal. Metadata can follow `check-sat`, before the optional final `exit`.
+See the [SMT-LIB 2.6 reference](https://smt-lib.org/papers/smt-lib-reference-v2.6-r2024-09-20.pdf),
+sections 4.1.7 and 4.2.9, for the options and metadata conventions.
+
+```sh
+lake exe smt2lean tests/translation/bool/options.smt2 --out options-demo
+lake env lean options-demo/Query.lean
+```
+
+This combined example exercises all five options and six metadata fields. It
+produces the same `∀ p : Prop, (p ∧ ¬p) → False` statement as the contradiction demo,
+with an unfinished `sorry` proof.
+
 ## Development build
 
 Install [elan](https://github.com/leanprover/elan), Git, and a C++ toolchain
@@ -437,6 +467,8 @@ Supported inputs:
   The CLI also accepts `HORN`, with the additional CHC restrictions below.
 - `set-info` fields `:status`, `:source`, `:category`, `:license`, `:notes`, and
   `:smt-lib-version 2.6`. Metadata is ignored, never used as an assumption.
+- `set-option` for `:produce-models`, `:produce-proofs`, `:produce-unsat-cores`,
+  `:print-success`, and `:random-seed`, validated and recorded without execution.
 - Exactly one `check-sat`, followed only by metadata and an optional final `exit`.
 
 The driver validates every declaration and assertion, then calls `inspect` once
@@ -584,7 +616,7 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders 29 SMT cases and 12 CHC cases, compares the
+This test also renders 33 SMT cases and 16 CHC cases, compares the
 re-elaborated statements with the original expressions, and compiles each complete
 file and its isolated statement section using only Lean core. `Refutation` and
 `Problem` reject admissions and query-specific axioms; conditionals may use the

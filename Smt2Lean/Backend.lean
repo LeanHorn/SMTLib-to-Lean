@@ -191,6 +191,24 @@ private def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do
   if text == "(set-info :smt-lib-version 2.6)" then return
   throw (.unsupported s!"unsupported metadata: {text}")
 
+/-- Validate solver controls without applying them. Native parsing alone does not check values. -/
+private def validateSolverOption (command : cvc5.Command) : cvc5.Env Unit := do
+  let text := command.toString
+  for key in #[":produce-models", ":produce-proofs", ":produce-unsat-cores", ":print-success"] do
+    if text.startsWith s!"(set-option {key} " then
+      unless text == s!"(set-option {key} true)" || text == s!"(set-option {key} false)" do
+        throw (.error s!"invalid value for {key}: expected true or false")
+      return
+  let seedPrefix := "(set-option :random-seed "
+  if text.startsWith seedPrefix then
+    let value := ((text.drop seedPrefix.length).dropEnd 1).toString
+    -- SMT-LIB numerals are 0 or a nonzero digit followed by digits. No size limit.
+    unless !value.isEmpty && value.toList.all Char.isDigit &&
+        (value == "0" || !value.startsWith "0") do
+      throw (.error "invalid value for :random-seed: expected an SMT-LIB numeral")
+    return
+  throw (.unsupported s!"unsupported solver option: {text}")
+
 private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) : cvc5.Env Unit := do
   let response := (← command.invoke solver symbols).trimAscii.toString
@@ -208,7 +226,8 @@ def errorWithContext (context : String) : cvc5.Error → cvc5.Error
 /--
 A higher-order function that parses and validates SMT-LIB commands without solving.
 Accepts Bool/Int declarations, definitions, sort aliases, assertions, metadata,
-and one `check-sat`. Definitions are expanded before assertions reach `inspect`.
+audited solver options, and one `check-sat`. Metadata and options are recorded
+without execution. Definitions are expanded before assertions reach `inspect`.
 Only metadata and an optional final `exit` may follow the check.
 Calls `inspect` once with native terms, original command text, source ranges,
 the logic, and executed command names.
@@ -326,6 +345,7 @@ def parseAndInspectQuery
           assertionSources := query.assertionSources.push command.source
           invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
+      | "set-option" => validateSolverOption cmd
       | "check-sat" =>
         let assertions ← solver.getAssertions
         unless assertions.size == nativeCount && query.assertions.size == query.assertionSources.size do
