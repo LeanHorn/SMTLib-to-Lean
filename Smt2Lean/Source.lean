@@ -93,7 +93,7 @@ private def tokens (input : String) : Array String := Id.run do
     result := result.push (String.extract start cursor)
   return result
 
-/-- Recover labels before cvc5 erases annotations and merges equal named terms. -/
+/-- Reject unaudited attributes and recover labels before cvc5 erases or merges them. -/
 def Command.withNames (command : Command) : Except String Command := do
   let parts := tokens command.text
   unless #["assert", "define-fun", "define-const"].contains (parts[1]?.getD "") do
@@ -107,7 +107,7 @@ def Command.withNames (command : Command) : Except String Command := do
       -- Native parsing checks symbol syntax, freshness, and whether the body is closed.
       names := names.push (if symbol.startsWith "|" then
         ((symbol.drop 1).dropEnd 1).toString else symbol)
-    else if part.startsWith ":" then
+    else if part.startsWith ":" && !#[":pattern", ":no-pattern", ":qid"].contains part then
       throw s!"unsupported annotation: {part}"
   return { command with source := { command.source with names } }
 

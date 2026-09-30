@@ -285,8 +285,8 @@ private def checkRejectedQueries : IO Unit := do
       2, "unsupported bound variable sort"),
     ("ite-unsupported-branch", "(set-logic ALL)\n(assert (forall ((p Bool)) (= (ite p 1 (div 1 0)) 1)))\n(check-sat)",
       2, "INTS_DIVISION"),
-    ("quantifier-pattern", "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
-      3, "unsupported annotation: :pattern"),
+    ("quantifier-weight", "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :weight 5)))\n(check-sat)",
+      3, "unsupported annotation: :weight"),
     ("out-of-scope", "(set-logic ALL)\n(assert (forall ((x Int)) (= x x)))\n(assert (= x 0))\n(check-sat)",
       3, "x"),
     ("let-sibling-int", "(set-logic QF_LIA)\n(assert (let ((x 1) (y x)) (= y 1)))\n(check-sat)",
@@ -371,6 +371,63 @@ private def checkRejectedQueries : IO Unit := do
     "(set-logic ALL)\n(assert (< 1.0 2.0))\n(check-sat)"
     2 "expected Bool or Int"
 
+private def checkQuantifierHints : IO Unit := do
+  let path := "tests/translation/quantifiers/hints.smt2"
+  checkAccepted path (← IO.FS.readFile path) #["x", "P", "R"] 10
+    (#["set-logic"] ++ Array.replicate 3 "declare-fun" ++ #["define-fun"] ++
+      Array.replicate 10 "assert") fun query => do
+    require (query.commands.any (·.text.contains ":no-pattern")) "lost original hints"
+    require (query.assertionSources.flatMap (·.names) == #["allP"]) "qid became a label"
+    let mut pending := query.assertions ++ query.definitions.map (·.body)
+    while !pending.isEmpty do
+      let term := pending.back!
+      pending := pending.pop
+      let kind ← ofExcept term.getKind
+      require (![cvc5.Kind.INST_PATTERN_LIST, .INST_PATTERN, .INST_NO_PATTERN, .INST_ATTRIBUTE].contains kind)
+        "hint reached the validated query"
+      pending := pending ++ term.getChildren
+  for (body, reason) in #[
+    ("(! (P x) :weight true)", "unsupported annotation: :weight"),
+    ("(! (P x) :unknown yes)", "unsupported annotation: :unknown"),
+    ("(! (P x) :fun-def)", "unsupported annotation: :fun-def"),
+    ("(! (P (div x 2)) :pattern ((P x)))", "INTS_DIVISION"),
+    ("(! (P x) :pattern ((missing x)))", "not declared"),
+    ("(! (P x) :pattern ((P true)))", "type"),
+    ("(! (P x) :pattern (P x))", "fully-applied terms"),
+    ("(! (P x) :qid 42)", "symbol")
+  ] do
+    checkRejected s!"hint-{body}"
+      s!"(set-logic ALL)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) {body}))\n(check-sat)"
+      3 reason
+  for (input, ordinal, reason) in #[
+    ("(set-logic QF_LIA)\n(assert (forall ((x Int)) (! (> x 0) :qid q)))\n(check-sat)",
+      2, "quantifiers require"),
+    ("(set-logic ALL)\n(assert (forall ((x Real)) (! true :qid q)))\n(check-sat)",
+      2, "unsupported bound variable sort"),
+    ("(set-logic ALL)\n(assert (! true :qid q))\n(check-sat)", 2, "quantified formula bodies"),
+    ("(set-logic ALL)\n(assert (forall ((x Int)) (! true :qid q)))\n(assert q)\n(check-sat)",
+      3, "not declared"),
+    ("(set-logic ALL)\n(define-fun unused () Bool (forall ((x Int)) (! (= (div x 2) 0) :qid q)))\n(check-sat)",
+      2, "INTS_DIVISION"),
+    ("(set-logic ALL)\n(assert (let ((unused (! (forall ((x Int)) (! (= (div x 2) 0) :qid q)) :named bad))) true))\n(check-sat)",
+      2, "INTS_DIVISION")
+  ] do checkRejected "invalid-hinted-query" input ordinal reason
+  -- Check binder identity directly, not just the names printed by cvc5.
+  (do
+    let tm ← cvc5.TermManager.new
+    let solver ← cvc5.Solver.new tm
+    let parser ← cvc5.InputParser.new solver
+    parser.setStringInput "(set-logic ALL) (assert (forall ((x Int)) (! (= x x) :qid q)))"
+    let logic ← parser.nextCommand
+    discard <| logic.invoke solver (← parser.getSymbolManager)
+    let command ← parser.nextCommand
+    discard <| command.invoke solver (← parser.getSymbolManager)
+    let original := (← solver.getAssertions).back!
+    let stripped ← withoutQuantifierHints tm original
+    require (original.getNumChildren == 3 && stripped.getNumChildren == 2 &&
+      stripped[0]! == original[0]! && stripped[1]! == original[1]!) "hint removal changed binders or body"
+  ).runIO
+
 /-- Reject dangling native variables even when names or already-visited terms match. -/
 private def checkBoundScopes : IO Unit := (do
   let tm ← cvc5.TermManager.new
@@ -444,6 +501,7 @@ def main : IO Unit := do
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions
+  checkQuantifierHints
   checkBoundScopes
   checkSourceLocations
   IO.println "Parser passed: Bool/Int queries, binding identity/scope, and rejection diagnostics"

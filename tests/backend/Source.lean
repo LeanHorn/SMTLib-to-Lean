@@ -66,6 +66,7 @@ def main : IO Unit := do
     ("(assert (! true :named ; :named fake\n |a :named (;)|))", #["a :named (;)"]),
     ("(assert (! (! true :named inner) :named outer :named |also|))", #["inner", "outer", "also"]),
     ("(assert |:named|)", #[]),
+    ("(assert (! (forall ((x Int)) (! true :pattern () :no-pattern x :qid |:named fake|)) :named real))", #["real"]),
     ("(set-info :source \":named fake \"\" :unknown\")", #[])
   ] do
     let (commands, _) ← readAll input

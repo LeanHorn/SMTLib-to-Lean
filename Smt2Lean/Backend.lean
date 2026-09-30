@@ -1,6 +1,7 @@
 import cvc5
 import Smt2Lean.Source
 import Smt2Lean.Definitions
+import Smt2Lean.Hints
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
 import Smt.Reconstruct.Int
@@ -147,14 +148,14 @@ private def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
     { name := d.symbol.toString, term := d.symbol, source := some d.source }
 
 /-- cvc5 binds named terms directly to their bodies. Check even bodies erased by let. -/
-private def validateNamedTerms (names : Array String) (solver : cvc5.Solver)
+private def validateNamedTerms (names : Array String) (tm : cvc5.TermManager) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) (query : ParsedQuery) (allowQuantifiers : Bool)
     : cvc5.Env Unit := do
   if names.isEmpty then return
   let parser ← cvc5.InputParser.new solver (some symbols)
   for name in names do
     parser.setStringInput s!"|{name}|"
-    let body ← parser.nextTerm
+    let body ← withoutQuantifierHints tm (← parser.nextTerm)
     validateTerm body (knownTerms query) allowQuantifiers
 
 /-- cvc5 stores each define-fun as `symbol = body`, using a lambda for parameters. -/
@@ -174,6 +175,7 @@ private def readDefinition (equation : cvc5.Term) (source : Source.Ref)
         throw (.error "expected a native definition lambda")
       pure (value[0]!.getChildren, value[1]!)
     else pure (#[], value)
+  let body ← withoutQuantifierHints tm body
   -- Check before expansion as well: even discarded arguments must be supported.
   validateTerm body (knownTerms query) allowQuantifiers parameters
   let body ← expandDefinitions tm query.definitions body
@@ -288,7 +290,7 @@ def parseAndInspectQuery
           declarations := query.declarations.push { name := symbol, term, source := some command.source }
           invoked := query.invoked.push commandName }
       | "define-fun" =>
-        validateNamedTerms command.source.names solver symbols query allowQuantifiers
+        validateNamedTerms command.source.names tm solver symbols query allowQuantifiers
         invokeCommand cmd solver symbols
         let assertions ← solver.getAssertions
         unless assertions.size == nativeCount + 1 do
@@ -305,13 +307,14 @@ def parseAndInspectQuery
       | "assert" =>
         assertionNumber := assertionNumber + 1
         try
-          validateNamedTerms command.source.names solver symbols query allowQuantifiers
+          validateNamedTerms command.source.names tm solver symbols query allowQuantifiers
           invokeCommand cmd solver symbols
           let assertions ← solver.getAssertions
           unless assertions.size == nativeCount + 1 do
             throw (.error "expected one new native assertion")
           let some term := assertions.back?
             | throw (.error "assert command did not store a formula")
+          let term ← withoutQuantifierHints tm term
           validateAssertion term (knownTerms query) allowQuantifiers
           let term ← expandDefinitions tm query.definitions term
           validateAssertion term query.declarations allowQuantifiers

@@ -235,6 +235,28 @@ private def checkNamedAssertions (env : Environment) : IO Unit := do
         ((x + 1 = x + 1) ∧ (x + 1 = x + 1)) ∧ (p ∧ p ∧ p)) → False)
   IO.println "Named assertions passed: aliases, shadowing, duplicate bodies, and escaped source labels"
 
+private def checkQuantifierHints (env : Environment) : IO Unit := do
+  let path := "tests/translation/quantifiers/hints.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    let expected ← withAssertions query fun parameters assertions => do
+      let #[x, p, r] := parameters | throwError "hints became query parameters"
+      let x : Q(Int) := x
+      let p : Q(Int → Prop) := p
+      let r : Q(Int → Prop → Prop) := r
+      let a : Q(Prop) := q(∀ y : Int, $p y)
+      let b : Q(Prop) := q(∀ y : Int, ∃ (z : Int) (flag : Prop), y = z ∧ $r z flag)
+      let c : Q(Prop) := q((∀ flag : Prop, $r $x flag) ∧ (∀ flag : Prop, $r $x flag))
+      let d : Q(Prop) := q(∀ (y : Int) (flag : Prop), $r y flag)
+      let pairs : Array Expr := #[a, b, c, d, a]
+      unless assertions.size == 2 * pairs.size do throwError "wrong hint assertion count"
+      for wanted in pairs, i in [:pairs.size] do
+        checkEqual assertions[2 * i]! wanted
+        checkEqual assertions[2 * i + 1]! wanted
+      mkForallFVars parameters q(($a ∧ $a ∧ $b ∧ $b ∧ $c ∧ $c ∧ $d ∧ $d ∧ $a ∧ $a) → False)
+        (usedOnly := false)
+    checkRefutation query expected
+  IO.println "Quantifier hints passed: 5 annotated/plain pairs match handwritten propositions"
+
 private def checkClauseValues (parameters actual expected : Array Expr) : MetaM Unit := do
   unless actual.size == expected.size do throwError "wrong reconstructed clause count"
   for value in actual, wanted in expected do
@@ -446,18 +468,23 @@ private def checkHornProblems (env : Environment) : IO Unit := do
     runProblem env name ("(set-logic HORN)\n" ++ body ++ "\n(check-sat)")
       fun problem => checkProblem problem expected
   let path := "tests/translation/chc/definitions.smt2"
-  runProblem env path (← IO.FS.readFile path) fun problem => do
-    withClauses problem fun parameters clauses => do
-      let #[p, r] := parameters | throwError "CHC helpers became existential relations"
-      let p : Q(Int → Prop) := p
-      let r : Q(Int → Prop → Prop) := r
-      checkClauseValues parameters clauses #[q($p 0),
-        q(∀ (x : Int) (b : Prop), $p 0 → $p x → x > 0 → $r (if b then x + 1 else x) b),
-        q(∀ (x : Int) (b : Prop), $r x b → x > 10 → b → False)]
-    checkProblem problem (usesClassical := true) q(∃ (p : Int → Prop) (r : Int → Prop → Prop),
-      p 0 ∧ (∀ (x : Int) (b : Prop), p 0 → p x → x > 0 → r (if b then x + 1 else x) b) ∧
-      (∀ (x : Int) (b : Prop), r x b → x > 10 → b → False))
-  IO.println "CHC problems passed: 11 complete propositions and standalone files; axiom dependencies checked"
+  let input ← IO.FS.readFile path
+  let hinted := input.replace "(=> |entry clause| (rule x b))"
+    "(! (=> |entry clause| (rule x b)) :pattern ((P x) (R x b)) :no-pattern (P (div x 2)) :qid step)"
+    |>.replace "(=> (bad x b) false)" "(! (=> (bad x b) false) :pattern ((R x b)) :qid safety)"
+  for text in #[input, hinted] do
+    runProblem env path text fun problem => do
+      withClauses problem fun parameters clauses => do
+        let #[p, r] := parameters | throwError "CHC helpers or hints became existential relations"
+        let p : Q(Int → Prop) := p
+        let r : Q(Int → Prop → Prop) := r
+        checkClauseValues parameters clauses #[q($p 0),
+          q(∀ (x : Int) (b : Prop), $p 0 → $p x → x > 0 → $r (if b then x + 1 else x) b),
+          q(∀ (x : Int) (b : Prop), $r x b → x > 10 → b → False)]
+      checkProblem problem (usesClassical := true) q(∃ (p : Int → Prop) (r : Int → Prop → Prop),
+        p 0 ∧ (∀ (x : Int) (b : Prop), p 0 → p x → x > 0 → r (if b then x + 1 else x) b) ∧
+        (∀ (x : Int) (b : Prop), r x b → x > 10 → b → False))
+  IO.println "CHC problems passed: 12 complete propositions and standalone files; axiom dependencies checked"
 
 def main : IO Unit := do
   initSearchPath (← findSysroot)
@@ -468,6 +495,7 @@ def main : IO Unit := do
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env
+  checkQuantifierHints env
   checkHornReconstruction env
   checkHornProblems env
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
@@ -581,4 +609,4 @@ def main : IO Unit := do
     let metadata := if status.isEmpty then "" else s!"(set-info :status {status})\n"
     runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
-  IO.println "Translation passed: 28 refutations and generated files; existing proof work preserved"
+  IO.println "Translation passed: 29 refutations and generated files; existing proof work preserved"

@@ -86,7 +86,7 @@ def main():
         inputs = [FIXTURES / f"{name}.smt2" for name in ["contradiction", "connectives", "empty"]]
         inputs += [INTEGERS / f"{name}.smt2" for name in ["literals", "arithmetic", "bounds"]]
         inputs += [FUNCTIONS / f"{name}.smt2" for name in ["applications", "congruence"]]
-        inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified"]]
+        inputs += [QUANTIFIERS / f"{name}.smt2" for name in ["scopes", "quantified", "hints"]]
         inputs += [BINDINGS / name for name in ["simultaneous.smt2", "definitions.smt2", "named.smt2"]]
         for fixture in inputs:
             name = fixture.stem
@@ -139,6 +139,18 @@ def main():
             run(fixture, "--out", completed.parent, code=1)
             assert completed.read_text() == saved
 
+        # Quantifier hints must leave the entire emitted proposition unchanged.
+        source, output = tmp / "quantified-hinted.smt2", tmp / "quantified-hinted"
+        text = (QUANTIFIERS / "quantified.smt2").read_text()
+        text = text.replace("(forall ((x Int)) (P x))",
+                            "(forall ((x Int)) (! (P x) :pattern ((P x)) :qid universal))")
+        text = text.replace("(exists ((x Int)) (not (P x)))",
+                            "(exists ((x Int)) (! (not (P x)) :no-pattern (P x) :qid witness))")
+        source.write_text(text)
+        run(source, "--out", output)
+        generated = check_generated(lean, output)
+        assert without_sources(generated) == without_sources(expected["quantified"])
+
         missing_output = tmp / "missing-output"
         run(tmp / "missing.smt2", "--out", missing_output, code=1)
         assert not missing_output.exists()
@@ -168,6 +180,18 @@ def main():
         generated = check_generated(lean, output, goal="Problem")
         assert generated.count("(clause ") == 3
         assert all(f'(:named "{name}")' in generated for name in ["entry clause", "step", "safety"])
+
+        source, output = tmp / "hinted-chc.smt2", tmp / "hinted-chc"
+        text = (CHC / "definitions.smt2").read_text()
+        text = text.replace("(=> |entry clause| (rule x b))",
+                            "(! (=> |entry clause| (rule x b)) :pattern ((P x) (R x b)) "
+                            ":no-pattern (P (div x 2)) :qid step)")
+        text = text.replace("(=> (bad x b) false)",
+                            "(! (=> (bad x b) false) :pattern ((R x b)) :qid safety)")
+        source.write_text(text)
+        run(source, "--out", output)
+        hinted = check_generated(lean, output, goal="Problem")
+        assert without_sources(hinted) == without_sources(generated)
 
         query = horn_output / "Query.lean"
         edited = horn_source + "\n-- User CHC proof work.\n"
@@ -235,6 +259,9 @@ def main():
             ("named-clause", horn_prefix +
              '(assert (! (forall ((x Int)) (=> (not (P x)) false)) :named |bad clause|))\n(check-sat)',
              '4:1: query 1: command 4 (:named "bad clause"): clause 2:', "CHC relation inside a theory guard"),
+            ("hinted-clause", horn_prefix +
+             '(assert (forall ((x Int)) (! (=> (not (P x)) false) :pattern ((P x)) :qid bad)))\n(check-sat)',
+             "4:1: query 1: command 4: clause 2:", "CHC relation inside a theory guard"),
             ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
              "2:1: query 1: command 2:", "unsupported CHC declaration"),
             ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
@@ -268,7 +295,7 @@ def main():
             "(set-logic QF_UF)\n(assert (let ((p true) (q p)) q))\n(check-sat)",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (div x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (mod next 2) 0)))\n(check-sat)",
-            "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :pattern ((P x)))))\n(check-sat)",
+            "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :weight 5)))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"
@@ -333,7 +360,7 @@ def main():
         assert not output.exists()
 
     print("CLI passed: generation, exit codes, diagnostics, and output protection")
-    print("Demo passed: 30 SMT and 7 CHC standalone translations, source locations, and 4 completed proofs")
+    print("Demo passed: 32 SMT and 8 CHC standalone translations, source locations, and 4 completed proofs")
 
 
 if __name__ == "__main__":

@@ -228,7 +228,34 @@ Every named body is validated, even when a surrounding `let` discards it.
 Names must be fresh. The pinned cvc5 parser rejects naming inside binders;
 place `:named` around the whole quantified assertion instead. Annotated CHC
 clauses follow the same rules and still undergo Horn validation after expansion.
-Other term annotations, including quantifier hints, remain unsupported.
+Quantifier hints are supported as described below; other attributes remain rejected.
+
+## Quantifier hints
+
+`:pattern`, `:no-pattern`, and `:qid` guide the SMT solver without changing the
+formula. For example, both assertions below translate to `∀ x : Int, P x`:
+
+```smt2
+(assert (forall ((x Int)) (! (P x) :pattern ((P x)) :qid rule)))
+(assert (forall ((x Int)) (P x)))
+```
+
+cvc5 checks the hint syntax, names, and term types. The translator removes these
+hints before checking and translating the body, preserving its binders. This also
+works inside definitions and named assertions, and before CHC validation. Original
+hints remain in the recorded command text; they add no Lean parameters or assumptions.
+Operators used only in discarded hints need no Lean translation.
+
+`:weight` remains rejected: the pinned parser silently ignores it rather than
+validating its value. Unknown and semantic attributes are also rejected.
+
+```sh
+lake exe smt2lean tests/translation/quantifiers/hints.smt2 --out hints-demo
+lake env lean hints-demo/Query.lean
+```
+
+The combined fixture contains five annotated/plain pairs covering nested binders,
+shadowing, shared terms, definitions, and named assertions. The proof is unfinished.
 
 ## Translate functions and predicates
 
@@ -304,8 +331,8 @@ The existential supplies `x` and `¬P x`; the universal supplies `P x`.
 Run the same Lean command again to check the completed proof using only Lean core.
 
 Use `UF`, `LIA`, `NIA`, `UFLIA`, `UFNIA`, `ALL`, or omit `set-logic` for quantified
-input. Quantifiers in `QF_*` logics, unsupported binder sorts, and quantifier
-patterns are rejected. The combined [scope fixture](tests/translation/quantifiers/scopes.smt2)
+input. Quantifiers in `QF_*` logics and unsupported binder sorts are rejected.
+The combined [scope fixture](tests/translation/quantifiers/scopes.smt2)
 checks alternating binders, name collisions, and Boolean formulas used as arguments.
 
 ## Development build
@@ -402,6 +429,7 @@ Supported inputs:
 - `:named` assertions and closed subterms, with reusable bindings and preserved source labels.
 - `define-sort` aliases and parameterized aliases resolving to Bool/Int.
 - `forall` and `exists` over `Bool`/`Int`, including nested binders and unused variables.
+- Quantifier hints `:pattern`, `:no-pattern`, and `:qid`, removed without changing the body.
 - Integer literals, unary `-`, and `=`/`distinct` over either supported sort.
 - Integer `+`, subtraction, `*`, `abs`, and `<`, `<=`, `>`, `>=`, including chains.
 - No `set-logic`, or an initial `UF`, `LIA`, `NIA`, `UFLIA`, `UFNIA`, their `QF_` forms, or `ALL`.
@@ -556,7 +584,7 @@ definition in memory. Run its checks with:
 lake exe testTranslation
 ```
 
-This test also renders twenty-four SMT cases and ten CHC cases, compares the
+This test also renders 29 SMT cases and 12 CHC cases, compares the
 re-elaborated statements with the original expressions, and compiles each complete
 file and its isolated statement section using only Lean core. `Refutation` and
 `Problem` reject admissions and query-specific axioms; conditionals may use the

@@ -295,6 +295,9 @@ private def checkRejectedProblems : IO Unit := do
     ("let-hidden-relation", "(let ((guard (not (P x)))) (=> guard done))", "inside a theory guard"),
     ("let-hidden-argument", "(let ((arg (P x))) (R x arg x))", "inside a relation argument"),
     ("let-hidden-quantifier", "(let ((guard (exists ((y Int)) (= x y)))) (=> guard (P x)))", "leading forall"),
+    ("hinted-negative", "(! (=> (not (P x)) done) :pattern ((P x)) :qid bad)", "inside a theory guard"),
+    ("hinted-existential", "(! (exists ((y Int)) (! (P y) :pattern ((P y)))) :qid bad)", "leading forall"),
+    ("hinted-unsupported", "(! (P (div x 2)) :pattern ((P x)))", "unsupported operator"),
     ("existential", "(exists ((y Int)) (P y))", "leading forall"),
     ("disjunctive-head", "(=> (P x) (or (P x) done))", "as CHC head")
   ] do
