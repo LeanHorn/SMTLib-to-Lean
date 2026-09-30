@@ -169,7 +169,9 @@ private def parseScript
       | "set-logic" =>
         let some logic := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
             "UF", "LIA", "NIA", "UFLIA", "UFNIA",
-            "QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA", "ALL", "HORN"].find?
+            "QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA",
+            "QF_LIRA", "QF_NIRA", "QF_UFLIRA", "QF_UFNIRA", "LIRA", "NIRA", "UFLIRA", "UFNIRA",
+            "ALL", "HORN"].find?
             (fun logic => cmd.toString == s!"(set-logic {logic})")
           | throw (.unsupported s!"unsupported logic: {cmd}")
         if logic == "HORN" && mode == .smt then

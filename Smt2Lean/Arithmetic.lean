@@ -1,5 +1,6 @@
 import Smt2Lean.Helpers
 import Smt2Lean.Backend.Validate
+import Mathlib.Algebra.Order.Archimedean.Real.Basic
 
 namespace Smt2Lean.Arithmetic
 
@@ -50,17 +51,24 @@ def withZeroCases [Inhabited α] (terms : Array cvc5.Term)
   if sort.isReal then return some q(Real)
   return none
 
-/-- Rebuild a numeral at the Real type; never cache it as the native Int term. -/
+/-- Lift Int operands to Real without changing their cached Int reconstruction. -/
 private def realOperand (term : cvc5.Term) : Smt.ReconstructM Expr := do
   if let some value := Backend.integerLiteral? term then
     let literal : Q(Real) ← mkNumeral q(Real) value.natAbs
     return if value < 0 then q(-$literal) else literal
+  if term.getSort!.isInteger then
+    let value : Q(Int) ← Smt.Reconstruct.reconstructTerm term
+    return q(($value : Real))
   Smt.Reconstruct.reconstructTerm term
 
 /-- Formula reconstruction needs only Mathlib's Real operations, not solver proof rules. -/
 private def reconstructReal : Smt.TermReconstructor := fun term => do
   let kind ← ofExcept term.getKind
   if kind == .TO_REAL then return ← realOperand term[0]!
+  if kind == .TO_INTEGER || kind == .IS_INTEGER then
+    let value : Q(Real) ← realOperand term[0]!
+    return if kind == .TO_INTEGER then q(Int.floor $value)
+      else q($value = (Int.floor $value : Real))
   if kind == .CONST_RATIONAL then
     let value ← ofExcept term.getRationalValue
     let numerator : Q(Real) ← mkNumeral q(Real) value.num.natAbs

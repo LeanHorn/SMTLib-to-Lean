@@ -86,7 +86,8 @@ private def checkEmission (value : Expr) (kind : GoalKind := .refutation)
   let [statements, proofs] := source.splitOn "-- Proofs\n"
     | throwError "expected one Statements section followed by Proofs"
   unless (statements.startsWith "import Init\n\n-- Statements\n\n" ||
-      statements.startsWith "import Mathlib.Data.Real.Basic\n\n-- Statements\n\n") &&
+      statements.startsWith "import Mathlib.Data.Real.Basic\n\n-- Statements\n\n" ||
+      statements.startsWith "import Mathlib.Algebra.Order.Archimedean.Real.Basic\n\n-- Statements\n\n") &&
       proofs.contains s!"theorem {theoremName} : {definitionName} := by\n  sorry\n" do
     throwError "wrong statement/proof layout"
   unsafe enableInitializersExecution
@@ -611,6 +612,71 @@ private def checkReals (env : Environment) : IO Unit := do
     throw (IO.userError "a popped Real declaration changed the output profile")
   IO.println "Real translation passed: exact arithmetic, SMT/CHC targets, numeral coercions, and five scoped snapshots"
 
+/-- Casts preserve Int subterms; floor and integrality survive binders and emission. -/
+private def checkConversions (env : Environment) : IO Unit := do
+  let path := "tests/translation/real/conversions.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ (d m : Int → Int) (r : Real → Real) (i : Int) (x : Real) (b : Prop) (f : Real → Int),
+      (((i + 1 : Int) : Real) = (i : Real) + 1 ∧
+        ((i : Real) < x ∧ x ≤ (i : Real) ∧ ((i + 1 : Int) : Real) > x ∧ x ≥ ((i - 1 : Int) : Real)) ∧
+        (i : Real) / 2 = (i : Real) * x - (i : Real) ∧
+        (i + 1 = Int.floor x ∧ ((i + 1 : Int) : Real) + x = (i : Real) + 1 / 2) ∧
+        (Int.floor (- (17 / 10 : Real)) = -2 ∧ Int.floor (- (2 : Real)) = -2) ∧
+        (x = (Int.floor x : Real)) = (x = (Int.floor x : Real)) ∧
+        Int.floor (i : Real) = i ∧ (Int.floor (i : Real) = i ∧ (i : Real) = (Int.floor (i : Real) : Real)) ∧
+        (if b then Int.floor x else i) = f (i : Real) ∧
+        (Int.floor x : Real) = (i : Real) + 1 / 2 ∧
+        (∀ (_i : Int) (x : Real), ∃ y : Real, y = (Int.floor x : Real) ∧ y = (Int.floor y : Real)) ∧
+        ((smtDiv d i 0 : Real) = smtRealDiv r (i : Real) 0 ∧
+          Int.floor (smtRealDiv r x 0) = smtMod m i 0)) → False)
+  for logic in #["QF_LIRA", "QF_NIRA", "QF_UFLIRA", "QF_UFNIRA", "LIRA", "NIRA", "UFLIRA", "UFNIRA"] do
+    runQuery env logic s!"(set-logic {logic})(declare-const i Int)(declare-const x Real)\
+      (assert (= (to_real i) x))(assert (= (to_int x) i))(assert (is_int x))(check-sat)"
+      fun query => checkRefutation query (usesClassical := true)
+        q(∀ (i : Int) (x : Real), ((i : Real) = x ∧ Int.floor x = i ∧ x = (Int.floor x : Real)) → False)
+  runQuery env "conversion type-name shadowing"
+    "(set-logic ALL)(assert (forall ((Real Real) (Int Int)) (= (to_int Real) Int)))(check-sat)"
+    fun query => checkRefutation query (usesClassical := true)
+      q((∀ (x : Real) (i : Int), Int.floor x = i) → False)
+  let path := "tests/translation/chc/conversions.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem (usesClassical := true) q(∃ A : Type, Nonempty A ∧
+      ∃ (d : Int → Int) (r : Real → Real) (p : A → Int → Real → Prop) (s : A → Real → Int → Prop → Prop),
+      (∀ (a : A) (i : Int), p a i (i : Real)) ∧
+      (∀ (a : A) (i : Int) (x : Real) (b : Prop), p a i x → (i : Real) < x →
+        x = (Int.floor x : Real) → s a ((i : Real) + x) (Int.floor (smtRealDiv r x 0)) b) ∧
+      (∀ (a : A) (x : Real) (i : Int) (b : Prop), s a x i b → ¬i = Int.floor x →
+        (smtDiv d i 0 : Real) = smtRealDiv r x 0 → False))
+  let source ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(declare-const i Int)(push 1)(declare-const x Real)\
+     (define-fun p () Bool (= (to_int x) i))(check-sat-assuming (p))(check-sat)\
+     (pop 1)(check-sat)(reset)(set-logic HORN)\
+     (assert (=> (not (is_int (to_real 3))) false))(check-sat)" env
+  unless source.startsWith "import Mathlib.Algebra.Order.Archimedean.Real.Basic" do
+    throw (IO.userError "mixed session lost its floor import")
+  unsafe enableInitializersExecution
+  let some emitted ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throw (IO.userError "mixed session did not elaborate")
+  let check : MetaM Unit := do
+    for (name, expected) in #[
+      (`Refutation_1, q(∀ (i : Int) (x : Real), Int.floor x = i → False)),
+      (`Refutation_2, q(∀ (_i : Int) (_x : Real), True → False)),
+      (`Refutation_3, q(∀ _i : Int, True → False)),
+      (`Problem_4, q(¬(3 : Real) = (Int.floor (3 : Real) : Real) → False))
+    ] do
+      let .defnInfo definition ← getConstInfo name | throwError "missing {name}"
+      checkEqual definition.value expected
+      checkStatementAxioms name
+  discard <| check.toIO { fileName := "mixed session", fileMap := default } { env := emitted }
+  for body in #["(push 1)(assert (is_int 0.0))(pop 1)", "(assert (is_int 0.0))(reset-assertions)"] do
+    let core ← Smt2Lean.Pipeline.translateSession s!"(set-logic ALL){body}(check-sat)" env
+    unless core.startsWith "import Init" do
+      throw (IO.userError "discarded conversions changed the output profile")
+  IO.println "Mixed arithmetic passed: casts, floor, integrality, SMT/CHC targets, and scoped snapshots"
+
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
   let path := "tests/translation/sorts/uninterpreted.smt2"
@@ -757,6 +823,7 @@ def main : IO Unit := do
   checkOperatorSemantics env
   checkDivision env
   checkReals env
+  checkConversions env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env

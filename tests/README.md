@@ -187,7 +187,28 @@ also check Real quantifiers (including an irrational-root formula), shadowing,
 five assumption/reset snapshots, and import selection across scopes.
 
 cvc5 can retain Int numerals in Real arithmetic; the translator reconstructs these
-at the expected Real type without contaminating the Int term cache. General
-Int/Real conversions, exponentiation, algebraic-number constants, and transcendental
-operators remain rejected. Earlier unsupported-Real cases now exercise unsupported
+at the expected Real type without contaminating the Int term cache. Int/Real
+conversions are covered below. Exponentiation, algebraic-number constants,
+and transcendental operators remain rejected. Earlier unsupported-Real cases exercise unsupported
 String sorts, while accepted Real cases have their own checks.
+
+## Mixed Int/Real arithmetic
+
+`translation/real/conversions.smt2` combines explicit and implicit casts, floor,
+integrality, aliases, functions, definitions, simultaneous let, shadowed binders,
+and shared zero interpretations. `translation/chc/conversions.smt2` uses these
+operations in guards and relation arguments across three clauses.
+
+The encoding follows [SMT-LIB Reals_Ints](https://smt-lib.org/theories-Reals_Ints.shtml):
+`to_real` is exact, `to_int` is `Int.floor`, and `is_int x` means
+`x = (Int.floor x : Real)`. In particular, `to_int(-1.7)` is `-2`.
+Floor and integrality outputs import `Mathlib.Algebra.Order.Archimedean.Real.Basic`;
+casts alone retain the smaller Real import. No dependency pins change.
+
+Tests compare complete SMT/CHC propositions, all eight mixed logic profiles, and
+four assumption/scope/reset snapshots. Eight completed CLI proofs cover twelve
+exact boundary cases, Int round trips, the integer-witness meaning of `is_int`,
+a nonintegral fraction, implicit casts, floor at an arbitrary zero-division value,
+a Horn model, and an impossible Horn model. Negative floors are checked using
+their defining inequalities. Invalid conversions and later unsupported commands
+must fail without producing partial output.

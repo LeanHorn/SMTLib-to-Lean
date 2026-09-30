@@ -1,6 +1,7 @@
 import Smt2Lean.Source
 import Smt2Lean.Helpers
 import Smt.Reconstruct.Int.Core
+import Mathlib.Algebra.Order.Floor.Defs
 
 namespace Smt2Lean.Emit
 
@@ -33,6 +34,8 @@ private def printExpr (value : Expr) : MetaM String := do
       |>.setBool `pp.proofs true
       |>.setBool `pp.funBinderTypes true
       |>.setBool `pp.numericTypes true
+      -- Floor is polymorphic: an untyped ↑i could re-elaborate at Int instead of Real.
+      |>.setBool `pp.coercions.types true
       |> (pp.maxSteps.set · 1000000)) do
     return (← ppExpr value).pretty
   if body.contains "⋯" then
@@ -99,7 +102,9 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[]) :
   let requests := String.join (skipped.toList.map fun command =>
     sourceComment "unexecuted request" command.source ++ s!"-- Not executed: {reprStr command.text}\n")
   let usesReal := goals.any fun goal => (goal.value.find? (·.isConstOf ``Real)).isSome
-  let imports := if usesReal then "import Mathlib.Data.Real.Basic" else "import Init"
+  let usesFloor := goals.any fun goal => (goal.value.find? (·.isConstOf ``Int.floor)).isSome
+  let imports := if usesFloor then "import Mathlib.Algebra.Order.Archimedean.Real.Basic"
+    else if usesReal then "import Mathlib.Data.Real.Basic" else "import Init"
   return imports ++ "\n\n-- Statements\n\n" ++ requests ++ helperDefinitions ++
     String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
     String.intercalate "\n" (entries.toList.map Prod.snd)

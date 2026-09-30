@@ -720,18 +720,29 @@ private def checkReals : IO Unit := do
       require (query.assertions.size == 1) "lost Real assertion"
     ).runIO
   for (body, ordinal, reason) in #[
-    ("(declare-const i Int)(assert (= (to_real i) 0.0))", 3, "TO_REAL"),
-    ("(declare-const i Int)(assert (< i 1.5))", 3, "mixed Int/Real"),
-    ("(declare-const i Int)(assert (= (+ i 1.5) 0.0))", 3, "mixed Int/Real"),
-    ("(declare-const i Int)(assert (= (/ i 2) 0.0))", 3, "mixed Int/Real"),
-    ("(assert (= (to_int 1.5) 1))", 2, "TO_INTEGER"),
-    ("(assert (is_int 1.5))", 2, "IS_INTEGER"),
     ("(assert (= (sin 1.0) 0.0))", 2, "SINE"),
     ("(define-fun bad () Real (^ 2.0 3))", 2, "POW"),
     ("(assert (= (/ true 1.0) 0.0))", 2, "arithmetic"),
     ("(assert (= (/ 1.0) 0.0))", 2, "invalid kind")
   ] do
     checkRejected "unsupported-real" s!"(set-logic ALL){body}(check-sat)" ordinal reason
+
+private def checkConversions : IO Unit := do
+  let path := "tests/translation/real/conversions.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 12 && query.definitions.size == 2)
+      "conversion fixture lost terms"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "mixed query invoked a solver"
+  ).runIO
+  for logic in #["QF_LIRA", "QF_NIRA", "QF_UFLIRA", "QF_UFNIRA", "LIRA", "NIRA", "UFLIRA", "UFNIRA"] do
+    let input := s!"(set-logic {logic})(declare-const i Int)(declare-const x Real)\
+      (assert (= (to_real i) x))(assert (= (to_int x) i))(assert (is_int x))(check-sat)"
+    (parseAndInspectQuery input fun query => do
+      require (query.logic == some logic && query.assertions.size == 3) "lost mixed logic or terms"
+    ).runIO
+  for body in #["(assert (= (to_real true) 0.0))", "(assert (= (to_real 1.5) 0.0))",
+      "(assert (= (to_int false) 0))", "(assert (is_int true))", "(assert (is_int 1.0 2.0))"] do
+    checkRejected "invalid-conversion" s!"(set-logic ALL){body}(check-sat)" 2 ""
 
 
 def main : IO Unit := do
@@ -743,6 +754,7 @@ def main : IO Unit := do
   checkSorts
   checkDivision
   checkReals
+  checkConversions
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

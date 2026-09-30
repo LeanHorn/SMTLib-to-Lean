@@ -44,12 +44,6 @@ def validateTerm (root : cvc5.Term)
       throw (.unsupported s!"expected Bool, Int, Real, or a declared uninterpreted sort, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
-    -- Lift signed numeral operands only; reject general Int/Real conversions.
-    if #[cvc5.Kind.ADD, .SUB, .MULT, .DIVISION, .LT, .LEQ, .GT, .GEQ].contains kind &&
-        (sort.isReal || children.any (·.getSort!.isReal)) then
-      for child in children do
-        if child.getSort!.isInteger && (integerLiteral? child).isNone then
-          throw (.unsupported "mixed Int/Real arithmetic is not supported yet")
     if kind == .FORALL || kind == .EXISTS then
       unless allowQuantifiers do
         throw (.unsupported "quantifiers require a quantified logic or ALL")
@@ -99,10 +93,11 @@ def validateTerm (root : cvc5.Term)
         unless bound.contains term do
           throw (.unsupported s!"unbound variable: {term}")
         pure children.isEmpty
-      | .NOT | .NEG | .ABS => pure (children.size == 1)
-      | .TO_REAL =>
-        unless children.size == 1 && (integerLiteral? children[0]!).isSome do
-          throw (.unsupported "unsupported operator: TO_REAL (only numeral coercions are supported)")
+      | .NOT | .NEG | .ABS | .TO_INTEGER | .IS_INTEGER => pure (children.size == 1)
+      | .TO_REAL => do
+        -- cvc5 also accepts Real here; SMT-LIB specifies an Int argument.
+        unless children.size == 1 && children[0]!.getSort!.isInteger do
+          throw (.unsupported "to_real expects one Int argument")
         pure true
       | .ITE => pure (children.size == 3)
       | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT | .INTS_DIVISION | .DIVISION =>
