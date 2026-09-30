@@ -294,8 +294,8 @@ private def checkDefinitions : IO Unit := do
     ("unused-power", "(define-fun bad () Int (^ 1 2))", 2, "POW"),
     ("unused-power-parameter", "(define-fun bad ((x Int)) Int (^ x 2))", 2, "POW"),
     ("unused-branch", "(define-fun bad () Int (ite true 0 (^ 1 0)))", 2, "POW"),
-    ("unused-real", "(define-fun bad () Real 0.0)", 2, "unsupported definition signature"),
-    ("unused-param", "(define-fun bad ((x Real)) Int 0)", 2, "unsupported definition signature"),
+    ("unused-string", "(define-fun bad () String \"\")", 2, "unsupported definition signature"),
+    ("unused-param", "(define-fun bad ((x String)) Int 0)", 2, "unsupported definition signature"),
     ("recursive", "(define-fun bad ((x Int)) Int (bad x))", 2, "not declared"),
     ("forward", "(define-fun a () Int b) (define-fun b () Int 0)", 2, "not declared"),
     ("recursive-command", "(define-fun-rec f ((x Int)) Int x)", 2, "unsupported command"),
@@ -308,15 +308,15 @@ private def checkDefinitions : IO Unit := do
     ("result", "(define-fun f () Int true)", 2, "invalid sort"),
     ("discarded-argument", "(define-fun f ((x Int)) Int 0) (assert (= (f (^ 1 0)) 0))", 3, "POW"),
     ("discarded-body", "(define-fun f ((x Int)) Int 0) (define-fun g () Int (f (^ 1 0)))", 3, "POW"),
-    ("alias-real", "(define-sort Bad () Real)", 2, "unsupported sort alias"),
+    ("alias-string", "(define-sort Bad () String)", 2, "unsupported sort alias"),
     ("alias-array", "(define-sort Bad (T) (Array T T))", 2, "unsupported sort alias"),
     ("alias-bv", "(define-sort Bad () (_ BitVec 8))", 2, "unsupported sort alias"),
     ("alias-unknown", "(define-sort Bad () Missing)", 2, "declared"),
     ("alias-recursive", "(define-sort Bad () Bad)", 2, "declared"),
     ("alias-forward", "(define-sort A () B) (define-sort B () Int)", 2, "declared"),
     ("alias-arity", "(define-sort Id (T) T) (declare-const x (Id Int Bool))", 3, "arity"),
-    ("alias-expansion", "(define-sort Id (T) T) (declare-const x (Id Real))", 3, "unsupported declaration sort"),
-    ("alias-binder", "(define-sort Id (T) T) (assert (forall ((x (Id Real))) true))", 3, "unsupported bound variable sort"),
+    ("alias-expansion", "(define-sort Id (T) T) (declare-const x (Id String))", 3, "unsupported declaration sort"),
+    ("alias-binder", "(define-sort Id (T) T) (assert (forall ((x (Id String))) true))", 3, "unsupported bound variable sort"),
     ("after-check-definition", "(check-sat) (define-fun f () Int 0)", 3, "after check-sat"),
     ("after-check-alias", "(check-sat) (define-sort I () Int)", 3, "after check-sat")
   ]
@@ -357,7 +357,7 @@ private def checkNamedAssertions : IO Unit := do
     ("open", "(assert (forall ((x Int)) (! (> x 0) :named bad)))", 2, "Cannot name a term in a binder"),
     ("operator", "(assert (! (= (^ 1 0) 0) :named bad))", 2, "POW"),
     ("discarded", "(assert (let ((ignored (! (^ 1 0) :named bad))) true))", 2, "POW"),
-    ("discarded-sort", "(assert (let ((ignored (! 1.0 :named bad))) true))", 2, "expected Bool, Int, or a declared uninterpreted sort"),
+    ("discarded-sort", "(assert (let ((ignored (! \"a\" :named bad))) true))", 2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
     ("unknown-attribute", "(assert (! true :unknown (:named fake)))", 2, "unsupported annotation"),
     ("after-check", "(check-sat) (assert (! true :named later))", 3, "after check-sat")
   ] do
@@ -370,15 +370,15 @@ private def checkRejectedQueries : IO Unit := do
       2, "unexpected EOF"),
     ("invalid-logic", "(set-logic NOT_A_LOGIC)\n(check-sat)",
       1, "cannot parse logic string"),
-    ("real", "(set-logic ALL)\n(declare-const x Real)\n(check-sat)",
+    ("string", "(set-logic ALL)\n(declare-const x String)\n(check-sat)",
       2, "unsupported declaration sort"),
     ("array-argument", "(set-logic ALL)\n(declare-fun f ((Array Int Int)) Int)\n(check-sat)",
       2, "unsupported declaration sort"),
     ("bitvector-result", "(set-logic ALL)\n(declare-fun f (Bool) (_ BitVec 8))\n(check-sat)",
       2, "unsupported declaration sort"),
-    ("real-argument", "(set-logic ALL)\n(declare-fun f (Real) Int)\n(check-sat)",
+    ("string-argument", "(set-logic ALL)\n(declare-fun f (String) Int)\n(check-sat)",
       2, "unsupported declaration sort"),
-    ("real-result", "(set-logic ALL)\n(declare-fun f (Int) Real)\n(check-sat)",
+    ("string-result", "(set-logic ALL)\n(declare-fun f (Int) String)\n(check-sat)",
       2, "unsupported declaration sort"),
     ("function-arity", "(set-logic QF_UFLIA)\n(declare-fun f (Int Int) Int)\n(assert (= (f 1) 0))\n(check-sat)",
       3, "partially apply"),
@@ -388,7 +388,7 @@ private def checkRejectedQueries : IO Unit := do
       3, "type"),
     ("higher-order-logic", "(set-logic HO_ALL)\n(check-sat)",
       1, "unsupported logic"),
-    ("bound-real", "(set-logic ALL)\n(assert (forall ((x Real)) true))\n(check-sat)",
+    ("bound-string", "(set-logic ALL)\n(assert (forall ((x String)) true))\n(check-sat)",
       2, "unsupported bound variable sort"),
     ("quantifier-in-qf", "(set-logic QF_LIA)\n(assert (forall ((x Int)) (> x 0)))\n(check-sat)",
       2, "quantifiers require"),
@@ -416,28 +416,28 @@ private def checkRejectedQueries : IO Unit := do
       2, "condition"),
     ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
       2, "type"),
-    ("ite-real", "(set-logic ALL)\n(assert (= (ite true 1.0 2.0) 1.0))\n(check-sat)",
-      2, "expected Bool, Int, or a declared uninterpreted sort"),
+    ("ite-string", "(set-logic ALL)\n(assert (= (ite true \"a\" \"b\") \"a\"))\n(check-sat)",
+      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
     ("ite-bv", "(set-logic ALL)\n(assert (= (ite true #b00 #b01) #b00))\n(check-sat)",
-      2, "expected Bool, Int, or a declared uninterpreted sort"),
+      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
     ("push", "(set-logic QF_UF)\n(push 1)\n(check-sat)",
       2, "unsupported command: push"),
     ("pop", "(set-logic QF_UF)\n(pop 1)\n(check-sat)",
       2, "unsupported command: pop"),
     ("horn", "(set-logic HORN)\n(assert true)\n(check-sat)",
       1, "unsupported logic"),
-    ("logic", "(set-logic QF_LRA)\n(assert true)\n(check-sat)",
+    ("logic", "(set-logic QF_BV)\n(assert true)\n(check-sat)",
       1, "unsupported logic"),
     ("xor-sort", "(set-logic ALL)\n(assert (xor true 1))\n(check-sat)",
       2, "Boolean subexpression"),
     ("distinct-mixed", "(set-logic ALL)\n(assert (distinct true 1))\n(check-sat)",
       2, "type"),
-    ("distinct-real", "(set-logic ALL)\n(assert (distinct 1.0 2.0))\n(check-sat)",
-      2, "expected Bool, Int, or a declared uninterpreted sort"),
+    ("distinct-string", "(set-logic ALL)\n(assert (distinct \"a\" \"b\"))\n(check-sat)",
+      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
     ("distinct-bv", "(set-logic ALL)\n(assert (distinct #b00 #b01))\n(check-sat)",
-      2, "expected Bool, Int, or a declared uninterpreted sort"),
-    ("real-equality", "(set-logic ALL)\n(assert (= 1.0 2.0))\n(check-sat)",
-      2, "expected Bool, Int, or a declared uninterpreted sort"),
+      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
+    ("string-equality", "(set-logic ALL)\n(assert (= \"a\" \"b\"))\n(check-sat)",
+      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
     ("assuming", "(set-logic QF_UF)\n(check-sat-assuming (true))",
       2, "expected a user-declared"),
     ("missing-check", "(set-logic QF_UF)\n(assert true)",
@@ -477,9 +477,6 @@ private def checkRejectedQueries : IO Unit := do
     checkRejected s!"reject-{kind}"
       s!"(set-logic ALL)\n(declare-const x Int)\n(assert (= (+ 1 {term}) 0))\n(check-sat)"
       3 s!"unsupported operator: {kind}"
-  checkRejected "reject-real-comparison"
-    "(set-logic ALL)\n(assert (< 1.0 2.0))\n(check-sat)"
-    2 "expected Bool, Int, or a declared uninterpreted sort"
 
 private def checkQuantifierHints : IO Unit := do
   let path := "tests/translation/quantifiers/hints.smt2"
@@ -512,7 +509,7 @@ private def checkQuantifierHints : IO Unit := do
   for (input, ordinal, reason) in #[
     ("(set-logic QF_LIA)\n(assert (forall ((x Int)) (! (> x 0) :qid q)))\n(check-sat)",
       2, "quantifiers require"),
-    ("(set-logic ALL)\n(assert (forall ((x Real)) (! true :qid q)))\n(check-sat)",
+    ("(set-logic ALL)\n(assert (forall ((x String)) (! true :qid q)))\n(check-sat)",
       2, "unsupported bound variable sort"),
     ("(set-logic ALL)\n(assert (! true :qid q))\n(check-sat)", 2, "quantified formula bodies"),
     ("(set-logic ALL)\n(assert (forall ((x Int)) (! true :qid q)))\n(assert q)\n(check-sat)",
@@ -680,7 +677,7 @@ private def checkSorts : IO Unit := do
     ("sort-mismatch", "(declare-sort S 0)(declare-sort T 0)(declare-const s S)(declare-const t T)(assert (= s t))",
       6, "type"),
     ("sort-after-check", "(check-sat)(declare-sort S 0)", 3, "after check-sat"),
-    ("sort-alias-hidden-real", "(declare-sort S 0)(define-sort Bad (T) Real)", 3, "unsupported sort alias")
+    ("sort-alias-hidden-string", "(declare-sort S 0)(define-sort Bad (T) String)", 3, "unsupported sort alias")
   ] do
     checkRejected name ("(set-logic ALL)" ++ body ++ "(check-sat)") ordinal reason
   for body in #[
@@ -706,6 +703,37 @@ private def checkDivision : IO Unit := do
     | .ok _ => throw (IO.userError s!"accepted ill-typed division: {term}")
     | .error _ => pure ()
 
+private def checkReals : IO Unit := do
+  checkAccepted "closed-real-comparison"
+    "(set-logic ALL)(assert (< 1.0 2.0))(check-sat)" #[] 1 #["set-logic", "assert"]
+  let path := "tests/translation/real/arithmetic.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 12 && query.definitions.size == 2) "Real fixture lost terms"
+    let some declaration := query.declarations[0]? | throw (.error "missing Real declaration")
+    require declaration.term.getSort!.isReal "Real alias lost its sort"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "Real query invoked a solver"
+  ).runIO
+  for logic in #["QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA"] do
+    let input := s!"(set-logic {logic})(declare-const x Real)(assert (= (+ x 1) 2))(check-sat)"
+    (parseAndInspectQuery input fun query => do
+      require (query.logic == some logic) "lost Real logic"
+      require (query.assertions.size == 1) "lost Real assertion"
+    ).runIO
+  for (body, ordinal, reason) in #[
+    ("(declare-const i Int)(assert (= (to_real i) 0.0))", 3, "TO_REAL"),
+    ("(declare-const i Int)(assert (< i 1.5))", 3, "mixed Int/Real"),
+    ("(declare-const i Int)(assert (= (+ i 1.5) 0.0))", 3, "mixed Int/Real"),
+    ("(declare-const i Int)(assert (= (/ i 2) 0.0))", 3, "mixed Int/Real"),
+    ("(assert (= (to_int 1.5) 1))", 2, "TO_INTEGER"),
+    ("(assert (is_int 1.5))", 2, "IS_INTEGER"),
+    ("(assert (= (sin 1.0) 0.0))", 2, "SINE"),
+    ("(define-fun bad () Real (^ 2.0 3))", 2, "POW"),
+    ("(assert (= (/ true 1.0) 0.0))", 2, "arithmetic"),
+    ("(assert (= (/ 1.0) 0.0))", 2, "invalid kind")
+  ] do
+    checkRejected "unsupported-real" s!"(set-logic ALL){body}(check-sat)" ordinal reason
+
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
@@ -714,10 +742,11 @@ def main : IO Unit := do
   checkResets
   checkSorts
   checkDivision
+  checkReals
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions
   checkQuantifierHints
   checkBoundScopes
   checkSourceLocations
-  IO.println "Parser passed: Bool/Int/uninterpreted-sort queries, binding identity/scope, and rejection diagnostics"
+  IO.println "Parser passed: Bool/Int/Real/uninterpreted-sort queries, binding identity/scope, and rejection diagnostics"

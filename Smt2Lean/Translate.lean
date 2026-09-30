@@ -48,8 +48,8 @@ private def reconstructOperators : Smt.TermReconstructor := fun term => do
 private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
   let kind ← ofExcept term.getKind
   unless kind == .FORALL || kind == .EXISTS do return none
-  let variables := term[0]!.getChildren
-  let declarations ← variables.mapM fun (binder : cvc5.Term) => do
+  let binders := term[0]!.getChildren
+  let declarations ← binders.mapM fun (binder : cvc5.Term) => do
     let type ← Smt.Reconstruct.reconstructSort (← ofExcept binder.getSort)
     let name ← mkFreshUserName (Name.mkSimple (← ofExcept binder.getSymbol))
     return (name, type)
@@ -58,7 +58,7 @@ private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
     binder.getKind! == .VARIABLE || binder.getKind! == .CONSTANT
   withLocalDeclsDND declarations fun parameters => Smt.Reconstruct.withNewTermCache do
     let mut cache := bindings
-    for binder in variables, parameter in parameters do
+    for binder in binders, parameter in parameters do
       cache := cache.insert binder parameter
     modify fun state => { state with termCache := cache }
     let body ← Smt.Reconstruct.reconstructTerm term[1]!
@@ -144,10 +144,10 @@ private def reconstructClause (context : Smt.Reconstruct.Context) (sortCache : S
     let (type, _) ← (Smt.Reconstruct.reconstructSort binder.sort).run {} { sortCache }
     let name ← mkFreshUserName (Name.mkSimple (← ofExcept binder.term.getSymbol))
     return (name, type)
-  withLocalDeclsDND declarations fun variables => do
+  withLocalDeclsDND declarations fun locals => do
     -- Start afresh for each clause: cvc5 can reuse a variable across assertions.
     let mut termCache := relations
-    for binder in clause.binders, parameter in variables do
+    for binder in clause.binders, parameter in locals do
       termCache := termCache.insert binder.term parameter
     let reconstruction : Smt.ReconstructM Expr := do
       let head ← match clause.head with
@@ -157,7 +157,7 @@ private def reconstructClause (context : Smt.Reconstruct.Context) (sortCache : S
         | .relation atom => reconstructAtom relations atom
         | .guard term => Smt.Reconstruct.reconstructTerm term
       let body ← premises.foldrM (fun premise body => mkArrow premise body) head
-      mkForallFVars variables body (usedOnly := false)
+      mkForallFVars locals body (usedOnly := false)
     let (value, state) ← withTermReconstruction <|
       Elab.Tactic.classical <| reconstruction.run context { sortCache, termCache }
     checkPropositions #[value] state

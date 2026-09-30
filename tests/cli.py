@@ -45,9 +45,13 @@ def check_lean(lean, source, *, complete=False):
     args = [str(lean)]
     if complete:
         args.append("-DwarningAsError=true")
+    # Core-only files must remain independent of all project packages.
+    search_path = str(source.parent)
+    if any(line.startswith("import Mathlib.") for line in source.read_text().splitlines()):
+        search_path += os.pathsep + os.environ["LEAN_PATH"]
     result = subprocess.run(
         [*args, source.name], cwd=source.parent,
-        env=dict(os.environ, LEAN_PATH=str(source.parent)),
+        env=dict(os.environ, LEAN_PATH=search_path),
         capture_output=True, text=True,
     )
     assert result.returncode == 0, (source, result.stdout, result.stderr)
@@ -217,6 +221,93 @@ def check_integer_division(lean, tmp):
     print("Integer division passed: six completed semantic proofs; all four original CHCs elaborate with 28 clauses")
 
 
+def check_reals(lean, tmp):
+    """Exact Real arithmetic and model choices, compiled using the pinned Mathlib profile."""
+    for fixture, goal in [(ROOT / "tests/translation/real/arithmetic.smt2", "Refutation"),
+                          (CHC / "real.smt2", "Problem")]:
+        output = tmp / f"real-{goal}"
+        run(fixture, "--out", output)
+        generated = check_generated(lean, output, goal=goal)
+        assert generated.startswith("import Mathlib.Data.Real.Basic\n")
+        assert generated.count("noncomputable def SMT.realDiv ") == 1
+    exact_cases = [
+        "(= (+ 0.1 0.2) 0.3)",
+        "(= (- 1.5 0.25 0.125) 1.125)",
+        "(= (* (- 0.5) 2.0 3.0) (- 3.0))",
+        "(= (/ 12.0 2.0 3.0) 2.0)",
+        "(= (/ (- 1) 3) (- (/ 1.0 3.0)))",
+        "(= (/ 3.0 (- 0.5)) (- 6.0))",
+        "(= (abs (- 0.125)) 0.125)",
+        "(and (< (- 2) (- 1) 0.0) (<= 0 0.1 0.1) (> 2 1 0.5) (>= 1.0 1 0))",
+        "(distinct 0.1 0.2 0.3)",
+        "(= (ite (< 0.1 0.2) 0.3 0.4) 0.3)",
+        "(= (/ 2.5 0.5) 5.0)",
+        "(= 340282366920938463463374607431768211457.00000000000000000001 "
+        "(/ 34028236692093846346337460743176821145700000000000000000001.0 100000000000000000000.0))",
+        "(= 0.00000000000000000001 (/ 1.0 100000000000000000000.0))",
+    ]
+    cases = [
+        ("exact", "ALL", "(assert (not (and " + " ".join(exact_cases) + ")))", "Refutation",
+         "  intro h\n  apply h\n  norm_num [SMT.distinct3]\n"),
+        ("composite-divisor", "ALL", "(assert (distinct (/ 1.0 (/ 1.0 2.0)) 2.0))", "Refutation",
+         "  intro d h\n  apply h\n  norm_num [SMT.realDiv]\n"),
+        ("zero-choices", "ALL", "(assert (= (/ 0.0 0.0) 7.0))(assert (= (/ 1.0 0.0) 9.0))", "¬ Refutation",
+         "  intro h\n  apply h (fun x => if x = 0 then 7 else 9)\n  norm_num [SMT.realDiv]\n"),
+        ("congruence", "ALL", "(declare-const x Real)(declare-const y Real)(assert (= x y))"
+         "(assert (distinct (/ x 0.0) (/ y 0.0)))", "Refutation",
+         "  intro d x y h\n  exact h.2 (congrArg (fun z => SMT.realDiv d z 0) h.1)\n"),
+        ("quantifier-sharing", "ALL", "(assert (forall ((x Real)) (= (/ x 0.0) x)))"
+         "(assert (distinct (/ 5.0 0.0) 5.0))", "Refutation",
+         "  intro d h\n  exact h.2 (h.1 5)\n"),
+        ("independent-zero-cases", "ALL", "(assert (= (div 0 0) 1))(assert (= (mod 0 0) 2))"
+         "(assert (= (/ 0.0 0.0) 3.0))", "¬ Refutation",
+         "  intro h\n  apply h (fun _ => 1) (fun _ => 2) (fun _ => 3)\n"
+         "  norm_num [SMT.intDiv, SMT.intMod, SMT.realDiv]\n"),
+        ("horn-linear", "HORN", "(declare-fun P (Real) Bool)(assert (P 0.0))"
+         "(assert (forall ((x Real)) (=> (P x) (P (+ x 0.5)))))"
+         "(assert (forall ((x Real)) (=> (and (P x) (< x 0.0)) false)))", "Problem",
+         "  refine ⟨(fun x : Real => 0 ≤ x), ?_, ?_, ?_⟩\n  · exact le_rfl\n"
+         "  · intro x hx; exact add_nonneg hx (by norm_num)\n"
+         "  · intro x hx hlt; exact (not_lt_of_ge hx) hlt\n"),
+        ("horn-witness", "HORN", "(declare-fun P (Real) Bool)(assert (P (/ 0.0 0.0)))"
+         "(assert (forall ((x Real)) (=> (and (P x) (distinct x 7.0)) false)))", "Problem",
+         "  refine ⟨(fun _ => 7), (fun x => x = 7), ?_, ?_⟩\n"
+         "  · simp [SMT.realDiv]\n  · intro x equal different; exact different equal\n"),
+        ("horn-sharing", "HORN", "(assert (=> (distinct (/ 0.0 0.0) 7.0) false))"
+         "(assert (=> (= (/ 0.0 0.0) 7.0) false))", "¬ Problem",
+         "  rintro ⟨d, first, second⟩\n  by_cases h : SMT.realDiv d 0 0 = 7\n"
+         "  · exact second h\n  · exact first h\n"),
+    ]
+    for name, logic, body, target, proof in cases:
+        source, output = tmp / f"real-{name}.smt2", tmp / f"real-{name}"
+        source.write_text(f"(set-logic {logic}){body}(check-sat)")
+        run(source, "--out", output)
+        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        if name in ("exact", "horn-linear"):
+            assert "realDivZero" not in generated
+        completed = output / "Query.lean"
+        completed.write_text("import Mathlib.Tactic.NormNum\n" + generated.split("-- Proofs\n", 1)[0]
+                             + f"theorem checked : {target} := by\n" + proof)
+        check_lean(lean, completed, complete=True)
+    # Unused live declarations still affect the quantified domain and import profile.
+    for label, body, profile in [
+        ("unused", "(declare-const x Real)", "Mathlib.Data.Real.Basic"),
+        ("popped", "(push 1)(declare-const x Real)(pop 1)", "Init"),
+        ("reset", "(declare-const x Real)(reset)(set-logic ALL)", "Init"),
+    ]:
+        source, output = tmp / f"real-{label}.smt2", tmp / f"real-{label}"
+        source.write_text(f"(set-logic ALL){body}(check-sat)")
+        run(source, "--out", output)
+        assert check_generated(lean, output).startswith(f"import {profile}\n")
+    source = tmp / "later-real-error.smt2"
+    source.write_text("(set-logic ALL)(declare-const x Real)(assert (= (/ x 0.0) 1.0))"
+                      "(check-sat)(assert (= (to_int x) 0))(check-sat)")
+    output = tmp / "later-real-error"
+    assert "TO_INTEGER" in run(source, "--out", output, code=1).stderr
+    assert not output.exists()
+    print("Real semantics passed: 13 exact arithmetic cases, nine completed proofs, SMT/CHC models, and import/scope isolation")
+
+
 def main():
     prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
     lean = Path(prefix) / "bin/lean"
@@ -249,6 +340,7 @@ def main():
 
         check_uninterpreted_sorts(lean, tmp)
         check_integer_division(lean, tmp)
+        check_reals(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
             for name, body, count in [
@@ -521,14 +613,14 @@ def main():
         assert "check-sat-assuming," in text and "assumption 2" in text
 
         invalid = [
-            "(set-logic QF_LRA)\n(check-sat)",
+            "(set-logic QF_BV)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(pop 1)",
             "(set-logic QF_UF)\n(check-sat)\n(assert",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (^ x 0) 0))\n(check-sat)",
-            "(set-logic ALL)\n(declare-fun P (Real) Bool)\n(check-sat)",
+            "(set-logic ALL)\n(declare-fun P (String) Bool)\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int Int) Int)\n(assert (= (f 1) 0))\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int) Int)\n(assert (= (f true) 0))\n(check-sat)",
-            "(set-logic ALL)\n(assert (forall ((x Real)) true))\n(check-sat)",
+            "(set-logic ALL)\n(assert (forall ((x String)) true))\n(check-sat)",
             "(set-logic QF_LIA)\n(assert (forall ((x Int)) (> x 0)))\n(check-sat)",
             "(set-logic ALL)\n(assert (exists ((p Bool)) (= (ite p 1 (^ 1 0)) 1)))\n(check-sat)",
             "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
@@ -572,7 +664,7 @@ def main():
              '2:3: command 2 (:named "bad body"):', "POW"),
             ("unused-named-source", '(set-logic ALL)\n  (assert (let ((ignored (! (^ 1 0) :named |unused body|))) true))\n(check-sat)',
              '2:3: command 2 (:named "unused body"):', "POW"),
-            ("alias-source", "(set-logic ALL)\n  (define-sort Bad () Real)\n(check-sat)",
+            ("alias-source", "(set-logic ALL)\n  (define-sort Bad () String)\n(check-sat)",
              "2:3: command 2:", "unsupported sort alias"),
             ("bad-string", '(set-logic QF_UF)\n(set-info :source "unfinished',
              "2:30: command 2:", "unterminated string"),

@@ -7,7 +7,8 @@ private def usage : String :=
   "Usage: smt2lean <input.smt2> --out <new-directory>\n" ++
   "       smt2lean --help\n\n" ++
   "Translate every check-sat/check-sat-assuming in a supported SMT-LIB session into Query.lean.\n" ++
-  "Supports Bool, Int, and nonempty uninterpreted sorts (declare-sort of arity 0).\n" ++
+  "Supports Bool, Int, Real, and nonempty uninterpreted sorts (declare-sort of arity 0).\n" ++
+  "Real output imports the pinned Mathlib; other output uses Lean core.\n" ++
   "Supports push/pop, resets, and global declarations; statements precede proof templates.\n" ++
   "HORN logic generates Problem (model existence); other supported logics generate Refutation.\n" ++
   "Permitted result requests are recorded as unexecuted comments; no solver is run.\n" ++

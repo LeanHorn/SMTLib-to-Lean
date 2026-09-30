@@ -5,6 +5,7 @@ open Lean Meta Qq Classical
 open Smt2Lean.Backend Smt2Lean.Translate Smt2Lean.Emit
 
 local notation "smtDiv" => (fun (zero : Int → Int) (x y : Int) => ite (y = 0) (zero x) (x / y))
+local notation "smtRealDiv" => (fun (zero : Real → Real) (x y : Real) => ite (y = 0) (zero x) (x / y))
 local notation "smtMod" => (fun (zero : Int → Int) (x y : Int) => ite (y = 0) (zero x) (x % y))
 
 local notation "exclusive" => (fun p q : Prop => (p ∧ ¬q) ∨ (¬p ∧ q))
@@ -84,7 +85,8 @@ private def checkEmission (value : Expr) (kind : GoalKind := .refutation)
       throwError "generated output lost assertion labels"
   let [statements, proofs] := source.splitOn "-- Proofs\n"
     | throwError "expected one Statements section followed by Proofs"
-  unless statements.startsWith "import Init\n\n-- Statements\n\n" &&
+  unless (statements.startsWith "import Init\n\n-- Statements\n\n" ||
+      statements.startsWith "import Mathlib.Data.Real.Basic\n\n-- Statements\n\n") &&
       proofs.contains s!"theorem {theoremName} : {definitionName} := by\n  sorry\n" do
     throwError "wrong statement/proof layout"
   unsafe enableInitializersExecution
@@ -538,6 +540,77 @@ private def checkDivision (env : Environment) : IO Unit := do
         smtDiv d x 0 ≠ smtDiv d (x + 0) 0 → False))
   IO.println s!"Division passed: {cases.size} exact signed/large arithmetic cases; shared zero interpretations and SMT/CHC closure"
 
+/-- Real carriers, exact rationals, and zero interpretations survive emission and scopes. -/
+private def checkReals (env : Environment) : IO Unit := do
+  let path := "tests/translation/real/arithmetic.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ A : Type, Nonempty A → ∀ (d : Real → Real) (x y : Real) (b : Prop) (i : Int)
+        (a : A) (f : Real → Real) (g : Real → Prop → Int → A → Real) (named : Real → Real),
+      ((1 / 10 : Real) + 1 / 5 = 3 / 10 ∧
+        ((x ≤ y ∧ y ≤ 3) ∧ (x < y ∧ y < 4) ∧ (y ≥ x ∧ x ≥ 0) ∧ y > x ∧ x > -1) ∧
+        (x ≠ y ∧ x ≠ 1 / 3 ∧ y ≠ 1 / 3) ∧ (if b then x else y) = f (1 / 3) ∧
+        x + 1 / 2 - x = 1 / 2 ∧ (∀ x : Real, ∃ y : Real, smtRealDiv d x 0 = smtRealDiv d y 0) ∧
+        smtRealDiv d x y = f (x + 1 / 10) ∧ smtRealDiv d x 0 = smtRealDiv d (x + 0) (-0) ∧
+        named x = smtRealDiv d x 0 ∧ g x b i a = f x ∧ (x + 1 = x + 1 ∧ i + 1 = i) ∧
+        (∃ root : Real, root * root = 2)) → False)
+  for logic in #["QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA", "ALL"] do
+    runQuery env logic s!"(set-logic {logic})(declare-const x Real)(assert (< 1 x))(assert (= (/ (- 1) 3) x))(check-sat)"
+      fun query => checkRefutation query (usesClassical := true)
+        q(∀ x : Real, (1 < x ∧ -1 / 3 = x) → False)
+  runQuery env "Real type-name shadowing"
+    "(set-logic ALL)(assert (forall ((Real Real) (Int Int)) (and (= (+ Real 1) 2.0) (= Int 0))))(check-sat)"
+    fun query => checkRefutation query (usesClassical := true)
+      q((∀ (x : Real) (i : Int), x + 1 = 2 ∧ i = 0) → False)
+  runQuery env "Real definition shadowing"
+    "(set-logic ALL)(declare-const x Real)(define-fun offset ((y Real)) Real (+ x y))(assert (forall ((x Real)) (= (offset x) x)))(check-sat)"
+    fun query => checkRefutation query (usesClassical := true)
+      q(∀ x : Real, (∀ y : Real, x + y = y) → False)
+  runQuery env "independent integer and Real zero cases"
+    "(set-logic ALL)(assert (and (= (div 1 0) 7) (= (mod 1 0) 8) (= (/ 1 0) 9.0)))(check-sat)"
+    fun query => checkRefutation query (usesClassical := true)
+      q(∀ (d m : Int → Int) (r : Real → Real),
+        (smtDiv d 1 0 = 7 ∧ smtMod m 1 0 = 8 ∧ smtRealDiv r 1 0 = 9) → False)
+  let path := "tests/translation/chc/real.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem (usesClassical := true) q(∃ A : Type, Nonempty A ∧ ∃ (d : Real → Real)
+      (p : A → Real → Prop) (r : A → Real → Prop → Int → Prop),
+      (∀ (a : A) (x : Real), x = 1 / 10 → p a x) ∧
+      (∀ (a : A) (x y : Real) (b : Prop) (i : Int), p a x → x < y → y / 2 = x →
+        smtRealDiv d x y = 1 / 2 → r a (if b then smtRealDiv d x 0 else x + 1 / 10) b i) ∧
+      (∀ (a : A) (x : Real) (b : Prop) (i : Int), r a (smtRealDiv d x 0) b i →
+        smtRealDiv d x 0 ≠ smtRealDiv d (x + 0) 0 → False))
+  let source ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(check-sat)(push 1)(declare-const x Real)\
+     (define-fun p () Bool (= (/ x 0.0) 7.0))(check-sat-assuming (p))(check-sat)\
+     (pop 1)(check-sat)(reset)(set-logic HORN)\
+     (assert (=> (= (/ 1.0 0.0) 7.0) false))(check-sat)" env
+  unless source.startsWith "import Mathlib.Data.Real.Basic" &&
+      (source.splitOn "noncomputable def SMT.realDiv ").length == 2 do
+    throw (IO.userError "Real session lost its import or duplicated its helper")
+  unsafe enableInitializersExecution
+  let some emitted ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throw (IO.userError "Real session did not elaborate")
+  let check : MetaM Unit := do
+    for (name, expected) in #[
+      (`Refutation_1, q(True → False)),
+      (`Refutation_2, q(∀ (d : Real → Real) (x : Real), smtRealDiv d x 0 = 7 → False)),
+      (`Refutation_3, q(∀ _x : Real, True → False)),
+      (`Refutation_4, q(True → False)),
+      (`Problem_5, q(∃ d : Real → Real, smtRealDiv d 1 0 = 7 → False))
+    ] do
+      let .defnInfo definition ← getConstInfo name | throwError "missing {name}"
+      checkEqual (← deltaExpand definition.value Smt2Lean.Helpers.isHelper) expected
+      checkStatementAxioms name
+  discard <| check.toIO { fileName := "Real session", fileMap := default } { env := emitted }
+  let core ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(push 1)(declare-const unused Real)(pop 1)(check-sat)" env
+  unless core.startsWith "import Init" do
+    throw (IO.userError "a popped Real declaration changed the output profile")
+  IO.println "Real translation passed: exact arithmetic, SMT/CHC targets, numeral coercions, and five scoped snapshots"
+
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
   let path := "tests/translation/sorts/uninterpreted.smt2"
@@ -683,6 +756,7 @@ def main : IO Unit := do
   checkAxiomRejection
   checkOperatorSemantics env
   checkDivision env
+  checkReals env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env

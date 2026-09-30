@@ -50,7 +50,8 @@ private def renderHelper (name : Name) : MetaM String := do
       return if localDecl.binderInfo.isImplicit then "{" ++ binder ++ "}" else "(" ++ binder ++ ")"
     let universes := if definition.levelParams.isEmpty then "" else
       ".{" ++ String.intercalate ", " (definition.levelParams.map toString) ++ "}"
-    return s!"def {name}{universes} " ++ String.intercalate " " binders.toList ++
+    let keyword := if name == `SMT.realDiv then "noncomputable def" else "def"
+    return s!"{keyword} {name}{universes} " ++ String.intercalate " " binders.toList ++
       s!" : {← printExpr (← inferType body)} :=\n  " ++ (← printExpr body).replace "\n" "\n  " ++ "\n\n"
 
 private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × String) := do
@@ -97,7 +98,9 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[]) :
     renderGoal goal (if goals.size == 1 then none else some (i + 1))
   let requests := String.join (skipped.toList.map fun command =>
     sourceComment "unexecuted request" command.source ++ s!"-- Not executed: {reprStr command.text}\n")
-  return "import Init\n\n-- Statements\n\n" ++ requests ++ helperDefinitions ++
+  let usesReal := goals.any fun goal => (goal.value.find? (·.isConstOf ``Real)).isSome
+  let imports := if usesReal then "import Mathlib.Data.Real.Basic" else "import Init"
+  return imports ++ "\n\n-- Statements\n\n" ++ requests ++ helperDefinitions ++
     String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
     String.intercalate "\n" (entries.toList.map Prod.snd)
 

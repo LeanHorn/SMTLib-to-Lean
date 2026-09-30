@@ -3,9 +3,20 @@ import Smt2Lean.Backend.Types
 namespace Smt2Lean.Backend
 
 def isScalarSort (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : Bool :=
-  sort.isBoolean || sort.isInteger || sorts.any (·.sort == sort)
+  sort.isBoolean || sort.isInteger || sort.isReal || sorts.any (·.sort == sort)
 
-/-- First-order functions over Bool, Int, and declared uninterpreted sorts. -/
+/-- cvc5 may retain signed integer numerals inside Real arithmetic. -/
+def integerLiteral? (term : cvc5.Term) : Option Int := Id.run do
+  let mut value := term
+  let mut negative := false
+  while value.getKind! == .NEG do
+    negative := !negative
+    value := value[0]!
+  if !value.getSort!.isInteger || !value.isIntegerValue then return none
+  let result := value.getIntegerValue!
+  return some (if negative then -result else result)
+
+/-- First-order functions over Bool, Int, Real, and declared uninterpreted sorts. -/
 def isSupportedFunction (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : cvc5.Env Bool := do
   unless sort.isFunction do return false
   let domains ← ofExcept sort.getFunctionDomainSorts
@@ -19,7 +30,7 @@ def validateTerm (root : cvc5.Term)
   for binder in bound do
     unless (← ofExcept binder.getKind) == .VARIABLE &&
         isScalarSort (← ofExcept binder.getSort) sorts do
-      throw (.unsupported "definition parameters must have Bool, Int, or declared uninterpreted sorts")
+      throw (.unsupported "definition parameters must have Bool, Int, Real, or declared uninterpreted sorts")
   let mut pending : Array (cvc5.Term × Array cvc5.Term) := #[(root, bound)]
   let mut visited : Std.HashSet (cvc5.Term × Array cvc5.Term) := {}
   while !pending.isEmpty do
@@ -30,9 +41,15 @@ def validateTerm (root : cvc5.Term)
     visited := visited.insert (term, bound)
     let sort ← ofExcept term.getSort
     unless isScalarSort sort sorts do
-      throw (.unsupported s!"expected Bool, Int, or a declared uninterpreted sort, got {sort}")
+      throw (.unsupported s!"expected Bool, Int, Real, or a declared uninterpreted sort, got {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    -- Lift signed numeral operands only; reject general Int/Real conversions.
+    if #[cvc5.Kind.ADD, .SUB, .MULT, .DIVISION, .LT, .LEQ, .GT, .GEQ].contains kind &&
+        (sort.isReal || children.any (·.getSort!.isReal)) then
+      for child in children do
+        if child.getSort!.isInteger && (integerLiteral? child).isNone then
+          throw (.unsupported "mixed Int/Real arithmetic is not supported yet")
     if kind == .FORALL || kind == .EXISTS then
       unless allowQuantifiers do
         throw (.unsupported "quantifiers require a quantified logic or ALL")
@@ -48,7 +65,7 @@ def validateTerm (root : cvc5.Term)
           throw (.unsupported "expected a bound variable")
         let variableSort ← ofExcept binder.getSort
         unless isScalarSort variableSort sorts do
-          throw (.unsupported s!"unsupported bound variable sort: {variableSort}; expected Bool, Int, or a declared uninterpreted sort")
+          throw (.unsupported s!"unsupported bound variable sort: {variableSort}; expected Bool, Int, Real, or a declared uninterpreted sort")
         scope := scope.push binder
       pending := pending.push (children[1]!, scope)
       continue
@@ -73,7 +90,7 @@ def validateTerm (root : cvc5.Term)
       pending := pending ++ arguments.map (·, bound)
       continue
     let validArity ← match kind with
-      | .CONST_BOOLEAN | .CONST_INTEGER => pure children.isEmpty
+      | .CONST_BOOLEAN | .CONST_INTEGER | .CONST_RATIONAL => pure children.isEmpty
       | .CONSTANT => do
         unless declarations.any (·.term == term) do
           throw (.unsupported s!"undeclared term: {term}")
@@ -83,8 +100,12 @@ def validateTerm (root : cvc5.Term)
           throw (.unsupported s!"unbound variable: {term}")
         pure children.isEmpty
       | .NOT | .NEG | .ABS => pure (children.size == 1)
+      | .TO_REAL =>
+        unless children.size == 1 && (integerLiteral? children[0]!).isSome do
+          throw (.unsupported "unsupported operator: TO_REAL (only numeral coercions are supported)")
+        pure true
       | .ITE => pure (children.size == 3)
-      | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT | .INTS_DIVISION =>
+      | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT | .INTS_DIVISION | .DIVISION =>
         pure (children.size >= 2)
       -- cvc5 expands chains into conjunctions of adjacent binary comparisons.
       | .EQUAL | .LT | .LEQ | .GT | .GEQ | .INTS_MODULUS => pure (children.size == 2)
@@ -107,7 +128,7 @@ def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
 
 /--
 cvc5 prints aliases with their bodies already resolved. A supported body is Bool,
-Int, a declared uninterpreted sort, or a formal sort parameter. Tokenize this
+Int, Real, a declared uninterpreted sort, or a formal sort parameter. Tokenize this
 canonical header, respecting quoted names; cvc5 still handles alias syntax, arity, scope, and substitution.
 -/
 def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
@@ -119,9 +140,9 @@ def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[])
   unless tokens.size == endParams + 3 && tokens[0]? == some "(" &&
       tokens[1]? == some "define-sort" && tokens[3]? == some "(" &&
       tokens.back? == some ")" &&
-      (body == "Bool" || body == "Int" || sorts.any (·.sort.toString == body) ||
+      (body == "Bool" || body == "Int" || body == "Real" || sorts.any (·.sort.toString == body) ||
         (tokens.extract 4 endParams).contains body) do
-    throw (.unsupported s!"unsupported sort alias: {command}; expected Bool, Int, a declared uninterpreted sort, or a sort parameter")
+    throw (.unsupported s!"unsupported sort alias: {command}; expected Bool, Int, Real, a declared uninterpreted sort, or a sort parameter")
 
 /-- These metadata fields never become assumptions or select a proof target. -/
 def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do

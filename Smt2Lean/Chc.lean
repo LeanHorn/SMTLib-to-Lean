@@ -54,7 +54,7 @@ def collectRelations (declarations : Array ParsedDeclaration) (queryNumber : Nat
       let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
       let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
       unless result.isBoolean && arguments.all (isScalarSort · sorts) do
-        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over Bool, Int, or declared uninterpreted sorts, got {sort}")
+        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over Bool, Int, Real, or declared uninterpreted sorts, got {sort}")
       return { toParsedDeclaration := declaration, argumentSorts := arguments }
     catch error =>
       throw (declaration.source.map (fun source => errorWithContext (source.context true queryNumber) error)

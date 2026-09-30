@@ -22,8 +22,9 @@ This builds the CLI and Lean tests, runs each Lean test executable, then runs
 
 The Lean test modules stay in `backend/`. Semantic tests elaborate generated text
 in memory and compare it with the reconstructed expressions. The CLI suite owns
-filesystem checks: it compiles both `Query.lean` and its statement section using
-only Lean core, refuses existing destinations, and preserves edited proofs.
+filesystem checks: it compiles both `Query.lean` and its statement section,
+refuses existing destinations, and preserves edited proofs. Core-only outputs
+are checked without package search paths; Real outputs use the pinned Mathlib.
 
 Statement checks reject admissions and query-specific axioms, including transitive
 dependencies. Classical conditionals may use `propext`, `Classical.choice`, and
@@ -36,6 +37,7 @@ compile without it. The integer proof uses `propext`; the other three are axiom-
 | --- | --- |
 | `translation/bool/` | Contradiction, connectives, empty assertions, solver options, and metadata |
 | `translation/int/` | Exact literals beyond 64 bits, arithmetic including div/mod, comparisons, distinct, conditionals, and contradictory bounds |
+| `translation/real/` | Exact rationals, arithmetic, comparisons, conditionals, mixed function signatures, bindings, and shared division-at-zero interpretations |
 | `translation/sorts/` | Nonempty uninterpreted carriers, mixed functions, aliases, definitions, equality/distinct, conditionals, and quantifiers |
 | `translation/functions/` | Mixed Bool/Int functions and predicates, quoted names, argument order, unused parameters, and congruence |
 | `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |
@@ -156,3 +158,36 @@ All four original `chc/` files now translate and elaborate with **28 clauses**:
 `lh_sum_rec` (3), `lh_abs_neg` (5), `flux_sum_off_by_one` (5), and `flux_bsearch` (15).
 This checks translation, not satisfiability or Flex proofs. Regression rejection
 cases now use unsupported exponentiation instead of the newly supported div/mod.
+
+## Exact Real arithmetic
+
+`translation/real/arithmetic.smt2` combines Real expressions with functions,
+quantifiers, definitions, aliases, let bindings, and an uninterpreted carrier.
+`translation/chc/real.smt2` uses Real guards and relation arguments across three
+clauses. The usual Horn restrictions still apply.
+
+The encoding follows [SMT-LIB Reals](https://smt-lib.org/theories-Reals.shtml).
+Real means Mathlib's `Real`, not rational numbers or floating point. Decimals are
+read as exact native rationals and emitted as ratios of Real numerals. `/` folds
+left, and a shared `Real → Real` function represents its unconstrained result at
+zero. This function is universal in refutations and existential in Horn models,
+independently of the integer division and modulo choices.
+
+Real files import `Mathlib.Data.Real.Basic` from Mathlib revision
+`db584cd6d46c92f209a44c0f1c829460d327499d`, already pinned in `lake-manifest.json`.
+Check them with `lake env lean`. Completed arithmetic proofs additionally import
+`Mathlib.Tactic.NormNum`; generated statements do not require that tactic import.
+
+Tests cover 13 exact arithmetic cases, including decimal fractions beyond machine
+precision, signed division, comparison chains, and large numerals. Nine completed
+proofs check these cases, composite divisors, numerator-dependent zero choices,
+congruence, quantifier sharing, independence from Int zero choices, a linear Horn
+invariant, and consistent zero choices across clauses. Handwritten propositions
+also check Real quantifiers (including an irrational-root formula), shadowing,
+five assumption/reset snapshots, and import selection across scopes.
+
+cvc5 can retain Int numerals in Real arithmetic; the translator reconstructs these
+at the expected Real type without contaminating the Int term cache. General
+Int/Real conversions, exponentiation, algebraic-number constants, and transcendental
+operators remain rejected. Earlier unsupported-Real cases now exercise unsupported
+String sorts, while accepted Real cases have their own checks.

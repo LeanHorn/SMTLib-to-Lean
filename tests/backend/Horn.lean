@@ -62,7 +62,7 @@ private def checkParser : IO Unit := do
   checkRejected path input 1 "unsupported logic" (mode := .smt)
   -- CHC mode uses the same sort, operator, and command checks as ordinary SMT.
   for (name, suffix, ordinal, reason) in #[
-    ("bound-real", "(assert (forall ((x Real)) true))\n(check-sat)",
+    ("bound-string", "(assert (forall ((x String)) true))\n(check-sat)",
       2, "unsupported bound variable sort"),
     ("power", "(assert (forall ((x Int)) (= (^ x 2) 0)))\n(check-sat)",
       2, "unsupported operator: POW"),
@@ -146,7 +146,7 @@ private def checkRejectedFacts : IO Unit := do
   for (name, body, reason) in #[
     ("integer-constant", "(declare-const x Int)", "unsupported CHC declaration 'x'"),
     ("integer-function", "(declare-fun f (Int) Int)", "unsupported CHC declaration 'f'"),
-    ("real-domain", "(declare-fun P (Real) Bool)", "unsupported declaration sort"),
+    ("string-domain", "(declare-fun P (String) Bool)", "unsupported declaration sort"),
     ("nested-relation", "(declare-fun P (Int) Bool)\n(declare-fun R (Bool) Bool)\n(assert (R (P 0)))",
       "relation inside a relation argument"),
     ("hidden-relation", "(declare-fun P (Int) Bool)\n(declare-fun R (Bool) Bool)\n(assert (R (not (P 0))))",

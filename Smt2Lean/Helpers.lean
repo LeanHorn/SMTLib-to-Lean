@@ -1,12 +1,17 @@
 import Smt.Reconstruct.Builtin
+import Mathlib.Data.Real.Basic
 
 namespace Smt2Lean.Helpers
 
 open Lean Meta Qq
 
+-- Keep printed types usable in Init-only output after importing Mathlib's notation.
+@[delab app.Int, delab app.Real] private def printScalar : Lean.PrettyPrinter.Delaborator.Delab :=
+  Lean.PrettyPrinter.Delaborator.delabConst
+
 /-- Names reserved for the operator definitions copied into generated files. -/
 def isHelper (name : Name) : Bool :=
-  name == `SMT.xor || name == `SMT.intDiv || name == `SMT.intMod || match name with
+  name == `SMT.xor || name == `SMT.intDiv || name == `SMT.intMod || name == `SMT.realDiv || match name with
     | .str `SMT suffix => suffix.startsWith "distinct" &&
         (suffix.drop 8).toString.toNat?.isSome
     | _ => false
@@ -33,6 +38,11 @@ def intDiv : MetaM Name :=
 def intMod : MetaM Name :=
   define `SMT.intMod [] q(fun (zero : Int → Int) (x y : Int) =>
     if y = 0 then zero x else x % y)
+
+/-- Real division also leaves the result at zero unconstrained. -/
+def realDiv : MetaM Name :=
+  define `SMT.realDiv [] q(fun (zero : Real → Real) (x y : Real) =>
+    if y = 0 then zero x else x / y)
 
 /-- One polymorphic helper per arity, sharing lean-smt's pairwise encoding. -/
 def distinct (arity : Nat) : MetaM Name := do

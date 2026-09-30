@@ -77,7 +77,9 @@ For broader examples, try [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.sm
 
 ## Research prototype in progress
 
-The translator supports a first-order SMT-LIB fragment over Bool, Int, and nonempty uninterpreted sorts (`declare-sort` of arity zero), including exact integer arithmetic (`div`/`mod` included), uninterpreted functions, quantifiers, nonrecursive definitions, let bindings, and incremental queries with `push`/`pop`, temporary `check-sat-assuming` assumptions, resets, and global declarations.
+The translator supports a first-order SMT-LIB fragment over Bool, Int, Real, and nonempty uninterpreted sorts (`declare-sort` of arity zero), including exact integer and real arithmetic, uninterpreted functions, quantifiers, nonrecursive definitions, let bindings, and incremental queries with `push`/`pop`, temporary `check-sat-assuming` assumptions, resets, and global declarations.
+
+Real output imports `Mathlib.Data.Real.Basic` from the pinned dependencies; other output uses Lean core. Division at zero preserves arbitrary, shared interpretations. General Int/Real conversions remain unsupported.
 
 Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
 

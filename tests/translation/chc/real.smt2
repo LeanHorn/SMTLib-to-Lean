@@ -1,0 +1,13 @@
+; Real guards and relation arguments; one zero-case function shared by all rules.
+(set-logic HORN)
+(declare-sort Node 0)
+(declare-fun P (Node Real) Bool)
+(declare-fun R (Node Real Bool Int) Bool)
+(define-fun half ((x Real)) Real (/ x 2.0))
+(assert (forall ((n Node) (x Real)) (=> (= x 0.1) (P n x))))
+(assert (forall ((n Node) (x Real) (y Real) (b Bool) (i Int))
+  (=> (and (P n x) (< x y) (= (half y) x) (= (/ x y) 0.5))
+      (R n (ite b (/ x 0.0) (+ x 0.1)) b i))))
+(assert (forall ((n Node) (x Real) (b Bool) (i Int))
+  (=> (and (R n (/ x 0.0) b i) (distinct (/ x 0.0) (/ (+ x 0.0) 0.0))) false)))
+(check-sat)

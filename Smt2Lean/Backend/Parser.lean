@@ -168,7 +168,8 @@ private def parseScript
       match commandName with
       | "set-logic" =>
         let some logic := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
-            "UF", "LIA", "NIA", "UFLIA", "UFNIA", "ALL", "HORN"].find?
+            "UF", "LIA", "NIA", "UFLIA", "UFNIA",
+            "QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA", "ALL", "HORN"].find?
             (fun logic => cmd.toString == s!"(set-logic {logic})")
           | throw (.unsupported s!"unsupported logic: {cmd}")
         if logic == "HORN" && mode == .smt then
@@ -198,7 +199,7 @@ private def parseScript
         let term := terms.back!
         let sort ← ofExcept term.getSort
         unless isScalarSort sort query.sorts || (← isSupportedFunction sort query.sorts) do
-          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, a declared uninterpreted sort, or a first-order function over these sorts")
+          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, Real, a declared uninterpreted sort, or a first-order function over these sorts")
         let symbol ← ofExcept term.getSymbol
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")
