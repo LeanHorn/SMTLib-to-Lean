@@ -8,9 +8,11 @@ open Lean Meta Emit
 /-- Reconstruct at each check, but return output only after the entire session succeeds. -/
 def translateSession (input : String) (env : Environment) (name : String := "session") : IO String := do
   let state ← IO.mkRef ({ env } : Core.State)
+  let skipped ← IO.mkRef (#[] : Array Source.Command)
   let goals ← IO.mkRef (#[] : Array Goal)
   let context : Core.Context := { fileName := name, fileMap := default }
-  (Backend.parseAndInspectSession input (name := name) (mode := .auto) fun query => do
+  (Backend.parseAndInspectSession input (name := name) (mode := .auto)
+      (onSkipped := fun command => skipped.modify (·.push command)) fun query => do
     let problem? ← if query.logic == some "HORN" then
       some <$> Chc.validateQuery query name else pure none
     let action : MetaM Goal := do
@@ -26,7 +28,7 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
     state.set checkedState
     goals.modify (·.push goal)
   ).runIO
-  let (source, _, _) ← (renderSession (← goals.get)).toIO context (← state.get)
+  let (source, _, _) ← (renderSession (← goals.get) (← skipped.get)).toIO context (← state.get)
   return source
 
 end Smt2Lean.Pipeline

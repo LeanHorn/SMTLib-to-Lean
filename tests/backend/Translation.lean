@@ -476,6 +476,10 @@ private def checkSessions (env : Environment) : IO Unit := do
       integer, base,
       q(∀ p x : Prop, (p ∧ ¬x ∧ (¬x ∨ exclusive p x)) → False),
       conditional, conditional], #[7, 8]),
+    ("resets", "Refutation", #[
+      q(∀ (p : Prop) (x : Int), (p ∧ x + 1 > 0 ∧ p) → False), q(True → False),
+      q(∀ p : Int, p = 1 → False), q(∀ p : Prop, ¬p → False),
+      q(∀ _p : Prop, True → False), q(∀ (p : Prop) (_x : Int), ¬p → False), q(True → False)], #[]),
     ("assuming", "Refutation", #[q(∀ p : Prop, (p ∧ ¬p) → False), base, base,
       q(∀ p : Prop, (p ∧ p ∧ p ∧ p) → False),
       q(∀ p q : Prop, (p ∧ q ∧ ¬p) → False), q(∀ (p : Prop) (_q : Int), p → False)], #[]),

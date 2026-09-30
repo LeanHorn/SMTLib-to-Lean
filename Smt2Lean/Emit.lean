@@ -86,7 +86,7 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
 
 /-- Emit helpers once, then all statements, then all unfinished proofs.
 Single-query files retain their original names and formatting. -/
-def renderSession (goals : Array Goal) : MetaM String := do
+def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[]) : MetaM String := do
   if goals.isEmpty then throwError "expected at least one translated query"
   let mut helpers : Array Name := #[]
   for goal in goals do
@@ -95,7 +95,9 @@ def renderSession (goals : Array Goal) : MetaM String := do
   let helperDefinitions := String.join (← (helpers.qsort Name.lt).toList.mapM renderHelper)
   let entries ← goals.mapIdxM fun i goal =>
     renderGoal goal (if goals.size == 1 then none else some (i + 1))
-  return "import Init\n\n-- Statements\n\n" ++ helperDefinitions ++
+  let requests := String.join (skipped.toList.map fun command =>
+    sourceComment "unexecuted request" command.source ++ s!"-- Not executed: {reprStr command.text}\n")
+  return "import Init\n\n-- Statements\n\n" ++ requests ++ helperDefinitions ++
     String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
     String.intercalate "\n" (entries.toList.map Prod.snd)
 

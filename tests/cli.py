@@ -97,7 +97,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="smt2lean cli ") as temporary:
         tmp = Path(temporary)
-        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6)]:
+        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7)]:
             output = tmp / f"session-{fixture}"
             run(SESSIONS / f"{fixture}.smt2", "--out", output)
             generated = check_generated(lean, output, goal=goal, count=count)
@@ -345,12 +345,12 @@ def main():
             for number, (command, reason) in enumerate([
                 ('(set-option :produce-models "true")', "invalid value for :produce-models"),
                 ("(set-option :random-seed -1)", "invalid value for :random-seed"),
-                ("(set-option :global-declarations true)", "unsupported solver option"),
+                ("(set-option :global-declarations true)", "must be set before"),
                 ("(set-option :unknown false)", "unsupported solver option"),
                 ("(set-info :unknown true)", "unsupported metadata"),
-                ("(get-proof)", "unsupported command"),
-                ("(get-model)", "unsupported command"),
-                ("(get-unsat-core)", "unsupported command"),
+                ("(get-proof)", "requires a preceding check"),
+                ("(get-model)", "requires a preceding check"),
+                ("(get-unsat-core)", "requires a preceding check"),
             ]):
                 source, output = tmp / f"config-{logic}-{number}.smt2", tmp / f"config-{logic}-{number}"
                 source.write_text(f"(set-logic {logic})\n(assert false)\n{command}\n(check-sat)")
@@ -358,11 +358,29 @@ def main():
                 context = "query 1: " if logic == "HORN" else ""
                 assert f"{source}:3:1: {context}command 3:" in result.stderr, result.stderr
                 assert reason in result.stderr and not output.exists(), result.stderr
-            for suffix in ["(get-model)", "(reset)"]:
+            for suffix in ["(get-unsat-extra)"]:
                 source, output = tmp / f"config-tail-{logic}.smt2", tmp / f"config-tail-{logic}"
                 source.write_text(SOLVER_OPTIONS + f"(set-logic {logic})\n(assert false)\n(check-sat)\n" + suffix)
                 result = run(source, "--out", output, code=1)
                 assert "unsupported command" in result.stderr and not output.exists(), result.stderr
+
+        for name, body, reason in [
+            ("reset-scope", "(set-logic ALL)(push 1)(reset-assertions)(pop 1)", "exceeds active scope"),
+            ("reset-symbol", "(set-logic ALL)(declare-const p Bool)(reset-assertions)(assert p)", "not declared"),
+            ("reset-definition", "(set-logic ALL)(define-fun p () Bool true)(reset-assertions)(assert p)", "not declared"),
+            ("reset-global", "(set-option :global-declarations true)(set-logic ALL)(declare-const p Bool)(reset)(set-logic ALL)(assert p)", "not declared"),
+            ("late-result", "(set-logic ALL)(check-sat)(assert true)(get-model)", "requires a preceding check"),
+            ("bad-global", '(set-option :global-declarations "true")', "requires true or false"),
+        ]:
+            source, output = tmp / f"{name}.smt2", tmp / name
+            source.write_text(body)
+            result = run(source, "--out", output, code=1)
+            assert reason in result.stderr and not output.exists(), result.stderr
+        source, output = tmp / "skipped.smt2", tmp / "skipped"
+        source.write_text("(set-logic ALL)(assert false)(check-sat)(get-model)(get-proof)(get-unsat-core)(get-unsat-assumptions)(get-assignment)(get-assertions)(get-info :name)(get-option :produce-models)(get-value (true))")
+        result = run(source, "--out", output)
+        text = check_generated(lean, output)
+        assert text.count("-- Not executed:") == 9 and "sat" not in result.stdout
 
         for logic, literal in [("ALL", "true"), ("ALL", "(and p p)"), ("ALL", "missing"),
                                ("HORN", "true")]:

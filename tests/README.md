@@ -97,3 +97,17 @@ The input follows [SMT-LIB 2.6, section 4.2.5](https://smt-lib.org/papers/smt-li
 assumptions are user-declared/defined Boolean constants or their negations.
 They apply to one check only. Neither check command invokes the solver.
 HORN negated literals become safety clauses and still undergo Horn validation.
+
+## Reset and observation commands
+
+`translation/sessions/resets.smt2` combines local/global declaration lifetimes,
+scoped definitions and aliases, both resets, temporary assumptions, and symbol reuse.
+`:global-declarations` must be set before the logic or declarations. `reset` clears
+all state and options; `reset-assertions` clears assertions and scopes, retaining
+declarations/definitions only in global mode. Query numbering continues across resets.
+
+The session CLI parses observational `get-*` commands for models, values, proofs,
+cores, assumptions, assignments, assertions, options, and info, and records them as
+`Not executed` comments. It never produces solver responses. Result-dependent
+requests require a preceding check in the current context. The strict single-query
+API retains its original command restrictions.

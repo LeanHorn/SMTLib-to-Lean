@@ -73,10 +73,24 @@ private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
     throw (.unsupported "check-sat-assuming: malformed literal list")
   return terms
 
+/-- Native global equations can move: find the added term by occurrence count. -/
+private def addedAssertion (before after : Array cvc5.Term) : cvc5.Env cvc5.Term := do
+  let mut counts : Std.HashMap cvc5.Term Nat := {}
+  for term in before do counts := counts.insert term (counts[term]?.getD 0 + 1)
+  let mut added := #[]
+  for term in after do
+    let count := counts[term]?.getD 0
+    if count == 0 then added := added.push term
+    else counts := counts.insert term (count - 1)
+  unless added.size == 1 && counts.toList.all (·.2 == 0) do
+    throw (.error "expected exactly one new native assertion")
+  return added[0]!
+
 private def parseScript
     (input : String)
     (inspect : ParsedQuery → cvc5.Env Unit)
-    (name : String) (mode : ParseMode) (singleQuery : Bool) : cvc5.Env Unit := do
+    (name : String) (mode : ParseMode) (singleQuery : Bool)
+    (onSkipped : Source.Command → cvc5.Env Unit := fun _ => pure ()) : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
   let solver  ← cvc5.Solver.new tm
   if !singleQuery then solver.setOption "incremental" "true"
@@ -89,6 +103,8 @@ private def parseScript
   let mut checks := 0
   let mut scopes : Array Scope := #[]
   let mut exited := false
+  let mut globalDeclarations := false
+  let mut resultAvailable := false
   let mut reader : Source.Reader input := {}
   -- cvc5 counts defining equations too; query.assertions keeps only source assertions.
   let mut nativeCount := 0
@@ -134,6 +150,10 @@ private def parseScript
         throw (.unsupported s!"unexpected command after exit: {commandName}")
       if singleQuery && checked && commandName != "set-info" && commandName != "exit" then
         throw (.unsupported s!"unexpected command after check-sat: {commandName}")
+      unless #["check-sat", "check-sat-assuming", "set-info", "set-option", "exit",
+          "get-model", "get-proof", "get-unsat-core", "get-unsat-assumptions", "get-value",
+          "get-assignment", "get-assertions", "get-info", "get-option"].contains commandName do
+        resultAvailable := false
       match commandName with
       | "set-logic" =>
         let some logic := #["QF_UF", "QF_LIA", "QF_NIA", "QF_UFLIA", "QF_UFNIA",
@@ -162,11 +182,12 @@ private def parseScript
           invoked := query.invoked.push commandName }
       | "define-fun" =>
         validateNamedTerms command.source.names tm solver symbols query allowQuantifiers
+        let before ← solver.getAssertions
         invokeCommand cmd solver symbols
         let assertions ← solver.getAssertions
         unless assertions.size == nativeCount + 1 do
           throw (.error "expected one native defining equation")
-        let definition ← readDefinition assertions.back! command.source query tm allowQuantifiers
+        let definition ← readDefinition (← addedAssertion before assertions) command.source query tm allowQuantifiers
         nativeCount := assertions.size
         query := { query with
           definitions := query.definitions.push definition
@@ -179,12 +200,12 @@ private def parseScript
         let assertionNumber := query.assertions.size + 1
         try
           validateNamedTerms command.source.names tm solver symbols query allowQuantifiers
+          let before ← solver.getAssertions
           invokeCommand cmd solver symbols
           let assertions ← solver.getAssertions
           unless assertions.size == nativeCount + 1 do
             throw (.error "expected one new native assertion")
-          let some term := assertions.back?
-            | throw (.error "assert command did not store a formula")
+          let term ← addedAssertion before assertions
           let term ← withoutQuantifierHints tm term
           validateAssertion term (knownTerms query) allowQuantifiers
           let term ← expandDefinitions tm query.definitions term
@@ -197,7 +218,43 @@ private def parseScript
           assertionSources := query.assertionSources.push command.source
           invoked := query.invoked.push commandName }
       | "set-info" => validateMetadata cmd
-      | "set-option" => validateSolverOption cmd
+      | "set-option" =>
+        if (Source.tokenize command.text)[2]? == some ":global-declarations" then
+          let parts := Source.tokenize command.text
+          unless parts == #["(", "set-option", ":global-declarations", "true", ")"] ||
+              parts == #["(", "set-option", ":global-declarations", "false", ")"] do
+            throw (.unsupported "global-declarations requires true or false")
+          if ← symbols.isLogicSet then
+            throw (.unsupported "global-declarations must be set before the logic or declarations")
+          invokeCommand cmd solver symbols
+          globalDeclarations := parts[3]! == "true"
+          query := { query with invoked := query.invoked.push commandName }
+        else validateSolverOption cmd
+      | "reset" | "reset-assertions" =>
+        if singleQuery then throw (.unsupported s!"unsupported command: {commandName}")
+        invokeCommand cmd solver symbols
+        scopes := #[]
+        if commandName == "reset" then
+          solver.setOption "incremental" "true"
+          query := { number := checks + 1, commands := query.commands, invoked := query.invoked }
+          globalDeclarations := false
+          allowQuantifiers := true
+          nativeCount := 0
+        else
+          query := { query with assertions := #[], assertionSources := #[] }
+          if !globalDeclarations then
+            query := { query with declarations := #[], definitions := #[] }
+          nativeCount := query.definitions.size
+          unless (← solver.getAssertions).size == nativeCount &&
+              (← symbols.getDeclaredTerms) == query.declarations.map (·.term) do
+            throw (.error "native and translator reset states disagree")
+        query := { query with invoked := query.invoked.push commandName }
+      | "get-model" | "get-proof" | "get-unsat-core" | "get-unsat-assumptions" |
+          "get-value" | "get-assignment" | "get-assertions" | "get-info" | "get-option" =>
+        if singleQuery then throw (.unsupported s!"unsupported command: {commandName}")
+        unless resultAvailable || #["get-assertions", "get-info", "get-option"].contains commandName do
+          throw (.unsupported s!"{commandName}: result request requires a preceding check in the current context")
+        onSkipped command
       | "push" | "pop" =>
         let some (_, count) := scopeChange
           | throw (.unsupported s!"unsupported command: {commandName}")
@@ -211,11 +268,11 @@ private def parseScript
           let remaining := scopes.size - count
           let some scope := scopes[remaining]? | throw (.error "missing saved scope")
           query := { query with
-            declarations := query.declarations.extract 0 scope.declarations
-            definitions := query.definitions.extract 0 scope.definitions
+            declarations := if globalDeclarations then query.declarations else query.declarations.extract 0 scope.declarations
+            definitions := if globalDeclarations then query.definitions else query.definitions.extract 0 scope.definitions
             assertions := query.assertions.extract 0 scope.assertions
             assertionSources := query.assertionSources.extract 0 scope.assertions }
-          nativeCount := scope.nativeAssertions
+          nativeCount := scope.nativeAssertions + if globalDeclarations then query.definitions.size - scope.definitions else 0
           scopes := scopes.extract 0 remaining
         unless (← solver.getAssertions).size == nativeCount &&
             (← symbols.getDeclaredTerms) == query.declarations.map (·.term) do
@@ -234,6 +291,7 @@ private def parseScript
           assertionSources := query.assertionSources ++ Array.replicate assumptions.size command.source }
         if singleQuery then query := snapshot
         checked := true
+        resultAvailable := true
         checks := checks + 1
         if !singleQuery then
           inspect { snapshot with commands := query.commands.push command }
@@ -263,7 +321,8 @@ Callbacks see active terms and the command history through that check. Reconstru
 inside the callback; publish results only after this function succeeds, since a
 later command can still fail. At least one check is required. -/
 def parseAndInspectSession (input : String) (inspect : ParsedQuery → cvc5.Env Unit)
-    (name : String := "session") (mode : ParseMode := .smt) : cvc5.Env Unit :=
-  parseScript input inspect name mode false
+    (name : String := "session") (mode : ParseMode := .smt)
+    (onSkipped : Source.Command → cvc5.Env Unit := fun _ => pure ()) : cvc5.Env Unit :=
+  parseScript input inspect name mode false onSkipped
 
 end Smt2Lean.Backend

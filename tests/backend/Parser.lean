@@ -171,8 +171,7 @@ private def checkSolverOptions : IO Unit := do
     checkRejected "invalid-seed"
       s!"(set-logic ALL)\n(set-option :random-seed {value})\n(check-sat)"
       2 "invalid value for :random-seed"
-  for (key, value) in #[(":global-declarations", "true"), (":global-declarations", "false"),
-      (":incremental", "true"), (":produce-assertions", "true"), (":produce-models-extra", "true"),
+  for (key, value) in #[(":incremental", "true"), (":produce-assertions", "true"), (":produce-models-extra", "true"),
       (":unknown", "false"), (":regular-output-channel", "\"ignored.log\"")] do
     checkRejected s!"unsupported-{key}"
       s!"(set-logic ALL)\n(set-option {key} {value})\n(check-sat)"
@@ -239,8 +238,6 @@ private def checkSessions : IO Unit := do
     ("(push 4294967296)", 0, 2, "UInt32 limit"),
     ("(check-sat)\n(assert (= (div 1 0) 0))", 1, 3, "INTS_DIVISION"),
     ("(check-sat)\n(assert", 1, 3, "unterminated command"),
-    ("(check-sat)\n(get-model)", 1, 3, "unsupported command"),
-    ("(check-sat)\n(reset)", 1, 3, "unsupported command"),
     ("(check-sat)\n(exit)\n(pop 1)", 1, 4, "after exit"),
     ("(push 1)\n(declare-const x Int)\n(check-sat)\n(pop 1)\n(assert (= x 0))", 1, 6, "not declared"),
     ("(push 1)\n(define-fun f () Int 0)\n(check-sat)\n(pop 1)\n(assert (= f 0))", 1, 6, "not declared"),
@@ -460,7 +457,7 @@ private def checkRejectedQueries : IO Unit := do
     ("undeclared", "(set-logic QF_UF)\n(assert p)\n(check-sat)",
       2, "p"),
     ("option", "(set-logic QF_UF)\n(set-option :global-declarations true)\n(check-sat)",
-      2, "unsupported solver option"),
+      2, "must be set before"),
     ("metadata", "(set-info :smt-lib-version 2.0)\n(set-logic QF_UF)\n(check-sat)",
       1, "unsupported metadata"),
     ("duplicate", "(set-logic QF_UF)\n(declare-const p Bool)\n(declare-const p Bool)\n(check-sat)",
