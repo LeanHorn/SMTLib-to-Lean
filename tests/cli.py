@@ -380,6 +380,78 @@ def check_conversions(lean, tmp):
     print("Mixed arithmetic passed: 12 exact boundary cases, eight completed proofs, and SMT/CHC fixtures")
 
 
+def check_bitvectors(lean, tmp):
+    """Standalone core output and completed proofs distinguishing widths and signedness."""
+    for fixture, goal in [(ROOT / "tests/translation/bitvec/arithmetic.smt2", "Refutation"),
+                          (CHC / "bitvec.smt2", "Problem")]:
+        output = tmp / f"bv-{goal}"
+        run(fixture, "--out", output)
+        generated = check_generated(lean, output, goal=goal)
+        assert generated.startswith("import Init\n")
+        for helper in (["bvnand", "bvnor", "bvxnor", "bvcomp"] if goal == "Refutation" else ["bvcomp"]):
+            assert generated.count(f"def SMT.{helper} ") == 1
+    exact = [
+        "(= (bvadd #xe #x1 #x2) #x1)", "(= (bvmul #x3 #x5 #x3) #xd)",
+        "(= (bvand #xf #x7 #x3) #x3)", "(= (bvor #x1 #x2 #x4) #x7)",
+        "(= (bvxor #x1 #x2 #x4) #x7)",
+        "(= (bvnand #b1010 #b1100) #b0111)", "(= (bvnor #b1010 #b1100) #b0001)",
+        "(= (bvxnor #b1010 #b1100) #b1001)",
+        "(= (bvcomp #x0 #x0) #b1)", "(= (bvcomp #x0 #x1) #b0)",
+        "(= (bvcomp #b1 #b1) #b1)", "(= #x0001 (_ bv1 16))",
+    ]
+    for width in [32, 64, 129]:
+        modulus = 2 ** width
+        exact.extend([
+            f"(= (bvadd (_ bv{modulus - 1} {width}) (_ bv1 {width})) (_ bv0 {width}))",
+            f"(= (bvneg (_ bv{modulus // 2} {width})) (_ bv{modulus // 2} {width}))",
+            f"(= (bvmul (_ bv{modulus // 2} {width}) (_ bv2 {width})) (_ bv0 {width}))",
+        ])
+    cases = [
+        ("exact", "QF_BV", "(assert (not (and " + " ".join(exact) + ")))", "Refutation",
+         "  intro h\n  apply h\n  decide\n"),
+        ("signedness", "QF_BV", "(declare-const x (_ BitVec 8))"
+         "(assert (bvugt x #x00))(assert (bvslt x #x00))", "¬ Refutation",
+         "  intro h\n  apply h (255 : BitVec 8)\n  decide\n"),
+        ("congruence", "QF_UFBV", "(declare-fun f ((_ BitVec 8)) (_ BitVec 4))"
+         "(declare-const x (_ BitVec 8))(declare-const y (_ BitVec 8))"
+         "(assert (= x y))(assert (distinct (f x) (f y)))", "Refutation",
+         "  intro f x y h\n  exact h.2 (congrArg f h.1)\n"),
+        ("horn-model", "HORN", "(declare-fun P ((_ BitVec 4)) Bool)(assert (P #x0))"
+         "(assert (forall ((x (_ BitVec 4))) (=> (P x) (P (bvadd x #x1)))))"
+         "(assert (forall ((x (_ BitVec 4))) (=> (and (P x) (bvult x #x0)) false)))", "Problem",
+         "  refine ⟨(fun _ => True), True.intro, (fun _ _ => True.intro), ?_⟩\n"
+         "  intro x _ less\n  exact Nat.not_lt_zero x.toNat less\n"),
+        ("horn-wrap", "HORN", "(declare-fun P ((_ BitVec 4)) Bool)(assert (P #xf))"
+         "(assert (forall ((x (_ BitVec 4))) (=> (P x) (P (bvadd x #x1)))))"
+         "(assert (=> (P #x0) false))", "¬ Problem",
+         "  rintro ⟨p, fact, step, safety⟩\n  exact safety (step 15 fact)\n"),
+    ]
+    for name, logic, body, target, proof in cases:
+        source, output = tmp / f"bv-{name}.smt2", tmp / f"bv-{name}"
+        source.write_text(f"(set-logic {logic}){body}(check-sat)")
+        run(source, "--out", output)
+        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        assert generated.startswith("import Init\n")
+        completed = output / "Query.lean"
+        completed.write_text(generated.split("-- Proofs\n", 1)[0]
+                             + f"theorem checked : {target} := by\n" + proof)
+        check_lean(lean, completed, complete=True)
+    # Reject the entire session on a later unsupported operator or stale width alias.
+    for name, tail, reason in [
+        ("operator", "(assert (= (bvshl #x1 #x1) #x2))", "BITVECTOR_SHL"),
+        ("width", "(assert (= (bvadd #x1 #b1) #x2))", "comparable bit-vector"),
+        ("scope", "(push 1)(define-sort Byte () (_ BitVec 8))(pop 1)(declare-const x Byte)", "declared"),
+        ("reset", "(define-sort Byte () (_ BitVec 8))(reset)(set-logic ALL)(declare-const x Byte)", "declared"),
+        ("hidden", "(define-fun ignore ((x (_ BitVec 4))) Bool true)"
+         "(assert (ignore (bvshl #x1 #x1)))", "BITVECTOR_SHL"),
+    ]:
+        source, output = tmp / f"bv-invalid-{name}.smt2", tmp / f"bv-invalid-{name}"
+        source.write_text("(set-logic ALL)(assert (= #x1 #x1))(check-sat)" + tail)
+        assert reason in run(source, "--out", output, code=1).stderr
+        assert not output.exists()
+    print("Bitvector CLI passed: core-only SMT/CHC output, five completed proofs, and scope/error protection")
+
+
 def main():
     prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
     lean = Path(prefix) / "bin/lean"
@@ -414,6 +486,7 @@ def main():
         check_integer_division(lean, tmp)
         check_reals(lean, tmp)
         check_conversions(lean, tmp)
+        check_bitvectors(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
             for name, body, count in [
@@ -686,7 +759,7 @@ def main():
         assert "check-sat-assuming," in text and "assumption 2" in text
 
         invalid = [
-            "(set-logic QF_BV)\n(check-sat)",
+            "(set-logic QF_ABV)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(pop 1)",
             "(set-logic QF_UF)\n(check-sat)\n(assert",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (^ x 0) 0))\n(check-sat)",

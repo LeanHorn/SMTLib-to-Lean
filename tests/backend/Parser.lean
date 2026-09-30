@@ -310,7 +310,7 @@ private def checkDefinitions : IO Unit := do
     ("discarded-body", "(define-fun f ((x Int)) Int 0) (define-fun g () Int (f (^ 1 0)))", 3, "POW"),
     ("alias-string", "(define-sort Bad () String)", 2, "unsupported sort alias"),
     ("alias-array", "(define-sort Bad (T) (Array T T))", 2, "unsupported sort alias"),
-    ("alias-bv", "(define-sort Bad () (_ BitVec 8))", 2, "unsupported sort alias"),
+    ("alias-nested-bv", "(define-sort Bad () (Array Int (_ BitVec 8)))", 2, "unsupported sort alias"),
     ("alias-unknown", "(define-sort Bad () Missing)", 2, "declared"),
     ("alias-recursive", "(define-sort Bad () Bad)", 2, "declared"),
     ("alias-forward", "(define-sort A () B) (define-sort B () Int)", 2, "declared"),
@@ -357,7 +357,7 @@ private def checkNamedAssertions : IO Unit := do
     ("open", "(assert (forall ((x Int)) (! (> x 0) :named bad)))", 2, "Cannot name a term in a binder"),
     ("operator", "(assert (! (= (^ 1 0) 0) :named bad))", 2, "POW"),
     ("discarded", "(assert (let ((ignored (! (^ 1 0) :named bad))) true))", 2, "POW"),
-    ("discarded-sort", "(assert (let ((ignored (! \"a\" :named bad))) true))", 2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
+    ("discarded-sort", "(assert (let ((ignored (! \"a\" :named bad))) true))", 2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
     ("unknown-attribute", "(assert (! true :unknown (:named fake)))", 2, "unsupported annotation"),
     ("after-check", "(check-sat) (assert (! true :named later))", 3, "after check-sat")
   ] do
@@ -374,7 +374,7 @@ private def checkRejectedQueries : IO Unit := do
       2, "unsupported declaration sort"),
     ("array-argument", "(set-logic ALL)\n(declare-fun f ((Array Int Int)) Int)\n(check-sat)",
       2, "unsupported declaration sort"),
-    ("bitvector-result", "(set-logic ALL)\n(declare-fun f (Bool) (_ BitVec 8))\n(check-sat)",
+    ("array-result", "(set-logic ALL)\n(declare-fun f (Bool) (Array Int Int))\n(check-sat)",
       2, "unsupported declaration sort"),
     ("string-argument", "(set-logic ALL)\n(declare-fun f (String) Int)\n(check-sat)",
       2, "unsupported declaration sort"),
@@ -417,27 +417,27 @@ private def checkRejectedQueries : IO Unit := do
     ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
       2, "type"),
     ("ite-string", "(set-logic ALL)\n(assert (= (ite true \"a\" \"b\") \"a\"))\n(check-sat)",
-      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
-    ("ite-bv", "(set-logic ALL)\n(assert (= (ite true #b00 #b01) #b00))\n(check-sat)",
-      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
+      2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
+    ("ite-widths", "(set-logic ALL)\n(assert (= (ite true #b0 #b01) #b0))\n(check-sat)",
+      2, "type"),
     ("push", "(set-logic QF_UF)\n(push 1)\n(check-sat)",
       2, "unsupported command: push"),
     ("pop", "(set-logic QF_UF)\n(pop 1)\n(check-sat)",
       2, "unsupported command: pop"),
     ("horn", "(set-logic HORN)\n(assert true)\n(check-sat)",
       1, "unsupported logic"),
-    ("logic", "(set-logic QF_BV)\n(assert true)\n(check-sat)",
+    ("logic", "(set-logic QF_ABV)\n(assert true)\n(check-sat)",
       1, "unsupported logic"),
     ("xor-sort", "(set-logic ALL)\n(assert (xor true 1))\n(check-sat)",
       2, "Boolean subexpression"),
     ("distinct-mixed", "(set-logic ALL)\n(assert (distinct true 1))\n(check-sat)",
       2, "type"),
     ("distinct-string", "(set-logic ALL)\n(assert (distinct \"a\" \"b\"))\n(check-sat)",
-      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
-    ("distinct-bv", "(set-logic ALL)\n(assert (distinct #b00 #b01))\n(check-sat)",
-      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
+      2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
+    ("distinct-widths", "(set-logic ALL)\n(assert (distinct #b0 #b01))\n(check-sat)",
+      2, "type"),
     ("string-equality", "(set-logic ALL)\n(assert (= \"a\" \"b\"))\n(check-sat)",
-      2, "expected Bool, Int, Real, or a declared uninterpreted sort"),
+      2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
     ("assuming", "(set-logic QF_UF)\n(check-sat-assuming (true))",
       2, "expected a user-declared"),
     ("missing-check", "(set-logic QF_UF)\n(assert true)",
@@ -745,6 +745,37 @@ private def checkConversions : IO Unit := do
     checkRejected "invalid-conversion" s!"(set-logic ALL){body}(check-sat)" 2 ""
 
 
+private def checkBitvectors : IO Unit := do
+  let path := "tests/translation/bitvec/arithmetic.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 16 && query.definitions.size == 2) "BV fixture lost terms"
+    let some declaration := query.declarations[0]? | throw (.error "missing BV declaration")
+    require (declaration.term.getSort!.getBitVectorSize! == 4) "BV alias lost its width"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "BV query invoked a solver"
+  ).runIO
+  for logic in #["QF_BV", "QF_UFBV", "BV", "UFBV"] do
+    (parseAndInspectQuery s!"(set-logic {logic})(declare-const x (_ BitVec 8))\
+      (assert (= (bvadd x #x01) #x00))(check-sat)" fun query => do
+      require (query.logic == some logic && query.assertions.size == 1) "lost BV logic or assertion"
+    ).runIO
+  for (body, ordinal, reason) in #[
+    ("(declare-const x (_ BitVec 0))", 2, "Illegal bitvector size"),
+    ("(define-sort Zero () (_ BitVec 0))", 2, "Illegal bitvector size"),
+    ("(assert (= (_ bv256 8) #x00))", 2, "overflow"),
+    ("(assert (= (bvadd #b0 #b00) #b0))", 2, "comparable bit-vector"),
+    ("(declare-fun f ((_ BitVec 4)) Bool)(assert (f #x00))", 3, "type"),
+    ("(assert (bvcomp #x0 #x0))", 2, "Bool"),
+    ("(assert (= (bvsub #x5 #x3 #x1) #x1))", 2, "invalid kind"),
+    ("(assert (= (concat #b0 #b1) #b01))", 2, "BITVECTOR_CONCAT"),
+    ("(assert (= ((_ extract 0 0) #x1) #b1))", 2, "BITVECTOR_EXTRACT"),
+    ("(assert (= (bvshl #x1 #x1) #x2))", 2, "BITVECTOR_SHL"),
+    ("(assert (= (bvudiv #x1 #x1) #x1))", 2, "BITVECTOR_UDIV"),
+    ("(assert (= ((_ int_to_bv 4) 1) #x1))", 2, "INT_TO_BITVECTOR")
+  ] do
+    checkRejected "invalid-bv" s!"(set-logic ALL){body}(check-sat)" ordinal reason
+  checkRejected "qf-bv-quantifier"
+    "(set-logic QF_BV)(assert (forall ((x (_ BitVec 4))) (= x x)))(check-sat)" 2 "quantif"
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
@@ -755,10 +786,11 @@ def main : IO Unit := do
   checkDivision
   checkReals
   checkConversions
+  checkBitvectors
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions
   checkQuantifierHints
   checkBoundScopes
   checkSourceLocations
-  IO.println "Parser passed: Bool/Int/Real/uninterpreted-sort queries, binding identity/scope, and rejection diagnostics"
+  IO.println "Parser passed: Bool/Int/Real/BitVec/uninterpreted-sort queries, binding identity/scope, and rejection diagnostics"

@@ -677,6 +677,130 @@ private def checkConversions (env : Environment) : IO Unit := do
       throw (IO.userError "discarded conversions changed the output profile")
   IO.println "Mixed arithmetic passed: casts, floor, integrality, SMT/CHC targets, and scoped snapshots"
 
+/-- Reference bit operations use individual binary digits, independently of BitVec. -/
+private def bitwiseReference (width x y : Nat) (op : Bool → Bool → Bool) : Nat := Id.run do
+  let mut result := 0
+  for i in [:width] do
+    let place := 2 ^ i
+    if op (x / place % 2 == 1) (y / place % 2 == 1) then result := result + place
+  return result
+
+/-- Exhaustive tiny widths and wide boundaries, checked as closed kernel proofs. -/
+private def checkBitvectorValues (env : Environment) : IO Unit := do
+  let mut total := 0
+  for width in #[1, 2, 3, 4, 32, 64, 129] do
+    let modulus := 2 ^ width
+    let half := modulus / 2
+    let values := if width ≤ 4 then (List.range modulus).toArray
+      else #[0, 1, half - 1, half, modulus - 1]
+    let literal (n : Nat) := s!"(_ bv{n} {width})"
+    let signed (n : Nat) : Int := if n < half then (n : Int) else (n : Int) - modulus
+    let mut rows : Array String := #[]
+    for x in values do
+      rows := rows.push s!"(and (= (bvneg {literal x}) {literal ((modulus - x) % modulus)}) \
+        (= (bvnot {literal x}) {literal (modulus - 1 - x)}))"
+      total := total + 2
+      for y in values do
+        let a := literal x
+        let b := literal y
+        let andValue := bitwiseReference width x y (· && ·)
+        let orValue := bitwiseReference width x y (· || ·)
+        let xorValue := bitwiseReference width x y (· != ·)
+        let mut checks := #[
+          s!"(= (bvadd {a} {b}) {literal ((x + y) % modulus)})",
+          s!"(= (bvsub {a} {b}) {literal ((x + modulus - y) % modulus)})",
+          s!"(= (bvmul {a} {b}) {literal ((x * y) % modulus)})"]
+        for (op, result) in #[
+          ("bvand", andValue), ("bvor", orValue), ("bvxor", xorValue),
+          ("bvnand", modulus - 1 - andValue), ("bvnor", modulus - 1 - orValue),
+          ("bvxnor", modulus - 1 - xorValue)
+        ] do checks := checks.push s!"(= ({op} {a} {b}) {literal result})"
+        for (op, truth) in #[
+          ("bvult", decide (x < y)), ("bvule", decide (x ≤ y)), ("bvugt", decide (x > y)), ("bvuge", decide (x ≥ y)),
+          ("bvslt", decide (signed x < signed y)), ("bvsle", decide (signed x ≤ signed y)),
+          ("bvsgt", decide (signed x > signed y)), ("bvsge", decide (signed x ≥ signed y))
+        ] do
+          let test := s!"({op} {a} {b})"
+          checks := checks.push (if truth then test else s!"(not {test})")
+        checks := checks.push s!"(= (bvcomp {a} {b}) {if x == y then "#b1" else "#b0"})"
+        total := total + checks.size
+        rows := rows.push ("(and " ++ String.intercalate " " checks.toList ++ ")")
+    let input := "(set-logic QF_BV)" ++ String.join (rows.toList.map (s!"(assert {·})")) ++ "(check-sat)"
+    runQuery env s!"bitvector width {width}" input fun query =>
+      withAssertions query fun parameters assertions => do
+        unless parameters.isEmpty && assertions.size == rows.size do
+          throwError "closed BV values introduced parameters or lost assertions"
+        for value in assertions do
+          checkWithKernel (← mkDecideProof (← deltaExpand value Smt2Lean.Helpers.isHelper))
+  IO.println s!"Bitvector values passed: {total} kernel-checked cases; exhaustive widths 1–4 and 32/64/129-bit boundaries"
+
+private def checkBitvectors (env : Environment) : IO Unit := do
+  checkBitvectorValues env
+  let path := "tests/translation/bitvec/arithmetic.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(∀ A : Type, Nonempty A →
+      ∀ (x y : BitVec 4) (b : Prop) (a : A) (f : BitVec 4 → BitVec 4)
+        (g : A → BitVec 4 → Prop → Int → BitVec 8) (named : BitVec 4 → BitVec 4 → BitVec 1),
+      (((15 : BitVec 4) = 15 ∧ (15 : BitVec 4) = 15) ∧
+        x + y + 1 = x - -y ∧ x * y * 2 = -(~~~x) ∧
+        x &&& y &&& 15 = x ||| y ||| 0 ∧ x ^^^ y ^^^ 1 = ~~~(x &&& y) ∧
+        ~~~(x ||| y) = ~~~(x ^^^ y) ∧
+        (x < y ∧ x ≤ y ∧ y > x ∧ y ≥ x) ∧
+        (BitVec.slt x y = true ∧ BitVec.sle x y = true ∧ BitVec.slt x y = true ∧ BitVec.sle x y = true) ∧
+        (BitVec.ofBool (x == y) = 1 ∧ BitVec.ofBool (x == x) = named x y) ∧
+        (x ≠ y ∧ x ≠ 0 ∧ y ≠ 0) ∧ (if b then x + 1 else y) = f (if x < y then x else y) ∧
+        g a x b 7 = 128 ∧ (y + 1) - (x + 1) = 0 ∧
+        (∀ _x : BitVec 4, ∃ z : BitVec 8, z = g a y b 0) ∧
+        (∀ x : BitVec 4, ~~~x = ~~~x) ∧
+        (340282366920938463463374607431768211457 : BitVec 129) = 340282366920938463463374607431768211457) → False)
+  for logic in #["QF_BV", "QF_UFBV", "BV", "UFBV"] do
+    runQuery env logic s!"(set-logic {logic})(declare-const x (_ BitVec 8))\
+      (assert (= (bvadd x #x01) #x00))(check-sat)"
+      fun query => checkRefutation query q(∀ x : BitVec 8, x + 1 = 0 → False)
+  runQuery env "BV type-name shadowing"
+    "(set-logic ALL)(assert (forall ((Nat (_ BitVec 4)) (BitVec (_ BitVec 4)))\
+     (= (bvadd Nat BitVec #x1) #x0)))(check-sat)"
+    fun query => checkRefutation query
+      q((∀ x y : BitVec 4, x + y + 1 = 0) → False)
+  runQuery env "mixed Real/BV signature"
+    "(set-logic ALL)(declare-fun f ((_ BitVec 8) Real Int Bool) (_ BitVec 4))\
+     (declare-const x (_ BitVec 8))(assert (= (f x 0.5 7 true) #xf))(check-sat)"
+    fun query => checkRefutation query (usesClassical := true)
+      q(∀ (f : BitVec 8 → Real → Int → Prop → BitVec 4) (x : BitVec 8), f x (1 / 2) 7 True = 15 → False)
+  let path := "tests/translation/chc/bitvec.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem (usesClassical := true) q(∃ A : Type, Nonempty A ∧
+      ∃ (p : A → BitVec 4 → Prop) (r : A → BitVec 4 → BitVec 1 → Prop → Prop),
+      (∀ a : A, p a 0) ∧
+      (∀ (a : A) (x : BitVec 4) (b : Prop), p a x → x < 15 → BitVec.sle 0 x = true →
+        r a (if b then x + 1 else ~~~x) (BitVec.ofBool (x == 15)) b) ∧
+      (∀ (a : A) (x : BitVec 4) (bit : BitVec 1) (b : Prop), r a x bit b → bit = 0 → x ≠ 0 → p a (x &&& 14)) ∧
+      (∀ (a : A) (x : BitVec 4), p a x → x < 0 → False))
+  let source ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(declare-const x (_ BitVec 4))(push 1)\
+     (define-fun p () Bool (= (bvcomp x #xf) #b1))(check-sat-assuming (p))(check-sat)\
+     (pop 1)(check-sat)(reset)(set-logic HORN)(declare-fun P ((_ BitVec 8)) Bool)\
+     (assert (P #xff))(check-sat)" env
+  unless source.startsWith "import Init" && (source.splitOn "def SMT.bvcomp ").length == 2 do
+    throw (IO.userError "BV session changed the core profile or duplicated its helper")
+  unsafe enableInitializersExecution
+  let some emitted ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throw (IO.userError "BV session did not elaborate")
+  let check : MetaM Unit := do
+    for (name, expected) in #[
+      (`Refutation_1, q(∀ x : BitVec 4, BitVec.ofBool (x == 15) = 1 → False)),
+      (`Refutation_2, q(∀ _x : BitVec 4, True → False)),
+      (`Refutation_3, q(∀ _x : BitVec 4, True → False)),
+      (`Problem_4, q(∃ p : BitVec 8 → Prop, p 255))
+    ] do
+      let .defnInfo definition ← getConstInfo name | throwError "missing {name}"
+      checkEqual (← deltaExpand definition.value Smt2Lean.Helpers.isHelper) expected
+      checkStatementAxioms name
+  discard <| check.toIO { fileName := "BV session", fileMap := default } { env := emitted }
+  IO.println "Bitvector translation passed: complete SMT/CHC targets, four logic profiles, and scoped snapshots"
+
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
   let path := "tests/translation/sorts/uninterpreted.smt2"
@@ -824,6 +948,7 @@ def main : IO Unit := do
   checkDivision env
   checkReals env
   checkConversions env
+  checkBitvectors env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env

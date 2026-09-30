@@ -212,3 +212,30 @@ a nonintegral fraction, implicit casts, floor at an arbitrary zero-division valu
 a Horn model, and an impossible Horn model. Negative floors are checked using
 their defining inequalities. Invalid conversions and later unsupported commands
 must fail without producing partial output.
+
+## Fixed-width bitvectors
+
+`translation/bitvec/arithmetic.smt2` combines exact literals, arithmetic, every
+supported bitwise/comparison operator, aliases, functions, definitions, simultaneous
+let, mixed signatures, and shadowed binders. `translation/chc/bitvec.smt2` uses
+bitvectors in guards and relation arguments across four clauses. Both emit
+`import Init`; standalone tests remove the package search path.
+
+The encoding follows [SMT-LIB bitvectors](https://smt-lib.org/theories-FixedSizeBitVectors.shtml)
+and the [QF_BV definitions](https://smt-lib.org/logics-all.shtml#QF_BV).
+`(_ BitVec w)` becomes `BitVec w` for positive widths. Arithmetic wraps modulo
+`2^w`; signed comparisons use two's complement, while unsigned comparisons use
+natural values. `bvcomp` returns `BitVec 1`, independently of SMT Bool → Lean Prop.
+NAND, NOR, XNOR, and `bvcomp` retain named, kernel-checked helpers in output.
+
+The Lean tests prove 7,560 closed operator cases in the kernel: exhaustive operands
+at widths 1–4, plus zero, one, and signed/unsigned boundaries at widths 32/64/129.
+Expected results use integer arithmetic and individual binary digits, independently
+of Lean's BitVec operators. Whole SMT/CHC targets and four session snapshots are
+compared with handwritten propositions and with their reloaded output.
+
+Five completed CLI proofs check 21 exact/associative/boundary cases, signed versus
+unsigned ordering, function congruence, a Horn model, and wraparound that makes a
+Horn model impossible. Invalid widths, overflowing decimal literals, stale aliases,
+and later unsupported operators must fail before output. Width changes, shifts,
+rotations, BV division/remainder, and BV/Int conversions remain outside this fragment.

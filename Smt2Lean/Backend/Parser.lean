@@ -171,6 +171,7 @@ private def parseScript
             "UF", "LIA", "NIA", "UFLIA", "UFNIA",
             "QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA",
             "QF_LIRA", "QF_NIRA", "QF_UFLIRA", "QF_UFNIRA", "LIRA", "NIRA", "UFLIRA", "UFNIRA",
+            "QF_BV", "QF_UFBV", "BV", "UFBV",
             "ALL", "HORN"].find?
             (fun logic => cmd.toString == s!"(set-logic {logic})")
           | throw (.unsupported s!"unsupported logic: {cmd}")
@@ -201,7 +202,7 @@ private def parseScript
         let term := terms.back!
         let sort ← ofExcept term.getSort
         unless isScalarSort sort query.sorts || (← isSupportedFunction sort query.sorts) do
-          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, Real, a declared uninterpreted sort, or a first-order function over these sorts")
+          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, Real, BitVec, a declared uninterpreted sort, or a first-order function over these sorts")
         let symbol ← ofExcept term.getSymbol
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")

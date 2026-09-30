@@ -6,12 +6,13 @@ namespace Smt2Lean.Helpers
 open Lean Meta Qq
 
 -- Keep printed types usable in Init-only output after importing Mathlib's notation.
-@[delab app.Int, delab app.Real] private def printScalar : Lean.PrettyPrinter.Delaborator.Delab :=
+@[delab app.Nat, delab app.Int, delab app.Real] private def printScalar : Lean.PrettyPrinter.Delaborator.Delab :=
   Lean.PrettyPrinter.Delaborator.delabConst
 
 /-- Names reserved for the operator definitions copied into generated files. -/
 def isHelper (name : Name) : Bool :=
-  name == `SMT.xor || name == `SMT.intDiv || name == `SMT.intMod || name == `SMT.realDiv || match name with
+  #[`SMT.xor, `SMT.intDiv, `SMT.intMod, `SMT.realDiv,
+    `SMT.bvnand, `SMT.bvnor, `SMT.bvxnor, `SMT.bvcomp].contains name || match name with
     | .str `SMT suffix => suffix.startsWith "distinct" &&
         (suffix.drop 8).toString.toNat?.isSome
     | _ => false
@@ -28,6 +29,15 @@ private def define (name : Name) (levels : List Name) (value : Expr) : MetaM Nam
 
 def xor : MetaM Name :=
   define `SMT.xor [] q(fun (p q : Prop) => (p ∧ ¬q) ∨ (¬p ∧ q))
+
+/-- Preserve the names of derived bitvector operators in the generated statement. -/
+def bitvec (kind : cvc5.Kind) : MetaM Name := do
+  match kind with
+  | .BITVECTOR_NAND => define `SMT.bvnand [] q(fun {w : Nat} (x y : BitVec w) => ~~~(x &&& y))
+  | .BITVECTOR_NOR => define `SMT.bvnor [] q(fun {w : Nat} (x y : BitVec w) => ~~~(x ||| y))
+  | .BITVECTOR_XNOR => define `SMT.bvxnor [] q(fun {w : Nat} (x y : BitVec w) => ~~~(x ^^^ y))
+  | .BITVECTOR_COMP => define `SMT.bvcomp [] q(fun {w : Nat} (x y : BitVec w) => BitVec.ofBool (x == y))
+  | _ => throwError "unsupported bitvector helper: {kind}"
 
 /-- SMT integer division has an unconstrained, input-dependent result at zero. -/
 def intDiv : MetaM Name :=
