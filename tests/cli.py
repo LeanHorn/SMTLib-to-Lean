@@ -452,6 +452,72 @@ def check_bitvectors(lean, tmp):
     print("Bitvector CLI passed: core-only SMT/CHC output, five completed proofs, and scope/error protection")
 
 
+def check_bitvector_widths(lean, tmp):
+    """Exact widths, standalone output, and completed refutations/Horn models."""
+    for fixture, goal in [(ROOT / "tests/translation/bitvec/widths.smt2", "Refutation"),
+                          (CHC / "widths.smt2", "Problem")]:
+        output = tmp / f"widths-{goal}"
+        run(fixture, "--out", output)
+        assert check_generated(lean, output, goal=goal).startswith("import Init\n")
+    exact = [
+        "(= (concat #b1 #b00 #b101) #b100101)",
+        "(= ((_ extract 7 4) #xa5) #xa)", "(= ((_ extract 3 0) #xa5) #x5)",
+        "(= ((_ extract 7 7) #xa5) #b1)", "(= ((_ extract 0 0) #xa5) #b1)",
+        "(= ((_ extract 7 0) #xa5) #xa5)",
+        "(= ((_ zero_extend 0) #x8) #x8)", "(= ((_ sign_extend 0) #x8) #x8)",
+        "(= ((_ zero_extend 4) #x8) #x08)", "(= ((_ sign_extend 4) #x8) #xf8)",
+        "(= ((_ sign_extend 4) #x7) #x07)",
+        "(= ((_ sign_extend 7) #b1) #xff)", "(= ((_ zero_extend 7) #b1) #x01)",
+        "(= ((_ repeat 1) #xa) #xa)", "(= ((_ repeat 3) #xa) #xaaa)",
+        "(= ((_ extract 8 4) ((_ repeat 3) #xa)) #b01010)",
+    ]
+    for width in [32, 64, 129]:
+        half = 2 ** (width - 1)
+        exact.extend([
+            f"(= ((_ sign_extend 1) (_ bv{half} {width})) (_ bv{3 * half} {width + 1}))",
+            f"(= ((_ extract {width} 1) (concat (_ bv{half + 1} {width}) #b0)) (_ bv{half + 1} {width}))",
+        ])
+    cases = [
+        ("exact", "QF_BV", "(assert (not (and " + " ".join(exact) + ")))", "Refutation",
+         "  intro h\n  apply h\n  decide\n"),
+        ("roundtrip", "QF_BV", "(declare-const hi (_ BitVec 4))(declare-const lo (_ BitVec 3))"
+         "(assert (distinct ((_ extract 6 3) (concat hi lo)) hi))", "Refutation",
+         "  intro hi lo h\n  exact h BitVec.extractLsb'_append_eq_left\n"),
+        ("extension", "QF_BV", "(assert (= ((_ sign_extend 4) #x8) ((_ zero_extend 4) #x8)))", "Refutation",
+         "  intro h\n  exact (by decide : (248 : BitVec 8) ≠ 8) h\n"),
+        ("horn-model", "HORN", "(declare-fun P ((_ BitVec 8)) Bool)"
+         "(assert (P ((_ sign_extend 4) #x8)))(assert (=> (P ((_ zero_extend 4) #x8)) false))", "Problem",
+         "  refine ⟨(fun x => x = 248), rfl, ?_⟩\n"
+         "  intro h\n  exact (by decide : (8 : BitVec 8) ≠ 248) h\n"),
+        ("horn-repeat", "HORN", "(declare-fun P ((_ BitVec 8)) Bool)"
+         "(assert (P ((_ repeat 2) #xa)))(assert (=> (P (concat #xa #xa)) false))", "¬ Problem",
+         "  rintro ⟨p, fact, safety⟩\n  exact safety fact\n"),
+    ]
+    for name, logic, body, target, proof in cases:
+        source, output = tmp / f"widths-{name}.smt2", tmp / f"widths-{name}"
+        source.write_text(f"(set-logic {logic}){body}(check-sat)")
+        run(source, "--out", output)
+        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        assert generated.startswith("import Init\n")
+        completed = output / "Query.lean"
+        completed.write_text(generated.split("-- Proofs\n", 1)[0]
+                             + f"theorem checked : {target} := by\n" + proof)
+        check_lean(lean, completed, complete=True)
+    for name, tail, reason in [
+        ("slice", "(assert (= ((_ extract 4 0) #xf) #b01111))", "high extract index"),
+        ("repeat", "(assert (= ((_ repeat 0) #xf) #xf))", "number of repeats > 0"),
+        ("width", "(assert (= ((_ zero_extend 4) #xf) #xf))", "same type"),
+        ("hidden", "(define-fun ignore ((x (_ BitVec 8))) Bool true)"
+         "(assert (ignore ((_ zero_extend 4) (bvshl #x1 #x1))))", "BITVECTOR_SHL"),
+        ("unused", "(define-fun bad () (_ BitVec 8) ((_ zero_extend 4) (bvudiv #x1 #x1)))", "BITVECTOR_UDIV"),
+    ]:
+        source, output = tmp / f"widths-invalid-{name}.smt2", tmp / f"widths-invalid-{name}"
+        source.write_text("(set-logic ALL)(assert (= ((_ repeat 2) #xa) #xaa))(check-sat)" + tail)
+        assert reason in run(source, "--out", output, code=1).stderr
+        assert not output.exists()
+    print("Bitvector widths CLI passed: standalone SMT/CHC output, five completed proofs, and later-error protection")
+
+
 def main():
     prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
     lean = Path(prefix) / "bin/lean"
@@ -487,6 +553,7 @@ def main():
         check_reals(lean, tmp)
         check_conversions(lean, tmp)
         check_bitvectors(lean, tmp)
+        check_bitvector_widths(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
             for name, body, count in [

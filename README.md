@@ -81,7 +81,7 @@ The translator supports a first-order SMT-LIB fragment over Bool, Int, Real, fix
 
 Mixed Int/Real expressions support exact `to_real` casts, floor-based `to_int`, and `is_int`. Real output uses the pinned Mathlib; other output uses Lean core. Division at zero preserves arbitrary, shared interpretations.
 
-Bitvectors support modular addition, subtraction, multiplication, negation, bitwise operations, signed/unsigned comparisons, and `bvcomp`. Width-changing operations, shifts, rotations, division/remainder, and BV/Int conversions remain unsupported.
+Bitvectors support modular arithmetic, bitwise operations, signed/unsigned comparisons, `bvcomp`, concatenation, extraction, zero/sign extension, and repetition. Shifts, rotations, division/remainder, and BV/Int conversions remain unsupported.
 
 Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
 

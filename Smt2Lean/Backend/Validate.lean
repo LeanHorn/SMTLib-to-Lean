@@ -95,7 +95,8 @@ def validateTerm (root : cvc5.Term)
           throw (.unsupported s!"unbound variable: {term}")
         pure children.isEmpty
       | .NOT | .NEG | .ABS | .TO_INTEGER | .IS_INTEGER => pure (children.size == 1)
-      | .BITVECTOR_NEG | .BITVECTOR_NOT => pure (children.size == 1)
+      | .BITVECTOR_NEG | .BITVECTOR_NOT | .BITVECTOR_EXTRACT | .BITVECTOR_REPEAT
+      | .BITVECTOR_ZERO_EXTEND | .BITVECTOR_SIGN_EXTEND => pure (children.size == 1)
       | .TO_REAL => do
         -- cvc5 also accepts Real here; SMT-LIB specifies an Int argument.
         unless children.size == 1 && children[0]!.getSort!.isInteger do
@@ -104,7 +105,8 @@ def validateTerm (root : cvc5.Term)
       | .ITE => pure (children.size == 3)
       | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT | .INTS_DIVISION | .DIVISION =>
         pure (children.size >= 2)
-      | .BITVECTOR_ADD | .BITVECTOR_MULT | .BITVECTOR_AND | .BITVECTOR_OR | .BITVECTOR_XOR =>
+      | .BITVECTOR_ADD | .BITVECTOR_MULT | .BITVECTOR_AND | .BITVECTOR_OR | .BITVECTOR_XOR
+      | .BITVECTOR_CONCAT =>
         pure (children.size >= 2)
       | .BITVECTOR_SUB | .BITVECTOR_NAND | .BITVECTOR_NOR | .BITVECTOR_XNOR | .BITVECTOR_COMP
       | .BITVECTOR_ULT | .BITVECTOR_ULE | .BITVECTOR_UGT | .BITVECTOR_UGE

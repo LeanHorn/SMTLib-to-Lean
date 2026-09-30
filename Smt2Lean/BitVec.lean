@@ -9,8 +9,33 @@ open Lean Meta Qq
   let width : Nat := (← ofExcept sort.getBitVectorSize).toNat
   return q(BitVec $width)
 
+/-- Indexed width changes and concatenation; native parsing checks the indices. -/
+private def reconstructWidthChange : Smt.TermReconstructor := fun term => do
+  let kind ← ofExcept term.getKind
+  unless #[cvc5.Kind.BITVECTOR_CONCAT, .BITVECTOR_EXTRACT, .BITVECTOR_REPEAT,
+      .BITVECTOR_ZERO_EXTEND, .BITVECTOR_SIGN_EXTEND].contains kind do return none
+  let width : Q(Nat) ← pure <| toExpr term[0]!.getSort!.getBitVectorSize!.toNat
+  let x : Q(BitVec $width) ← Smt.Reconstruct.reconstructTerm term[0]!
+  if kind == .BITVECTOR_CONCAT then
+    let mut value : Expr := x
+    for child in term.getChildren[1:] do
+      value ← mkAppM ``BitVec.append #[value, ← Smt.Reconstruct.reconstructTerm child]
+    return value
+  let index : Q(Nat) ← pure <| toExpr term.getOp![0]!.getIntegerValue!.toNat
+  match kind with
+  | .BITVECTOR_EXTRACT =>
+    let lo : Q(Nat) ← pure <| toExpr term.getOp![1]!.getIntegerValue!.toNat
+    return q(BitVec.extractLsb $index $lo $x)
+  | .BITVECTOR_REPEAT => return q(BitVec.replicate $index $x)
+  | _ =>
+    -- SMT gives the added bits; Lean expects the final width, w + index.
+    let resultWidth : Q(Nat) ← pure <| toExpr term.getSort!.getBitVectorSize!.toNat
+    if kind == .BITVECTOR_ZERO_EXTEND then return q(BitVec.zeroExtend $resultWidth $x)
+    return q(BitVec.signExtend $resultWidth $x)
+
 /-- Fixed-width formulas using Lean core. Only the audited operators are enabled. -/
 def reconstruct : Smt.TermReconstructor := fun term => do
+  if let some value ← reconstructWidthChange term then return value
   let kind ← ofExcept term.getKind
   if kind == .CONST_BITVECTOR then
     let width : Q(Nat) ← pure <| toExpr term.getSort!.getBitVectorSize!.toNat

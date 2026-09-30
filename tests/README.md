@@ -237,5 +237,24 @@ compared with handwritten propositions and with their reloaded output.
 Five completed CLI proofs check 21 exact/associative/boundary cases, signed versus
 unsigned ordering, function congruence, a Horn model, and wraparound that makes a
 Horn model impossible. Invalid widths, overflowing decimal literals, stale aliases,
-and later unsupported operators must fail before output. Width changes, shifts,
+and later unsupported operators must fail before output. Shifts,
 rotations, BV division/remainder, and BV/Int conversions remain outside this fragment.
+
+`translation/bitvec/widths.smt2` and `translation/chc/widths.smt2` combine concat,
+extract, zero/sign extension, and repeat through functions, definitions, quantifiers,
+and Horn guards/arguments. The Lean tests check 1,647 additional cases against
+natural-number arithmetic: every valid slice at widths 1–4, mixed-width concat,
+zero-bit extension, repetition, and boundaries at widths 32/64/129. Whole targets
+and three assumption/pop/reset snapshots are compared with handwritten propositions.
+
+Five additional completed CLI proofs cover 22 exact cases, symbolic concat/extract
+round trips, distinct zero/sign extension results, and satisfiable/impossible Horn
+models. Output compiles with only `Init`. Invalid indices, zero repetitions, wrong
+result widths, and unsupported operators hidden inside width changes must fail;
+a later error leaves no output. Core concat/repeat width proofs use the permitted
+foundational axioms `propext` and `Quot.sound`, with no admissions.
+
+```sh
+lake exe smt2lean tests/translation/bitvec/widths.smt2 --out bitvec-widths-demo
+lake env lean bitvec-widths-demo/Query.lean
+```

@@ -766,8 +766,6 @@ private def checkBitvectors : IO Unit := do
     ("(declare-fun f ((_ BitVec 4)) Bool)(assert (f #x00))", 3, "type"),
     ("(assert (bvcomp #x0 #x0))", 2, "Bool"),
     ("(assert (= (bvsub #x5 #x3 #x1) #x1))", 2, "invalid kind"),
-    ("(assert (= (concat #b0 #b1) #b01))", 2, "BITVECTOR_CONCAT"),
-    ("(assert (= ((_ extract 0 0) #x1) #b1))", 2, "BITVECTOR_EXTRACT"),
     ("(assert (= (bvshl #x1 #x1) #x2))", 2, "BITVECTOR_SHL"),
     ("(assert (= (bvudiv #x1 #x1) #x1))", 2, "BITVECTOR_UDIV"),
     ("(assert (= ((_ int_to_bv 4) 1) #x1))", 2, "INT_TO_BITVECTOR")
@@ -775,6 +773,31 @@ private def checkBitvectors : IO Unit := do
     checkRejected "invalid-bv" s!"(set-logic ALL){body}(check-sat)" ordinal reason
   checkRejected "qf-bv-quantifier"
     "(set-logic QF_BV)(assert (forall ((x (_ BitVec 4))) (= x x)))(check-sat)" 2 "quantif"
+
+private def checkBitvectorWidths : IO Unit := do
+  let path := "tests/translation/bitvec/widths.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 10 && query.definitions.size == 1) "lost width-changing terms"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "BV query invoked a solver"
+    let concat := query.assertions[0]![0]!
+    require (concat.getKind! == .BITVECTOR_CONCAT && concat.getNumChildren == 3 &&
+      concat.getSort!.getBitVectorSize! == 8) "concat lost operands or result width"
+  ).runIO
+  for (body, reason) in #[
+    ("(= ((_ extract 4 0) #xf) #b01111)", "high extract index is bigger"),
+    ("(= ((_ extract 0 1) #xf) #b1)", "high extract index is smaller"),
+    ("(= ((_ extract 0) #xf) #b1)", "invalid number of indices"),
+    ("(= ((_ extract 1 0 0) #xf) #b1)", "invalid number of indices"),
+    ("(= ((_ extract -1 0) #xf) #b1)", "Negative numerals"),
+    ("(= ((_ repeat 0) #xf) #xf)", "number of repeats > 0"),
+    ("(= ((_ zero_extend -1) #xf) #xf)", "Negative numerals"),
+    ("(= ((_ sign_extend 1) #xf #xf) #b11111)", "invalid kind"),
+    ("(= (concat #xf) #xf)", "invalid kind"),
+    ("(= ((_ extract 0 0) 1) #b1)", "expecting a bit-vector"),
+    ("(= ((_ zero_extend 4) #xf) #xf)", "same type"),
+    ("(= ((_ repeat 2) #xf) #xf)", "same type")
+  ] do
+    checkRejected "invalid-bv-width" s!"(set-logic ALL)(assert {body})(check-sat)" 2 reason
 
 def main : IO Unit := do
   checkAcceptedQueries
@@ -787,6 +810,7 @@ def main : IO Unit := do
   checkReals
   checkConversions
   checkBitvectors
+  checkBitvectorWidths
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

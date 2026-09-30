@@ -124,8 +124,9 @@ private def checkEmission (value : Expr) (kind : GoalKind := .refutation)
       statementAxioms.all axioms.contains do
     throwError "expected an unfinished proof template"
 
-private def checkAxioms (name : Name) (usesClassical : Bool) : CoreM Unit := do
-  let expected := if usesClassical then #[``propext, ``Classical.choice, ``Quot.sound] else #[]
+private def checkAxioms (name : Name) (usesClassical : Bool)
+    (extraAxioms : Array Name := #[]) : CoreM Unit := do
+  let expected := (if usesClassical then #[``propext, ``Classical.choice, ``Quot.sound] else #[]) ++ extraAxioms
   let actual ← collectAxioms name
   unless actual.size == expected.size && actual.all expected.contains do
     throwError "unexpected statement axioms: {actual}; expected {expected}"
@@ -386,7 +387,7 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
   IO.println "CHC reconstruction passed: 19 clauses match handwritten Lean propositions"
 
 private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr)
-    (usesClassical : Bool := false) : MetaM Unit := do
+    (usesClassical : Bool := false) (extraAxioms : Array Name := #[]) : MetaM Unit := do
   let value ← defineProblem problem
   if value.hasFVar || value.hasMVar || value.hasLooseBVars then
     throwError "Problem contains unresolved variables"
@@ -395,7 +396,7 @@ private def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr)
     | throwError "expected a definition named Problem"
   checkEqual definition.type q(Prop)
   checkEqual definition.value value
-  checkAxioms `Problem usesClassical
+  checkAxioms `Problem usesClassical extraAxioms
   checkEmission value (kind := .problem) (origin := problem.source)
     (assertions := problem.clauses.filterMap (·.source))
 
@@ -801,6 +802,98 @@ private def checkBitvectors (env : Environment) : IO Unit := do
   discard <| check.toIO { fileName := "BV session", fileMap := default } { env := emitted }
   IO.println "Bitvector translation passed: complete SMT/CHC targets, four logic profiles, and scoped snapshots"
 
+/-- Width-changing operations checked against natural-number arithmetic. -/
+private def checkBitvectorWidthValues (env : Environment) : IO Unit := do
+  let literal (n width : Nat) := s!"(_ bv{n} {width})"
+  let samples (width : Nat) := if width ≤ 4 then (List.range (2 ^ width)).toArray
+    else #[0, 1, 2 ^ (width - 1) - 1, 2 ^ (width - 1), 2 ^ width - 1]
+  let mut total := 0
+  for width in #[1, 2, 3, 4, 32, 64, 129] do
+    let mut rows : Array String := #[]
+    let slices := if width ≤ 4 then Id.run do
+        let mut result := #[]
+        for hi in [:width] do
+          for lo in [:hi + 1] do result := result.push (hi, lo)
+        return result
+      else #[(width - 1, 0), (0, 0), (width - 1, width - 1),
+        (width - 1, width - 3), (width / 2 + 1, width / 2 - 1)]
+    for x in samples width do
+      let a := literal x width
+      let mut checks := #[]
+      for (hi, lo) in slices do
+        let size := hi - lo + 1
+        checks := checks.push s!"(= ((_ extract {hi} {lo}) {a}) {literal (x / 2 ^ lo % 2 ^ size) size})"
+      for extra in #[0, 1, 3, 65] do
+        let size := width + extra
+        let signed := if x < 2 ^ (width - 1) then x else x + 2 ^ size - 2 ^ width
+        checks := checks.push s!"(= ((_ zero_extend {extra}) {a}) {literal x size})"
+        checks := checks.push s!"(= ((_ sign_extend {extra}) {a}) {literal signed size})"
+      for copies in #[1, 2, 3] do
+        let value := (List.range copies).foldl (fun n _ => n * 2 ^ width + x) 0
+        checks := checks.push s!"(= ((_ repeat {copies}) {a}) {literal value (width * copies)})"
+      for otherWidth in #[1, 2, 3, 64] do
+        for y in samples otherWidth do
+          checks := checks.push s!"(= (concat {a} {literal y otherWidth}) \
+            {literal (x * 2 ^ otherWidth + y) (width + otherWidth)})"
+      total := total + checks.size
+      rows := rows.push ("(and " ++ String.intercalate " " checks.toList ++ ")")
+    let input := "(set-logic QF_BV)" ++ String.join (rows.toList.map (s!"(assert {·})")) ++ "(check-sat)"
+    runQuery env s!"bitvector width changes {width}" input fun query =>
+      withAssertions query fun parameters assertions => do
+        unless parameters.isEmpty && assertions.size == rows.size do
+          throwError "width changes introduced parameters or lost assertions"
+        for value in assertions do checkWithKernel (← mkDecideProof value)
+  IO.println s!"Bitvector width values passed: {total} kernel-checked cases; widths 1–4 and 32/64/129"
+
+private def checkBitvectorWidths (env : Environment) : IO Unit := do
+  checkBitvectorWidthValues env
+  let path := "tests/translation/bitvec/widths.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ (x : BitVec 4) (y : BitVec 3) (p : Prop) (f : BitVec 8 → BitVec 4),
+      (((x ++ y) ++ (1 : BitVec 1)) = (x ++ (y ++ (1 : BitVec 1))) ∧
+        (x ++ x).extractLsb 7 4 = x ∧
+        (x ++ x).extractLsb 3 0 = x ∧
+        x.zeroExtend 4 = x.signExtend 4 ∧
+        x.signExtend 8 = (if BitVec.slt x 0 = true then (15 : BitVec 4) ++ x else x.zeroExtend 8) ∧
+        x.replicate 2 = x ++ x ∧
+        f ((if p then x else 1).zeroExtend 8) = (x.replicate 3).extractLsb 6 3 ∧
+        (x.zeroExtend 8).extractLsb 7 4 = 0 ∧
+        (∀ _x : BitVec 4, ∃ x : BitVec 8, x.extractLsb 3 0 = 15) ∧
+        (∀ x : BitVec 4, x.replicate 2 = x ++ x)) → False)
+  let path := "tests/translation/chc/widths.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    -- Core concat/repeat width proofs use these two foundational axioms.
+    checkProblem problem (extraAxioms := #[``propext, ``Quot.sound])
+      q(∃ (p : BitVec 4 → Prop) (r : BitVec 8 → BitVec 8 → BitVec 8 → Prop),
+      p 15 ∧
+      (∀ x : BitVec 4, p x → x.extractLsb 3 3 = 1 → r (x.zeroExtend 8) (x.signExtend 8) (x.replicate 2)) ∧
+      (∀ x y z : BitVec 8, r x y z → z = (z.extractLsb 3 0 ++ z.extractLsb 3 0) → p (y.extractLsb 3 0)) ∧
+      (∀ x y z : BitVec 8, r x y z → x.extractLsb 3 0 ≠ y.extractLsb 3 0 → False))
+  let source ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(push 1)(declare-const x (_ BitVec 4))\
+     (define-fun p () Bool (= ((_ sign_extend 4) x) #xff))\
+     (check-sat-assuming (p))(pop 1)(declare-const x (_ BitVec 8))\
+     (assert (= ((_ extract 3 0) x) #xf))(check-sat)\
+     (reset)(set-logic HORN)(declare-fun P ((_ BitVec 12)) Bool)\
+     (assert (P ((_ repeat 3) #xf)))(check-sat)" env
+  unsafe enableInitializersExecution
+  let some emitted ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throw (IO.userError "width-changing session did not elaborate")
+  let check : MetaM Unit := do
+    for (name, expected) in #[
+      (`Refutation_1, q(∀ x : BitVec 4, x.signExtend 8 = 255 → False)),
+      (`Refutation_2, q(∀ x : BitVec 8, x.extractLsb 3 0 = 15 → False)),
+      (`Problem_3, q(∃ p : BitVec 12 → Prop, p ((15 : BitVec 4).replicate 3)))
+    ] do
+      let .defnInfo definition ← getConstInfo name | throwError "missing {name}"
+      checkEqual definition.value expected
+      checkStatementAxioms name
+  discard <| check.toIO { fileName := "width-changing session", fileMap := default } { env := emitted }
+  IO.println "Bitvector widths passed: complete SMT/CHC targets and scoped width changes"
+
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
   let path := "tests/translation/sorts/uninterpreted.smt2"
@@ -949,6 +1042,7 @@ def main : IO Unit := do
   checkReals env
   checkConversions env
   checkBitvectors env
+  checkBitvectorWidths env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env
