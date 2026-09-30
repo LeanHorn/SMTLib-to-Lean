@@ -236,14 +236,14 @@ private def checkSessions : IO Unit := do
     ("(push)", 0, 2, "expected one SMT-LIB numeral"),
     ("(pop 0 0)", 0, 2, "expected one SMT-LIB numeral"),
     ("(push 4294967296)", 0, 2, "UInt32 limit"),
-    ("(check-sat)\n(assert (= (div 1 0) 0))", 1, 3, "INTS_DIVISION"),
+    ("(check-sat)\n(assert (= (^ 1 0) 0))", 1, 3, "POW"),
     ("(check-sat)\n(assert", 1, 3, "unterminated command"),
     ("(check-sat)\n(exit)\n(pop 1)", 1, 4, "after exit"),
     ("(push 1)\n(declare-const x Int)\n(check-sat)\n(pop 1)\n(assert (= x 0))", 1, 6, "not declared"),
     ("(push 1)\n(define-fun f () Int 0)\n(check-sat)\n(pop 1)\n(assert (= f 0))", 1, 6, "not declared"),
     ("(push 1)\n(define-sort I () Int)\n(check-sat)\n(pop 1)\n(declare-const x I)", 1, 6, "not declared"),
     ("(push 1)\n(assert (! true :named p))\n(check-sat)\n(pop 1)\n(assert p)", 1, 6, "not declared"),
-    ("(push 1)\n(define-fun bad () Int (div 1 0))\n(pop 1)\n(check-sat)", 0, 3, "INTS_DIVISION")
+    ("(push 1)\n(define-fun bad () Int (^ 1 0))\n(pop 1)\n(check-sat)", 0, 3, "POW")
   ] do
     let calls ← IO.mkRef 0
     let result ← (parseAndInspectSession ("(set-logic ALL)\n" ++ body)
@@ -291,9 +291,9 @@ private def checkDefinitions : IO Unit := do
     (#["set-logic"] ++ Array.replicate 33 "define-fun" ++ #["assert"])
 
   let rejected : Array (String × String × Nat × String) := #[
-    ("unused-div", "(define-fun bad () Int (div 1 2))", 2, "INTS_DIVISION"),
-    ("unused-mod", "(define-fun bad ((x Int)) Int (mod x 2))", 2, "INTS_MODULUS"),
-    ("unused-branch", "(define-fun bad () Int (ite true 0 (div 1 0)))", 2, "INTS_DIVISION"),
+    ("unused-power", "(define-fun bad () Int (^ 1 2))", 2, "POW"),
+    ("unused-power-parameter", "(define-fun bad ((x Int)) Int (^ x 2))", 2, "POW"),
+    ("unused-branch", "(define-fun bad () Int (ite true 0 (^ 1 0)))", 2, "POW"),
     ("unused-real", "(define-fun bad () Real 0.0)", 2, "unsupported definition signature"),
     ("unused-param", "(define-fun bad ((x Real)) Int 0)", 2, "unsupported definition signature"),
     ("recursive", "(define-fun bad ((x Int)) Int (bad x))", 2, "not declared"),
@@ -306,8 +306,8 @@ private def checkDefinitions : IO Unit := do
     ("arity", "(define-fun f ((x Int) (y Int)) Int x) (assert (= (f 1) 0))", 3, "partially apply"),
     ("argument", "(define-fun f ((x Int)) Int x) (assert (= (f true) 0))", 3, "type"),
     ("result", "(define-fun f () Int true)", 2, "invalid sort"),
-    ("discarded-argument", "(define-fun f ((x Int)) Int 0) (assert (= (f (div 1 0)) 0))", 3, "INTS_DIVISION"),
-    ("discarded-body", "(define-fun f ((x Int)) Int 0) (define-fun g () Int (f (div 1 0)))", 3, "INTS_DIVISION"),
+    ("discarded-argument", "(define-fun f ((x Int)) Int 0) (assert (= (f (^ 1 0)) 0))", 3, "POW"),
+    ("discarded-body", "(define-fun f ((x Int)) Int 0) (define-fun g () Int (f (^ 1 0)))", 3, "POW"),
     ("alias-real", "(define-sort Bad () Real)", 2, "unsupported sort alias"),
     ("alias-array", "(define-sort Bad (T) (Array T T))", 2, "unsupported sort alias"),
     ("alias-bv", "(define-sort Bad () (_ BitVec 8))", 2, "unsupported sort alias"),
@@ -337,7 +337,7 @@ private def checkNamedAssertions : IO Unit := do
       require (query.assertions[0]! == query.assertions[1]![0]! &&
         query.assertions[0]! == query.assertions[2]!) "named reference changed its body"
       require (query.definitions.size == 1) "native named bindings became artificial definitions"
-  let invalid := "(set-logic ALL)\n  (assert (! (= (div 1 0) 0) :named |bad body|))\n(check-sat)"
+  let invalid := "(set-logic ALL)\n  (assert (! (= (^ 1 0) 0) :named |bad body|))\n(check-sat)"
   match ← (parseAndInspectQuery invalid (fun _ => throw (.error "invalid query reached inspect"))
       (name := "named-error.smt2")).run with
   | .error (.unsupported message) =>
@@ -355,8 +355,8 @@ private def checkNamedAssertions : IO Unit := do
     ("self", "(assert (! a :named a))", 2, "not declared"),
     ("forward", "(assert (and a (! true :named a)))", 2, "not declared"),
     ("open", "(assert (forall ((x Int)) (! (> x 0) :named bad)))", 2, "Cannot name a term in a binder"),
-    ("operator", "(assert (! (= (div 1 0) 0) :named bad))", 2, "INTS_DIVISION"),
-    ("discarded", "(assert (let ((ignored (! (div 1 0) :named bad))) true))", 2, "INTS_DIVISION"),
+    ("operator", "(assert (! (= (^ 1 0) 0) :named bad))", 2, "POW"),
+    ("discarded", "(assert (let ((ignored (! (^ 1 0) :named bad))) true))", 2, "POW"),
     ("discarded-sort", "(assert (let ((ignored (! 1.0 :named bad))) true))", 2, "expected Bool, Int, or a declared uninterpreted sort"),
     ("unknown-attribute", "(assert (! true :unknown (:named fake)))", 2, "unsupported annotation"),
     ("after-check", "(check-sat) (assert (! true :named later))", 3, "after check-sat")
@@ -394,8 +394,8 @@ private def checkRejectedQueries : IO Unit := do
       2, "quantifiers require"),
     ("bound-array", "(set-logic ALL)\n(assert (exists ((a (Array Int Int))) true))\n(check-sat)",
       2, "unsupported bound variable sort"),
-    ("ite-unsupported-branch", "(set-logic ALL)\n(assert (forall ((p Bool)) (= (ite p 1 (div 1 0)) 1)))\n(check-sat)",
-      2, "INTS_DIVISION"),
+    ("ite-unsupported-branch", "(set-logic ALL)\n(assert (forall ((p Bool)) (= (ite p 1 (^ 1 0)) 1)))\n(check-sat)",
+      2, "POW"),
     ("quantifier-weight", "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :weight 5)))\n(check-sat)",
       3, "unsupported annotation: :weight"),
     ("out-of-scope", "(set-logic ALL)\n(assert (forall ((x Int)) (= x x)))\n(assert (= x 0))\n(check-sat)",
@@ -408,10 +408,10 @@ private def checkRejectedQueries : IO Unit := do
       2, "not declared"),
     ("let-out-of-scope", "(set-logic QF_LIA)\n(assert (let ((local 1)) (= local 1)))\n(assert (= local 0))\n(check-sat)",
       3, "not declared"),
-    ("let-unsupported-value", "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (div x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
-      3, "INTS_DIVISION"),
-    ("let-unsupported-body", "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (mod next 2) 0)))\n(check-sat)",
-      3, "INTS_MODULUS"),
+    ("let-unsupported-value", "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (^ x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
+      3, "POW"),
+    ("let-unsupported-body", "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (^ next 2) 0)))\n(check-sat)",
+      3, "POW"),
     ("ite-condition", "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
       2, "condition"),
     ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
@@ -473,8 +473,7 @@ private def checkRejectedQueries : IO Unit := do
     checkRejected s!"reject-arity-{term}"
       s!"(set-logic ALL)\n(assert {term})\n(check-sat)" 2 s!"invalid kind '{kind}'"
   -- Registering lean-smt's integer handlers must not enable unaudited operators.
-  for (term, kind) in #[("(div x 2)", "INTS_DIVISION"), ("(mod x 2)", "INTS_MODULUS"),
-      ("(div x 0)", "INTS_DIVISION"), ("(mod x 0)", "INTS_MODULUS")] do
+  for (term, kind) in #[("(^ x 2)", "POW"), ("(^ x 0)", "POW")] do
     checkRejected s!"reject-{kind}"
       s!"(set-logic ALL)\n(declare-const x Int)\n(assert (= (+ 1 {term}) 0))\n(check-sat)"
       3 s!"unsupported operator: {kind}"
@@ -501,7 +500,7 @@ private def checkQuantifierHints : IO Unit := do
     ("(! (P x) :weight true)", "unsupported annotation: :weight"),
     ("(! (P x) :unknown yes)", "unsupported annotation: :unknown"),
     ("(! (P x) :fun-def)", "unsupported annotation: :fun-def"),
-    ("(! (P (div x 2)) :pattern ((P x)))", "INTS_DIVISION"),
+    ("(! (P (^ x 2)) :pattern ((P x)))", "POW"),
     ("(! (P x) :pattern ((missing x)))", "not declared"),
     ("(! (P x) :pattern ((P true)))", "type"),
     ("(! (P x) :pattern (P x))", "fully-applied terms"),
@@ -518,10 +517,10 @@ private def checkQuantifierHints : IO Unit := do
     ("(set-logic ALL)\n(assert (! true :qid q))\n(check-sat)", 2, "quantified formula bodies"),
     ("(set-logic ALL)\n(assert (forall ((x Int)) (! true :qid q)))\n(assert q)\n(check-sat)",
       3, "not declared"),
-    ("(set-logic ALL)\n(define-fun unused () Bool (forall ((x Int)) (! (= (div x 2) 0) :qid q)))\n(check-sat)",
-      2, "INTS_DIVISION"),
-    ("(set-logic ALL)\n(assert (let ((unused (! (forall ((x Int)) (! (= (div x 2) 0) :qid q)) :named bad))) true))\n(check-sat)",
-      2, "INTS_DIVISION")
+    ("(set-logic ALL)\n(define-fun unused () Bool (forall ((x Int)) (! (= (^ x 2) 0) :qid q)))\n(check-sat)",
+      2, "POW"),
+    ("(set-logic ALL)\n(assert (let ((unused (! (forall ((x Int)) (! (= (^ x 2) 0) :qid q)) :named bad))) true))\n(check-sat)",
+      2, "POW")
   ] do checkRejected "invalid-hinted-query" input ordinal reason
   -- Check binder identity directly, not just the names printed by cvc5.
   (do
@@ -593,7 +592,7 @@ private def checkSourceLocations : IO Unit := do
         source.span.stop.line == 5 && source.span.stop.column == 11) "wrong multiline assertion span"
       require (query.source.map (·.span.start.line) == some 6) "wrong check-sat location"
   for (input, location, reason) in #[
-    ("; α\n(set-logic ALL)\n  (assert\n    (= (div 1 0) 0))\n(check-sat)",
+    ("; α\n(set-logic ALL)\n  (assert\n    (= (^ 1 0) 0))\n(check-sat)",
       "3:3: command 2:", "unsupported operator"),
     ("(set-logic QF_UF)\n(assert true)\n(check-sat)\n(assert",
       "4:8: command 4:", "unterminated command"),
@@ -696,6 +695,17 @@ private def checkSorts : IO Unit := do
     | .error _ => pure ()
   IO.println "Sort parsing passed: native identity, aliases, local/global scopes, and resets"
 
+private def checkDivision : IO Unit := do
+  let path := "tests/translation/int/division.smt2"
+  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
+    require (query.assertions.size == 11 && query.definitions.size == 2) "division fixture lost terms"
+    require (!(query.invoked.any (·.startsWith "check-sat"))) "division invoked a solver query"
+  ).runIO
+  for term in #["(div 1)", "(mod 1)", "(mod 1 2 3)", "(div true 2)", "(mod 1 false)", "(div 1.5 2)"] do
+    match ← (parseAndInspectQuery s!"(set-logic ALL)(assert (= {term} 0))(check-sat)" (fun _ => pure ())).run with
+    | .ok _ => throw (IO.userError s!"accepted ill-typed division: {term}")
+    | .error _ => pure ()
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
@@ -703,6 +713,7 @@ def main : IO Unit := do
   checkAssumptions
   checkResets
   checkSorts
+  checkDivision
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

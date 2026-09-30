@@ -51,7 +51,7 @@ private def renderHelper (name : Name) : MetaM String := do
     let universes := if definition.levelParams.isEmpty then "" else
       ".{" ++ String.intercalate ", " (definition.levelParams.map toString) ++ "}"
     return s!"def {name}{universes} " ++ String.intercalate " " binders.toList ++
-      " : Prop :=\n  " ++ (← printExpr body).replace "\n" "\n  " ++ "\n\n"
+      s!" : {← printExpr (← inferType body)} :=\n  " ++ (← printExpr body).replace "\n" "\n  " ++ "\n\n"
 
 private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × String) := do
   let (baseName, baseProof, description, proofTarget) := match goal.kind with

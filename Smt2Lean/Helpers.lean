@@ -6,7 +6,7 @@ open Lean Meta Qq
 
 /-- Names reserved for the operator definitions copied into generated files. -/
 def isHelper (name : Name) : Bool :=
-  name == `SMT.xor || match name with
+  name == `SMT.xor || name == `SMT.intDiv || name == `SMT.intMod || match name with
     | .str `SMT suffix => suffix.startsWith "distinct" &&
         (suffix.drop 8).toString.toNat?.isSome
     | _ => false
@@ -23,6 +23,16 @@ private def define (name : Name) (levels : List Name) (value : Expr) : MetaM Nam
 
 def xor : MetaM Name :=
   define `SMT.xor [] q(fun (p q : Prop) => (p ∧ ¬q) ∨ (¬p ∧ q))
+
+/-- SMT integer division has an unconstrained, input-dependent result at zero. -/
+def intDiv : MetaM Name :=
+  define `SMT.intDiv [] q(fun (zero : Int → Int) (x y : Int) =>
+    if y = 0 then zero x else x / y)
+
+/-- Modulo has its own zero-case interpretation, independent of division. -/
+def intMod : MetaM Name :=
+  define `SMT.intMod [] q(fun (zero : Int → Int) (x y : Int) =>
+    if y = 0 then zero x else x % y)
 
 /-- One polymorphic helper per arity, sharing lean-smt's pairwise encoding. -/
 def distinct (arity : Nat) : MetaM Name := do

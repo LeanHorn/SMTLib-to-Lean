@@ -64,8 +64,8 @@ private def checkParser : IO Unit := do
   for (name, suffix, ordinal, reason) in #[
     ("bound-real", "(assert (forall ((x Real)) true))\n(check-sat)",
       2, "unsupported bound variable sort"),
-    ("div", "(assert (forall ((x Int)) (= (div x 2) 0)))\n(check-sat)",
-      2, "unsupported operator: INTS_DIVISION"),
+    ("power", "(assert (forall ((x Int)) (= (^ x 2) 0)))\n(check-sat)",
+      2, "unsupported operator: POW"),
     ("missing-check", "(assert true)", 3, "expected one check-sat"),
     ("repeated-check", "(check-sat)\n(check-sat)", 3, "after check-sat"),
     ("trailing-command", "(check-sat)\n(push 1)", 3, "after check-sat")
@@ -288,16 +288,16 @@ private def checkRejectedProblems : IO Unit := do
     ("relation-argument", "(=> (R x (P x) x) done)", "inside a relation argument"),
     ("relation-xor-argument", "(R x (xor cond (P x)) x)", "inside a relation argument"),
     ("relation-distinct-argument", "(R x (distinct cond (P x)) x)", "inside a relation argument"),
-    ("unsupported-guard", "(=> (> (div x 2) 0) done)", "unsupported operator"),
-    ("unsupported-head-argument", "(P (mod x 2))", "unsupported operator"),
-    ("let-unsupported-guard", "(let ((half (div x 2))) (=> (> half 0) done))", "unsupported operator"),
-    ("let-unsupported-head", "(let ((rest (mod x 2))) (P rest))", "unsupported operator"),
+    ("unsupported-guard", "(=> (> (^ x 2) 0) done)", "unsupported operator"),
+    ("unsupported-head-argument", "(P (^ x 2))", "unsupported operator"),
+    ("let-unsupported-guard", "(let ((half (^ x 2))) (=> (> half 0) done))", "unsupported operator"),
+    ("let-unsupported-head", "(let ((rest (^ x 2))) (P rest))", "unsupported operator"),
     ("let-hidden-relation", "(let ((guard (not (P x)))) (=> guard done))", "inside a theory guard"),
     ("let-hidden-argument", "(let ((arg (P x))) (R x arg x))", "inside a relation argument"),
     ("let-hidden-quantifier", "(let ((guard (exists ((y Int)) (= x y)))) (=> guard (P x)))", "leading forall"),
     ("hinted-negative", "(! (=> (not (P x)) done) :pattern ((P x)) :qid bad)", "inside a theory guard"),
     ("hinted-existential", "(! (exists ((y Int)) (! (P y) :pattern ((P y)))) :qid bad)", "leading forall"),
-    ("hinted-unsupported", "(! (P (div x 2)) :pattern ((P x)))", "unsupported operator"),
+    ("hinted-unsupported", "(! (P (^ x 2)) :pattern ((P x)))", "unsupported operator"),
     ("existential", "(exists ((y Int)) (P y))", "leading forall"),
     ("disjunctive-head", "(=> (P x) (or (P x) done))", "as CHC head")
   ] do
@@ -315,6 +315,21 @@ private def checkRejectedProblems : IO Unit := do
         message.contains reason) s!"{name}: wrong diagnostic: {message}"
     require (!(← inspected.get)) s!"{name}: returned a partial problem"
 
+private def checkLocalCorpus : IO Unit := do
+  let mut total := 0
+  for (file, count) in #[
+    ("lh_sum_rec", 3), ("lh_abs_neg", 5), ("flux_sum_off_by_one", 5), ("flux_bsearch", 15)
+  ] do
+    let path := s!"tests/chc/{file}.smt2"
+    (parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
+      require (problem.clauses.size == count) s!"{file}: lost a clause"
+      require (problem.clauses.map (·.assertionNumber) == (Array.range count).map (· + 1))
+        s!"{file}: clause order changed"
+    ).runIO
+    total := total + count
+  require (total == 28) "wrong local corpus size"
+  IO.println "Local CHC corpus passed: all four files retain their 28 clauses"
+
 def main : IO Unit := do
   checkParser
   checkClauses
@@ -323,6 +338,7 @@ def main : IO Unit := do
   checkRejectedClauses
   checkNativeIdentity
   checkProblems
+  checkLocalCorpus
   checkRejectedProblems
   IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (16 clauses)"
   IO.println "Metadata, clause diagnostics, and whole-problem rejection passed; no solver query invoked."

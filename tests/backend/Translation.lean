@@ -4,6 +4,9 @@ import Lean.Elab.Frontend
 open Lean Meta Qq Classical
 open Smt2Lean.Backend Smt2Lean.Translate Smt2Lean.Emit
 
+local notation "smtDiv" => (fun (zero : Int → Int) (x y : Int) => ite (y = 0) (zero x) (x / y))
+local notation "smtMod" => (fun (zero : Int → Int) (x y : Int) => ite (y = 0) (zero x) (x % y))
+
 local notation "exclusive" => (fun p q : Prop => (p ∧ ¬q) ∨ (¬p ∧ q))
 
 private def checkEqual (actual expected : Expr) : MetaM Unit := do
@@ -448,7 +451,7 @@ private def checkHornProblems (env : Environment) : IO Unit := do
   let path := "tests/translation/chc/definitions.smt2"
   let input ← IO.FS.readFile path
   let hinted := input.replace "(=> |entry clause| (rule x b))"
-    "(! (=> |entry clause| (rule x b)) :pattern ((P x) (R x b)) :no-pattern (P (div x 2)) :qid step)"
+    "(! (=> |entry clause| (rule x b)) :pattern ((P x) (R x b)) :no-pattern (P (^ x 2)) :qid step)"
     |>.replace "(=> (bad x b) false)" "(! (=> (bad x b) false) :pattern ((R x b)) :qid safety)"
   for text in #[input, hinted] do
     runProblem env path text fun problem => do
@@ -463,6 +466,77 @@ private def checkHornProblems (env : Environment) : IO Unit := do
         p 0 ∧ (∀ (x : Int) (b : Prop), p 0 → p x → x > 0 → r (if b then x + 1 else x) b) ∧
         (∀ (x : Int) (b : Prop), r x b → x > 10 → b → False))
   IO.println "CHC problems passed: 16 complete propositions and emitted definitions; axiom dependencies checked"
+
+/-- Compare signed arithmetic with a quotient/remainder search using only +, *, and order. -/
+private def checkDivision (env : Environment) : IO Unit := do
+  let numeral (n : Int) := if n < 0 then s!"(- {n.natAbs})" else toString n
+  let mut cases : Array String := #[]
+  for i in [:17] do
+    let m := (i : Int) - 8
+    for j in [:9] do
+      let n := (j : Int) - 4
+      if n == 0 then continue
+      let mut result : Option (Int × Int) := none
+      for k in [:19] do
+        let q := (k : Int) - 9
+        let r := m - n * q
+        if 0 ≤ r && r < (n.natAbs : Int) then result := some (q, r)
+      let some (q, r) := result | throw (IO.userError "Euclidean witness search failed")
+      cases := cases ++ #[s!"(= (div {numeral m} {numeral n}) {numeral q})",
+        s!"(= (mod {numeral m} {numeral n}) {numeral r})"]
+  cases := cases ++ #[
+    "(= (div 340282366920938463463374607431768211457 2) 170141183460469231731687303715884105728)",
+    "(= (mod 340282366920938463463374607431768211457 (- 2)) 1)",
+    "(= (div (- 340282366920938463463374607431768211457) 2) (- 170141183460469231731687303715884105729))",
+    "(= (mod (- 340282366920938463463374607431768211457) (- 2)) 1)",
+    "(= (div 100 3 (- 2)) (- 16))"]
+  let input := "(set-logic ALL)" ++ String.join (cases.toList.map (s!"(assert {·})")) ++ "(check-sat)"
+  runQuery env "Euclidean division" input fun query =>
+    withAssertions query fun parameters assertions => do
+      unless parameters.isEmpty && assertions.size == cases.size do
+        throwError "literal nonzero divisors introduced interpretations or lost assertions"
+      for value in assertions do
+        checkWithKernel (← mkDecideProof value)
+  let path := "tests/translation/int/division.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    checkFunctionIsolation query
+    checkRefutation query (usesClassical := true) q(
+      ∀ (d m : Int → Int) (x y : Int) (flag : Prop) (f namedD namedM : Int → Int),
+        ((-5 : Int) / 2 = -3 ∧ (5 : Int) / -2 = -2 ∧ (-5 : Int) % -2 = 1 ∧
+          (100 : Int) / 3 / -2 = -16 ∧
+          smtMod m (smtDiv d x y) y = smtMod m (smtDiv d x y) y ∧
+          smtDiv d x 0 = smtDiv d (x + 0) 0 ∧ smtMod m x 0 = smtMod m (x + 0) 0 ∧
+          smtDiv d (smtDiv d x 0) 0 = f (smtMod m x 0) ∧
+          (∀ x : Int, ∃ y : Int, smtDiv d x y = smtMod m x y) ∧
+          (if flag then smtDiv d x y else smtMod m x y) = f (x / 2) ∧ namedD x = namedM x) → False)
+  -- Constants of the same spelling as internal keys remain separate native bindings.
+  runQuery env "division binder shadowing"
+    "(set-logic ALL)(declare-const |SMT.divZero| Int)(assert (forall ((divZero Int)) (= (div divZero 0) |SMT.divZero|)))(check-sat)"
+    fun query => checkRefutation query q(∀ (d : Int → Int) (x : Int),
+      (∀ y : Int, smtDiv d y 0 = x) → False)
+  -- A nonzero literal needs no arbitrary interpretation, even through a definition.
+  runQuery env "nonzero definition"
+    "(set-logic ALL)(define-fun two () Int (- 2))(declare-const x Int)(assert (= (div x two) (mod x two)))(check-sat)"
+    fun query => checkRefutation query q(∀ x : Int, x / -2 = x % -2 → False)
+  runQuery env "division assumptions"
+    "(set-logic ALL)(declare-const x Int)(define-fun p () Bool (= (div x 0) 7))(check-sat-assuming (p))"
+    fun query => checkRefutation query q(∀ (d : Int → Int) (x : Int), smtDiv d x 0 = 7 → False)
+  runQuery env "mixed division chain"
+    "(set-logic ALL)(assert (= (div 100 3 0 (- 2)) 7))(check-sat)"
+    fun query => checkRefutation query q(∀ d : Int → Int, smtDiv d (100 / 3) 0 / -2 = 7 → False)
+  runQuery env "signed zero divisors"
+    "(set-logic ALL)(declare-const x Int)(assert (= (div x (- 0)) (mod x (- (- 0)))))(check-sat)"
+    fun query => checkRefutation query q(∀ (d m : Int → Int) (x : Int), smtDiv d x 0 = smtMod m x 0 → False)
+  let path := "tests/translation/chc/division.smt2"
+  runProblem env path (← IO.FS.readFile path) fun problem =>
+    checkProblem problem q(∃ A : Type, Nonempty A ∧ ∃ (d m : Int → Int)
+      (p : A → Int → Prop) (r : A → Int → Int → Prop),
+      (∀ (a : A) (x : Int), x / 2 = 0 → p a (x % -2)) ∧
+      (∀ (a : A) (x y : Int), p a x → smtDiv d x y = 7 → smtMod m x y = 3 →
+        r a (smtDiv d x 0) (smtMod m x 0)) ∧
+      (∀ (a : A) (x : Int), r a (smtDiv d x 0) (smtMod m x 0) →
+        smtDiv d x 0 ≠ smtDiv d (x + 0) 0 → False))
+  IO.println s!"Division passed: {cases.size} exact signed/large arithmetic cases; shared zero interpretations and SMT/CHC closure"
 
 /-- Carrier quantification and nonemptiness are part of the closed statement. -/
 private def checkUninterpretedSorts (env : Environment) : IO Unit := do
@@ -578,6 +652,26 @@ private def checkSessions (env : Environment) : IO Unit := do
         unless statements.contains s!"(query {i + 1}: check-sat" do
           throwError "missing query source for {name}"
     discard <| check.toIO { fileName := path, fileMap := default } { env := emitted }
+  let source ← Smt2Lean.Pipeline.translateSession
+    "(set-logic ALL)(check-sat)(push 1)(assert (= (div 1 0) 7))(check-sat)\
+     (push 1)(assert (= (mod 1 0) 3))(check-sat)(pop 2)(check-sat)\
+     (reset)(set-logic HORN)(assert (=> (= (div 1 0) 7) false))(check-sat)" env
+  unsafe enableInitializersExecution
+  let some emitted ← Elab.runFrontend source
+      (({} : Options).setBool `Elab.async false) "Query.lean" `Query
+    | throw (IO.userError "division session did not elaborate")
+  let check : MetaM Unit := do
+    for (name, expected) in #[
+      (`Refutation_1, q(True → False)),
+      (`Refutation_2, q(∀ d : Int → Int, smtDiv d 1 0 = 7 → False)),
+      (`Refutation_3, q(∀ d m : Int → Int, (smtDiv d 1 0 = 7 ∧ smtMod m 1 0 = 3) → False)),
+      (`Refutation_4, q(True → False)),
+      (`Problem_5, q(∃ d : Int → Int, smtDiv d 1 0 = 7 → False))
+    ] do
+      let .defnInfo definition ← getConstInfo name | throwError "missing {name}"
+      checkEqual (← deltaExpand definition.value Smt2Lean.Helpers.isHelper) expected
+      checkStatementAxioms name
+  discard <| check.toIO { fileName := "division session", fileMap := default } { env := emitted }
   IO.println "Session translation passed: SMT/CHC goals match handwritten propositions"
 
 def main : IO Unit := do
@@ -588,6 +682,7 @@ def main : IO Unit := do
   checkUninterpretedSorts env
   checkAxiomRejection
   checkOperatorSemantics env
+  checkDivision env
   checkLetBindings env
   checkDefinitions env
   checkNamedAssertions env

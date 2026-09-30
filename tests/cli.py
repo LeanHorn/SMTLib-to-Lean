@@ -169,6 +169,54 @@ def check_uninterpreted_sorts(lean, tmp):
     print("Sort semantics passed: nonempty, singleton, two-element, infinite, and Horn models; later failures leave no output")
 
 
+def check_integer_division(lean, tmp):
+    """Check model choices at zero and translate the complete original CHC corpus."""
+    for fixture, goal in [(INTEGERS / "division.smt2", "Refutation"), (CHC / "division.smt2", "Problem")]:
+        output = tmp / f"division-{goal}"
+        run(fixture, "--out", output)
+        generated = check_generated(lean, output, goal=goal)
+        assert generated.count("def SMT.intDiv ") == generated.count("def SMT.intMod ") == 1
+    total = 0
+    for name, clauses in [("lh_sum_rec", 3), ("lh_abs_neg", 5), ("flux_sum_off_by_one", 5), ("flux_bsearch", 15)]:
+        output = tmp / f"corpus-{name}"
+        run(ROOT / f"tests/chc/{name}.smt2", "--out", output)
+        generated = check_generated(lean, output, goal="Problem")
+        assert generated.count("(clause ") == clauses, name
+        assert "divZero" not in generated and "modZero" not in generated, name
+        total += clauses
+    assert total == 28
+    cases = [
+        ("negative-divisor", "ALL", "(assert (not (= (div (- 5) (- 2)) 3)))", "Refutation",
+         "  intro h\n  exact h (by decide)\n"),
+        ("zero-choices", "ALL", "(assert (= (div 0 0) 7))(assert (= (div 1 0) 9))(assert (= (mod 0 0) (- 4)))",
+         "¬ Refutation", "  intro h\n  apply h (fun x => if x = 0 then 7 else 9) (fun _ => -4)\n"
+         "  simp [SMT.intDiv, SMT.intMod]\n"),
+        ("congruence", "ALL", "(declare-const x Int)(declare-const y Int)(assert (= x y))"
+         "(assert (distinct (div x 0) (div y 0)))", "Refutation",
+         "  intro d x y h\n  exact h.2 (congrArg (fun z => SMT.intDiv d z 0) h.1)\n"),
+        ("quantifier-sharing", "ALL", "(assert (forall ((x Int)) (= (div x 0) x)))"
+         "(assert (distinct (div 5 0) 5))", "Refutation",
+         "  intro d h\n  exact h.2 (h.1 5)\n"),
+        ("horn-witness", "HORN", "(declare-fun P (Int) Bool)(assert (P (div 0 0)))"
+         "(assert (forall ((x Int)) (=> (and (P x) (distinct x 7)) false)))", "Problem",
+         "  refine ⟨(fun _ => 7), (fun x => x = 7), ?_, ?_⟩\n"
+         "  · rfl\n  · intro x equal different; exact different equal\n"),
+        ("horn-sharing", "HORN", "(assert (=> (distinct (mod 0 0) 7) false))"
+         "(assert (=> (= (mod 0 0) 7) false))", "¬ Problem",
+         "  rintro ⟨m, first, second⟩\n  by_cases h : SMT.intMod m 0 0 = 7\n"
+         "  · exact second h\n  · exact first h\n"),
+    ]
+    for name, logic, body, target, proof in cases:
+        source, output = tmp / f"division-{name}.smt2", tmp / f"division-{name}"
+        source.write_text(f"(set-logic {logic}){body}(check-sat)")
+        run(source, "--out", output)
+        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        completed = output / "Query.lean"
+        completed.write_text(generated.split("-- Proofs\n", 1)[0] + f"theorem checked : {target} := by\n" + proof)
+        check_lean(lean, completed, complete=True)
+    print("Integer division passed: six completed semantic proofs; all four original CHCs elaborate with 28 clauses")
+
+
 def main():
     prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
     lean = Path(prefix) / "bin/lean"
@@ -200,6 +248,7 @@ def main():
             assert query.read_text() == edited
 
         check_uninterpreted_sorts(lean, tmp)
+        check_integer_division(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
             for name, body, count in [
@@ -220,7 +269,7 @@ def main():
         # A later failure must leave no output, even after reconstructing query 1.
         for name, text, reason in [
             ("underflow", "(set-logic ALL)\n(check-sat)\n(pop 1)", "exceeds active scope depth"),
-            ("operator", "(set-logic ALL)\n(check-sat)\n(assert (= (div 1 0) 0))", "unsupported operator"),
+            ("operator", "(set-logic ALL)\n(check-sat)\n(assert (= (^ 1 0) 0))", "unsupported operator"),
             ("popped-name", "(set-logic ALL)\n(push 1)\n(declare-const p Bool)\n"
              "(assert p)\n(check-sat)\n(pop 1)\n(assert p)", "not declared"),
             ("clause", "(set-logic HORN)\n(declare-fun P (Int) Bool)\n(assert (P 0))\n"
@@ -341,7 +390,7 @@ def main():
         text = (CHC / "definitions.smt2").read_text()
         text = text.replace("(=> |entry clause| (rule x b))",
                             "(! (=> |entry clause| (rule x b)) :pattern ((P x) (R x b)) "
-                            ":no-pattern (P (div x 2)) :qid step)")
+                            ":no-pattern (P (^ x 2)) :qid step)")
         text = text.replace("(=> (bad x b) false)",
                             "(! (=> (bad x b) false) :pattern ((R x b)) :qid safety)")
         source.write_text(text)
@@ -393,10 +442,10 @@ def main():
              "(assert (forall ((x Int)) (=> (not (P x)) false)))\n(check-sat)",
              "4:1: query 1: command 4: clause 2:", "CHC relation inside a theory guard"),
             ("later-operator", horn_prefix +
-             "(assert (forall ((x Int)) (=> (= (div x 2) 0) (P x))))\n(check-sat)",
+             "(assert (forall ((x Int)) (=> (= (^ x 2) 0) (P x))))\n(check-sat)",
              "4:1: query 1: command 4: clause 2:", "unsupported operator"),
             ("let-operator", horn_prefix +
-             "(assert (forall ((x Int)) (let ((half (div x 2))) (=> (= half 0) (P x)))))\n(check-sat)",
+             "(assert (forall ((x Int)) (let ((half (^ x 2))) (=> (= half 0) (P x)))))\n(check-sat)",
              "4:1: query 1: command 4: clause 2:", "unsupported operator"),
             ("let-relation", horn_prefix +
              "(assert (forall ((x Int)) (let ((hidden (not (P x)))) (=> hidden (P x)))))\n(check-sat)",
@@ -410,8 +459,8 @@ def main():
              "(assert (=> someP false))\n(check-sat)",
              "5:1: query 1: command 5: clause 2:", "quantifier"),
             ("unused-definition", horn_prefix +
-             "(define-fun bad () Int (div 1 0))\n(check-sat)",
-             "4:1: query 1: command 4:", "INTS_DIVISION"),
+             "(define-fun bad () Int (^ 1 0))\n(check-sat)",
+             "4:1: query 1: command 4:", "POW"),
             ("named-clause", horn_prefix +
              '(assert (! (forall ((x Int)) (=> (not (P x)) false)) :named |bad clause|))\n(check-sat)',
              '4:1: query 1: command 4 (:named "bad clause"): clause 2:', "CHC relation inside a theory guard"),
@@ -475,20 +524,19 @@ def main():
             "(set-logic QF_LRA)\n(check-sat)",
             "(set-logic QF_UF)\n(check-sat)\n(pop 1)",
             "(set-logic QF_UF)\n(check-sat)\n(assert",
-            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (div x 0) 0))\n(check-sat)",
-            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (mod x 0) 0))\n(check-sat)",
+            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (= (^ x 0) 0))\n(check-sat)",
             "(set-logic ALL)\n(declare-fun P (Real) Bool)\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int Int) Int)\n(assert (= (f 1) 0))\n(check-sat)",
             "(set-logic QF_UFLIA)\n(declare-fun f (Int) Int)\n(assert (= (f true) 0))\n(check-sat)",
             "(set-logic ALL)\n(assert (forall ((x Real)) true))\n(check-sat)",
             "(set-logic QF_LIA)\n(assert (forall ((x Int)) (> x 0)))\n(check-sat)",
-            "(set-logic ALL)\n(assert (exists ((p Bool)) (= (ite p 1 (div 1 0)) 1)))\n(check-sat)",
+            "(set-logic ALL)\n(assert (exists ((p Bool)) (= (ite p 1 (^ 1 0)) 1)))\n(check-sat)",
             "(set-logic ALL)\n(assert (ite 1 true false))\n(check-sat)",
             "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
             "(set-logic QF_LIA)\n(assert (let ((x 1) (y x)) (= y 1)))\n(check-sat)",
             "(set-logic QF_UF)\n(assert (let ((p true) (q p)) q))\n(check-sat)",
-            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (div x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
-            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (mod next 2) 0)))\n(check-sat)",
+            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (^ x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
+            "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (^ next 2) 0)))\n(check-sat)",
             "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :weight 5)))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
@@ -516,14 +564,14 @@ def main():
         assert '":7:1-8:11 (assertion 1, command 4)' in shifted_code
         assert without_sources(shifted_code) == without_sources(generated)
         for name, text, location, reason in [
-            ("multiline", "; λ\n(set-logic ALL)\n  (assert\n    (= (div 1 0) 0))\n(check-sat)",
+            ("multiline", "; λ\n(set-logic ALL)\n  (assert\n    (= (^ 1 0) 0))\n(check-sat)",
              "3:3: command 2:", "unsupported operator"),
-            ("definition-source", "; λ\n(set-logic ALL)\n  (define-fun bad ((x Int)) Int\n    (div x 2))\n(check-sat)",
-             "3:3: command 2:", "INTS_DIVISION"),
-            ("named-source", '(set-logic ALL)\n  (assert (! (= (div 1 0) 0) :named |bad body|))\n(check-sat)',
-             '2:3: command 2 (:named "bad body"):', "INTS_DIVISION"),
-            ("unused-named-source", '(set-logic ALL)\n  (assert (let ((ignored (! (div 1 0) :named |unused body|))) true))\n(check-sat)',
-             '2:3: command 2 (:named "unused body"):', "INTS_DIVISION"),
+            ("definition-source", "; λ\n(set-logic ALL)\n  (define-fun bad ((x Int)) Int\n    (^ x 2))\n(check-sat)",
+             "3:3: command 2:", "POW"),
+            ("named-source", '(set-logic ALL)\n  (assert (! (= (^ 1 0) 0) :named |bad body|))\n(check-sat)',
+             '2:3: command 2 (:named "bad body"):', "POW"),
+            ("unused-named-source", '(set-logic ALL)\n  (assert (let ((ignored (! (^ 1 0) :named |unused body|))) true))\n(check-sat)',
+             '2:3: command 2 (:named "unused body"):', "POW"),
             ("alias-source", "(set-logic ALL)\n  (define-sort Bad () Real)\n(check-sat)",
              "2:3: command 2:", "unsupported sort alias"),
             ("bad-string", '(set-logic QF_UF)\n(set-info :source "unfinished',

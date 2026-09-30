@@ -9,7 +9,7 @@ private def usage : String :=
   "Translate every check-sat/check-sat-assuming in a supported SMT-LIB session into Query.lean.\n" ++
   "Supports Bool, Int, and nonempty uninterpreted sorts (declare-sort of arity 0).\n" ++
   "Supports push/pop, resets, and global declarations; statements precede proof templates.\n" ++
-  "HORN logic generates Problem (satisfying relations); other supported logics generate Refutation.\n" ++
+  "HORN logic generates Problem (model existence); other supported logics generate Refutation.\n" ++
   "Permitted result requests are recorded as unexecuted comments; no solver is run.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++
   "The proof template contains sorry and must be completed in Lean."

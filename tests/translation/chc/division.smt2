@@ -1,0 +1,12 @@
+; Zero-case functions are shared across every clause and quantified variable.
+(set-logic HORN)
+(declare-sort Node 0)
+(declare-fun P (Node Int) Bool)
+(declare-fun R (Node Int Int) Bool)
+(define-fun half ((x Int)) Int (div x 2))
+(assert (forall ((n Node) (x Int)) (=> (= (half x) 0) (P n (mod x (- 2))))))
+(assert (forall ((n Node) (x Int) (y Int))
+  (=> (and (P n x) (= (div x y) 7) (= (mod x y) 3)) (R n (div x 0) (mod x 0)))))
+(assert (forall ((n Node) (x Int))
+  (=> (and (R n (div x 0) (mod x 0)) (distinct (div x 0) (div (+ x 0) 0))) false)))
+(check-sat)

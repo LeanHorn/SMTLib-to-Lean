@@ -35,7 +35,7 @@ compile without it. The integer proof uses `propext`; the other three are axiom-
 | Directory | Cases |
 | --- | --- |
 | `translation/bool/` | Contradiction, connectives, empty assertions, solver options, and metadata |
-| `translation/int/` | Exact literals beyond 64 bits, arithmetic, comparisons, distinct, conditionals, and contradictory bounds |
+| `translation/int/` | Exact literals beyond 64 bits, arithmetic including div/mod, comparisons, distinct, conditionals, and contradictory bounds |
 | `translation/sorts/` | Nonempty uninterpreted carriers, mixed functions, aliases, definitions, equality/distinct, conditionals, and quantifiers |
 | `translation/functions/` | Mixed Bool/Int functions and predicates, quoted names, argument order, unused parameters, and congruence |
 | `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |
@@ -131,3 +131,28 @@ unused carriers. Six completed CLI proofs distinguish nonempty, singleton,
 two-element, and infinite domains, plus satisfiable and impossible Horn models.
 They supplement the four existing completed proofs. Unsupported Horn declarations
 and later sort-scope failures still reject the entire session before output.
+
+## Integer division and modulo
+
+`translation/int/division.smt2` combines signed arithmetic, chained division,
+zero divisors, definitions, let, functions, quantifiers, and name collisions.
+`translation/chc/division.smt2` uses both operators across guards, relation arguments,
+and clauses, together with an uninterpreted carrier.
+
+The encoding follows the [SMT-LIB integer theory](https://smt-lib.org/theories-Ints.shtml):
+nonzero divisors use Euclidean division; the remainder is nonnegative even for
+negative operands. At zero, separate `Int → Int` parameters preserve unspecified
+results consistently across all occurrences. Refutations quantify these functions
+universally; CHC models quantify them existentially before the relations.
+
+The Lean tests prove 277 signed/large-number arithmetic cases, deriving the small
+expected quotients/remainders by an independent search over multiplication and order.
+They compare complete statements against handwritten targets and check assumption,
+scope, and reset isolation. Six completed CLI proofs distinguish arbitrary zero
+values, input dependence, division/modulo independence, and congruence across
+quantifiers and clauses. Statement definitions still reject admitted axioms.
+
+All four original `chc/` files now translate and elaborate with **28 clauses**:
+`lh_sum_rec` (3), `lh_abs_neg` (5), `flux_sum_off_by_one` (5), and `flux_bsearch` (15).
+This checks translation, not satisfiability or Flex proofs. Regression rejection
+cases now use unsupported exponentiation instead of the newly supported div/mod.

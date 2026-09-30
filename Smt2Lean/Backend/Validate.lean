@@ -84,10 +84,10 @@ def validateTerm (root : cvc5.Term)
         pure children.isEmpty
       | .NOT | .NEG | .ABS => pure (children.size == 1)
       | .ITE => pure (children.size == 3)
-      | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT =>
+      | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT | .INTS_DIVISION =>
         pure (children.size >= 2)
       -- cvc5 expands chains into conjunctions of adjacent binary comparisons.
-      | .EQUAL | .LT | .LEQ | .GT | .GEQ => pure (children.size == 2)
+      | .EQUAL | .LT | .LEQ | .GT | .GEQ | .INTS_MODULUS => pure (children.size == 2)
       | _ => throw (.unsupported s!"unsupported operator: {kind}")
     unless validArity do
       throw (.unsupported s!"unsupported arity for {kind}: {children.size}")

@@ -6,10 +6,10 @@
 (define-fun lifted ((n Int)) Bool
   (forall ((b Bool)) (! (R n b) :pattern ((R n b)) :qid helper)))
 
-; Multiple triggers and an excluded trigger. div occurs only in a discarded hint.
+; Multiple triggers and an excluded trigger. Unsupported exponentiation occurs only in a discarded hint.
 (assert (forall ((x Int))
   (! (P x) :pattern ((P x)) :pattern ((P (+ x 1)))
-    :no-pattern (P (div x 2)) :qid |rule :named id|)))
+    :no-pattern (P (^ x 2)) :qid |rule :named id|)))
 (assert (forall ((x Int)) (P x)))
 
 ; Alternating quantifiers, shadowing, and a qid that matches a global name.
