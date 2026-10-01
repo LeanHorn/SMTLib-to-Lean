@@ -6,6 +6,17 @@ open Lean Meta
 
 def isGenerated (name : Name) : Bool := (`SMT.Datatypes).isPrefixOf name
 
+/-- A nullary constructor can hide all evidence of its external field carriers.
+Keep those arguments explicit so re-elaboration cannot lose their identities. -/
+def showParameters (value : Expr) : CoreM Expr :=
+  Core.transform value (post := fun expression => do
+    if expression.isApp then
+      let .const name _ := expression.getAppFn | return .done expression
+      if isGenerated name then
+        if let .ctorInfo info ← getConstInfo name then
+          if info.numParams > 0 then return .done expression.setAppPPExplicit
+    return .done expression)
+
 /-- Find entire mutual groups, including types used only in constructor fields. -/
 def groups (values : Array Expr) : MetaM (Array (Array Name)) := do
   let mut found : Array (Array Name) := #[]

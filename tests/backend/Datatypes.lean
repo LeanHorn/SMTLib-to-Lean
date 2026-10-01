@@ -32,7 +32,7 @@ def checkDatatypes (env : Environment) : IO Unit := do
         checkEmission value .problem
     else
       runQuery env file input fun query => do
-        unless query.datatypes.size == 7 && query.assertions.size == 11 do
+        unless query.datatypes.size == 8 && query.assertions.size == 13 do
           throwError "datatype fixture lost declarations or assertions"
         let value ← defineRefutation query
         checkStatementAxioms `Refutation

@@ -29,6 +29,7 @@ private def sourceComment (label : String) (source : Source.Ref) : String :=
   s!"{span.stop.line}:{span.stop.column} ({label}, command {source.number}){source.namedContext}\n"
 
 private def printExpr (value : Expr) : MetaM String := do
+  let value ← Datatypes.showParameters value
   let body ← withOptions (fun options => options
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true
