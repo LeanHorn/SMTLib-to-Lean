@@ -11,6 +11,7 @@ open Lean Meta Qq
 
 /-- Names reserved for the operator definitions copied into generated files. -/
 def isHelper (name : Name) : Bool :=
+  (`SMT.Selectors).isPrefixOf name ||
   #[`SMT.xor, `SMT.intDiv, `SMT.intMod, `SMT.realDiv, `SMT.arrayLaws, `SMT.constArrayLaw,
     `SMT.bvnand, `SMT.bvnor, `SMT.bvxnor, `SMT.bvcomp,
     `SMT.bvshl, `SMT.bvlshr, `SMT.bvashr].contains name || match name with
@@ -18,7 +19,8 @@ def isHelper (name : Name) : Bool :=
         (suffix.drop 8).toString.toNat?.isSome
     | _ => false
 
-private def define (name : Name) (levels : List Name) (value : Expr) : MetaM Name := do
+/-- Install a helper only after the kernel checks its complete definition. -/
+def define (name : Name) (levels : List Name) (value : Expr) : MetaM Name := do
   unless (← getEnv).contains name do
     let declaration : Declaration := .defnDecl {
       name, levelParams := levels, type := ← inferType value, value

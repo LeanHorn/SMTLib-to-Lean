@@ -19,6 +19,11 @@ def showParameters (value : Expr) : CoreM Expr :=
 
 /-- Find entire mutual groups, including types used only in constructor fields. -/
 def groups (values : Array Expr) : MetaM (Array (Array Name)) := do
+  let mut values := values
+  for value in values do
+    for name in value.getUsedConstants.filter ((`SMT.Selectors).isPrefixOf ·) do
+      let helper ← getConstInfoDefn name
+      values := values ++ #[helper.type, helper.value]
   let mut found : Array (Array Name) := #[]
   for value in values do
     for name in value.getUsedConstants.filter isGenerated do

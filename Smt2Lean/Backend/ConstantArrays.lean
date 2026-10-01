@@ -206,7 +206,8 @@ def prepare (command : Source.Command) (solver : cvc5.Solver) (symbols : cvc5.Sy
   let bindings := query.namedArrayConstants.reverse ++
     (knownTerms query).map (fun declaration => (declaration.term.getSymbol!, #[])) ++
     query.datatypes.flatMap (fun group => group.types.flatMap fun datatype =>
-      datatype.constructors.map (fun constructor => (constructor.name, #[])))
+      datatype.constructors.flatMap (fun constructor =>
+        #[(constructor.name, #[])] ++ constructor.fields.map (fun field => (field.name, #[]))))
   if tokens[1]? == some "define-fun" && items.size == 5 then
     let .list parameters := items[2]! | throw (.error "expected definition parameters")
     let locals := parameters.filterMap fun parameter => match parameter with

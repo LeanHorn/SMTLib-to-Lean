@@ -32,7 +32,7 @@ structure ParsedSort where
   source : Option Source.Ref := none
   deriving Inhabited
 
-/-- A constructor field, retaining its selector identity for later selector support. -/
+/-- A constructor field with its native selector identity and result sort. -/
 structure DatatypeField where
   name : String
   selector : cvc5.Term

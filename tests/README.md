@@ -345,6 +345,17 @@ lake env lean bitvec-conversions-demo/Query.lean
 Datatype regressions are in `translation/datatypes/`: `constructors.smt2` combines
 enums, records, recursive/mutual types, definitions, quantifiers, and arrays;
 `chc.smt2` covers Horn arguments and guards; `sessions.smt2` covers scopes and resets.
+`selectors.smt2` and `selectors-chc.smt2` combine field projections, wrong-constructor
+choices, recursive/mutual fields, definitions, quantifiers, and array composition.
 `backend/Datatypes.lean` checks native metadata, field order, emitted signatures,
 and complete targets. `cli_checks/datatypes.py` checks standalone output,
 constructor-law proofs, CHC models/refutations, and unsupported-feature rejection.
+Selector checks compare complete targets and helper bodies after re-elaboration.
+Completed proofs establish matching-constructor projection, permit different
+wrong-constructor results for different inputs, and require equal inputs to agree.
+Single-constructor records introduce no fallback parameter.
+
+```sh
+lake exe smt2lean tests/translation/datatypes/selectors.smt2 --out selectors-demo
+lake env lean selectors-demo/Query.lean
+```

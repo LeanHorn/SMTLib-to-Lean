@@ -6,7 +6,8 @@ from .support import ROOT, run, check_generated, check_lean
 def check_datatypes(lean, tmp):
     fixtures = ROOT / "tests/translation/datatypes"
     for fixture, goal, count in [("constructors", "Refutation", 1),
-                                 ("chc", "Problem", 1), ("sessions", "Refutation", 9)]:
+                                 ("chc", "Problem", 1), ("sessions", "Refutation", 10),
+                                 ("selectors", "Refutation", 1), ("selectors-chc", "Problem", 1)]:
         output = tmp / f"datatypes-{fixture}"
         run(fixtures / f"{fixture}.smt2", "--out", output)
         generated = check_generated(lean, output, goal=goal, count=count)
@@ -86,10 +87,63 @@ example (n : T0_Counter) : n ≠ T0_Counter.c1_step n := by
     run(source, "--out", output)
     assert check_generated(lean, output).startswith("import Mathlib.Data.Real.Basic")
 
+    # Wrong-constructor results may differ, but equal inputs must agree.
+    declarations = "(declare-datatype D ((has (field Int)) (other (tag Int)))) "
+    source, output = tmp / "selector-laws.smt2", tmp / "selector-laws"
+    source.write_text("(set-logic ALL) " + declarations + """
+(assert (= (field (has 7)) 7))
+(assert (distinct (field (other 1)) (field (other 2))))
+(check-sat)
+(assert (distinct (field (other (+ 0 1))) (field (other 1))))
+(check-sat)
+""")
+    run(source, "--out", output)
+    generated = check_generated(lean, output, count=2)
+    checked = tmp / "SelectorLaws.lean"
+    checked.write_text(generated.split("-- Proofs\n")[0] + r'''
+theorem different_inputs : ¬ Refutation_1 := by
+  intro h
+  apply h (fun d => SMT.Datatypes.g0.T0_D.casesOn d (fun _ => 0) (fun i => i))
+  exact ⟨rfl, by change (1 : Int) ≠ 2; decide⟩
+theorem equal_inputs : Refutation_2 := by
+  intro choice h
+  exact h.2.2 rfl
+example (choice : SMT.Datatypes.g0.T0_D → Int) (x : Int) :
+    SMT.Selectors.g0.T0_D.s0_0_field choice (SMT.Datatypes.g0.T0_D.c0_has x) = x := rfl
+''')
+    check_lean(lean, checked, complete=True)
+
+    # CHC choices are existential and precede the relations: exhibit a concrete model.
+    source, output = tmp / "selector-model.smt2", tmp / "selector-model"
+    source.write_text("(set-logic HORN) " + declarations + """
+(declare-fun R (Int) Bool)
+(assert (R (field (has 7))))
+(assert (=> (= (field (other 1)) (field (other 2))) false))
+(check-sat)
+""")
+    run(source, "--out", output)
+    generated = check_generated(lean, output, goal="Problem")
+    checked = tmp / "SelectorModel.lean"
+    checked.write_text(generated.replace("  sorry\n", """
+  refine ⟨(fun d => SMT.Datatypes.g0.T0_D.casesOn d (fun _ => 0) (fun i => i)),
+    (fun _ => True), True.intro, ?_⟩
+  change (1 : Int) ≠ 2
+  decide
+"""))
+    check_lean(lean, checked, complete=True)
+
     # Reject later unsupported features without leaving a partial session artifact.
     common = "(set-logic ALL) (declare-datatype D ((a) (b (field Int)))) (check-sat) "
     rejected = [
-        ("selector", common + "(assert (= (field a) 0))", "APPLY_SELECTOR"),
+        ("selector-sort", common + "(assert (= (field 0) 0))", ""),
+        ("selector-arity", common + "(assert (= (field a a) 0))", ""),
+        ("selector-scope", "(set-logic ALL) (push 1) "
+         "(declare-datatype D ((a (field Int)))) (check-sat) (pop 1) "
+         "(assert (= (field (a 0)) 0))", ""),
+        ("selector-const", "(set-logic ALL) "
+         "(declare-datatype D ((box (|const| (Array Int Int))))) "
+         "(assert (= (select ((as |const| (Array Int Int)) 0) 0) 0))",
+         "Type ascription"),
         ("tester", common + "(assert ((_ is a) a))", "APPLY_TESTER"),
         ("match", common + "(assert (match a ((a true) ((b x) false))))", "MATCH"),
         ("parametric", "(set-logic ALL) (declare-datatypes ((List 1)) "

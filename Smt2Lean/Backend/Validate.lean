@@ -53,6 +53,21 @@ def validateTerm (root : cvc5.Term)
       throw (.unsupported s!"unsupported value sort: {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if kind == .APPLY_SELECTOR then
+      unless children.size == 2 && children[1]!.getSort!.isDatatype &&
+          isValueSort children[1]!.getSort! sorts do
+        throw (.unsupported "expected a datatype selector and one datatype argument")
+      let datatype ← ofExcept children[1]!.getSort!.getDatatype
+      let mut found := false
+      for constructor in datatype do
+        for h : i in [:constructor.getNumSelectors] do
+          if (← constructor[i].getTerm) == children[0]! then
+            unless sort == (← constructor[i].getCodomainSort) do
+              throw (.unsupported "wrong datatype selector result sort")
+            found := true
+      unless found do throw (.unsupported "unmapped datatype selector")
+      pending := pending.push (children[1]!, bound)
+      continue
     if kind == .APPLY_CONSTRUCTOR then
       unless sort.isDatatype && !children.isEmpty do
         throw (.unsupported "expected a datatype constructor application")

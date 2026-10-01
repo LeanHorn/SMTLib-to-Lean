@@ -13,7 +13,7 @@ structure CompiledGroup where
   names : Array Name
   deriving Inhabited
 
-private def namePart (name : String) : String :=
+def namePart (name : String) : String :=
   String.ofList <| name.toList.map fun c =>
     if ('a' ≤ c && c ≤ 'z') || ('A' ≤ c && c ≤ 'Z') || c.isDigit || c == '_' then c else '_'
 

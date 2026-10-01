@@ -1,5 +1,5 @@
 import Smt2Lean.Theory.Array
-import Smt2Lean.Theory.Datatype
+import Smt2Lean.Theory.Selector
 
 namespace Smt2Lean.Models
 
@@ -46,7 +46,8 @@ where
       (order : List Dependency) (parameters laws : Array Expr)
       (cache : Std.HashMap cvc5.Sort Expr) (context : Smt.Reconstruct.Context) : MetaM α := do
     match order with
-    | [] => inspect parameters laws cache context
+    | [] => Selectors.withInterpretations groups terms cache context fun choices context =>
+        inspect (parameters ++ choices) laws cache context
     | .datatype i :: rest =>
       let (cache, context) ← Datatypes.bind groups[i]! cache context
       go groups constants rest parameters laws cache context

@@ -87,7 +87,7 @@ BV/Int conversions support `int_to_bv` (`int2bv`), `ubv_to_int` (`bv2nat`), and 
 
 Arrays support `select`, `store`, equality, nested sorts, and quantification, including Horn relation arguments. Generated propositions bind nonempty array carriers and their read/write/extensionality laws explicitly. Constant arrays support literal and symbolic payloads, including local bindings, definitions, named terms, and nested array values.
 
-Monomorphic datatypes support enums, records, direct recursion, and mutually recursive declaration groups. Constructors work with functions, quantifiers, definitions, arrays, and Horn clauses. Generated Lean inductives preserve constructor disjointness, injectivity, and finite-constructor semantics. Selectors, testers, `match`, parametric datatypes, and nested recursion remain unsupported.
+Monomorphic datatypes support enums, records, direct recursion, and mutually recursive declaration groups. Constructors and selectors work with functions, quantifiers, definitions, arrays, and Horn clauses. Generated Lean inductives preserve constructor disjointness, injectivity, and finite-constructor semantics. Selectors return their field on the owning constructor and preserve shared, input-dependent arbitrary results on other constructors. Testers, `match`, parametric datatypes, and nested recursion remain unsupported.
 
 Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
 

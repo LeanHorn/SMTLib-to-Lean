@@ -73,7 +73,7 @@ private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
 
 /-- Try our encodings first, then the upstream handlers for the supported theories. -/
 @[smt_term_reconstruct] private def reconstructTerm : Smt.TermReconstructor := fun term => do
-  for reconstruct in [Datatypes.reconstruct, Arrays.reconstruct, BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
+  for reconstruct in [Selectors.reconstruct, Datatypes.reconstruct, Arrays.reconstruct, BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
       Smt.Reconstruct.Prop.reconstructProp, Smt.Reconstruct.Builtin.reconstructBuiltin,
       Smt.Reconstruct.Int.reconstructInt, Smt.Reconstruct.UF.reconstructUF] do
     if let some value ← reconstruct term then return value
