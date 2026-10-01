@@ -9,6 +9,8 @@ structure ParsedDefinition where
   parameters : Array cvc5.Term
   body : cvc5.Term
   source : Source.Ref
+  /-- Constant-array constructors in the source, including discarded subterms. -/
+  arrayConstants : Array cvc5.Term := #[]
 
 /-- SMT mode rejects HORN; CHC and auto modes accept it. Clause validation is separate. -/
 inductive ParseMode where
@@ -41,6 +43,8 @@ structure ParsedQuery where
   declarations : Array ParsedDeclaration := #[]
   definitions : Array ParsedDefinition := #[]
   assertions : Array cvc5.Term := #[]
+  /-- One entry per persistent assertion, rolled back with the assertion's scope. -/
+  assertionArrayConstants : Array (Array cvc5.Term) := #[]
   assertionSources : Array Source.Ref := #[]
   invoked : Array String := #[]
 

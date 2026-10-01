@@ -32,6 +32,12 @@ private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
   unless response.isEmpty || response == "success" do
     throw (.error s!"{command.getCommandName}: {response}")
 
+/-- Global named bodies can outlive assertions, including erased theory terms. -/
+private def checkGlobalArrayNames (global : Bool) (command : Source.Command)
+    (constants : Array cvc5.Term) : cvc5.Env Unit := do
+  if global && !command.source.names.isEmpty && !constants.isEmpty then
+    throw (.unsupported "constant arrays in commands introducing global :named terms are unsupported")
+
 /-- SMT-LIB 2.6 assumptions are user-defined Boolean constants or their negations. -/
 private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
     (solver : cvc5.Solver) (symbols : cvc5.SymbolManager) (query : ParsedQuery)
@@ -174,6 +180,8 @@ private def parseScript
             "QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA",
             "QF_LIRA", "QF_NIRA", "QF_UFLIRA", "QF_UFNIRA", "LIRA", "NIRA", "UFLIRA", "UFNIRA",
             "QF_BV", "QF_UFBV", "BV", "UFBV",
+            "QF_AX", "QF_ABV", "QF_AUFBV", "QF_ALIA", "QF_AUFLIA", "QF_AUFNIA",
+            "ALIA", "AUFLIA", "AUFLIRA", "AUFNIA", "AUFNIRA", "ABV", "AUFBV",
             "ALL", "HORN"].find?
             (fun logic => cmd.toString == s!"(set-logic {logic})")
           | throw (.unsupported s!"unsupported logic: {cmd}")
@@ -203,8 +211,8 @@ private def parseScript
           throw (.error "expected one new declaration")
         let term := terms.back!
         let sort ← ofExcept term.getSort
-        unless isScalarSort sort query.sorts || (← isSupportedFunction sort query.sorts) do
-          throw (.unsupported s!"unsupported declaration sort: {sort}; expected Bool, Int, Real, BitVec, a declared uninterpreted sort, or a first-order function over these sorts")
+        unless isValueSort sort query.sorts || (← isSupportedFunction sort query.sorts) do
+          throw (.unsupported s!"unsupported declaration sort: {sort}; expected a supported value sort or first-order function")
         let symbol ← ofExcept term.getSymbol
         if query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")
@@ -219,6 +227,9 @@ private def parseScript
         unless assertions.size == nativeCount + 1 do
           throw (.error "expected one native defining equation")
         let definition ← readDefinition (← addedAssertion before assertions) command.source query tm allowQuantifiers
+        let arrayConstants ← readArrayConstants command solver symbols query
+        checkGlobalArrayNames globalDeclarations command arrayConstants
+        let definition := { definition with arrayConstants }
         nativeCount := assertions.size
         query := { query with
           definitions := query.definitions.push definition
@@ -241,8 +252,12 @@ private def parseScript
           validateAssertion term (knownTerms query) allowQuantifiers query.sorts
           let term ← expandDefinitions tm query.definitions term
           validateAssertion term query.declarations allowQuantifiers query.sorts
+          let arrayConstants ← readArrayConstants command solver symbols query
+          checkGlobalArrayNames globalDeclarations command arrayConstants
           nativeCount := assertions.size
-          query := { query with assertions := query.assertions.push term }
+          query := { query with
+            assertions := query.assertions.push term
+            assertionArrayConstants := query.assertionArrayConstants.push arrayConstants }
         catch error =>
           throw (if isChc then errorWithContext s!"clause {assertionNumber}" error else error)
         query := { query with
@@ -279,7 +294,7 @@ private def parseScript
           allowQuantifiers := true
           nativeCount := 0
         else
-          query := { query with assertions := #[], assertionSources := #[] }
+          query := { query with assertions := #[], assertionSources := #[], assertionArrayConstants := #[] }
           if !globalDeclarations then
             query := { query with sorts := #[], declarations := #[], definitions := #[] }
           nativeCount := query.definitions.size
@@ -312,6 +327,7 @@ private def parseScript
             declarations := if globalDeclarations then query.declarations else query.declarations.extract 0 scope.declarations
             definitions := if globalDeclarations then query.definitions else query.definitions.extract 0 scope.definitions
             assertions := query.assertions.extract 0 scope.assertions
+            assertionArrayConstants := query.assertionArrayConstants.extract 0 scope.assertions
             assertionSources := query.assertionSources.extract 0 scope.assertions }
           nativeCount := scope.nativeAssertions + if globalDeclarations then query.definitions.size - scope.definitions else 0
           scopes := scopes.extract 0 remaining

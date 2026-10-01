@@ -1,0 +1,6 @@
+(set-logic HORN)
+(declare-fun R ((Array Int Int)) Bool)
+(assert (R ((as const (Array Int Int)) 0)))
+(assert (forall ((a (Array Int Int))) (=> (R a) (R (store a 0 0)))))
+(assert (forall ((a (Array Int Int))) (=> (and (R a) (distinct (select a 0) 0)) false)))
+(check-sat)

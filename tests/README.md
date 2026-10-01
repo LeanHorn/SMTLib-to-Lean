@@ -18,6 +18,7 @@ This builds the CLI and Lean tests, runs each Lean test executable, then runs
 | `lake exe testReconstruction` | One closed proposition reconstructed by upstream handlers and checked by Lean's kernel |
 | `lake exe testHorn` | Relation identities, ordered clause arguments, leading binders, theory guards, false heads, and unsupported Horn forms |
 | `lake exe testTranslation` | Handwritten expected propositions, operator semantics, capture avoidance, cache isolation, re-elaborated output, and exact axiom dependencies |
+| `lake exe testArrays` | Complete array propositions, shared models, nested/quantified array interpretations, constant-array laws, and standalone emission |
 | `lake env python3 tests/cli.py` | CLI results, standalone file compilation, golden outputs, completed proofs, diagnostics, and output protection; build `smt2lean` first |
 
 The Lean test modules stay in `backend/`. Semantic tests elaborate generated text
@@ -39,11 +40,12 @@ compile without it. The integer proof uses `propext`; the other three are axiom-
 | `translation/int/` | Exact literals beyond 64 bits, arithmetic including div/mod, comparisons, distinct, conditionals, and contradictory bounds |
 | `translation/real/` | Exact rationals, arithmetic, comparisons, conditionals, mixed function signatures, bindings, and shared division-at-zero interpretations |
 | `translation/bitvec/` | Modular arithmetic, bitwise operations, comparisons, width changes, shifts, rotations, division/remainders, Int conversions, and overflow predicates |
+| `translation/arrays/` | Reads, writes, equality, aliases/functions, nested sorts, quantifiers, and native constant arrays |
 | `translation/sorts/` | Nonempty uninterpreted carriers, mixed functions, aliases, definitions, equality/distinct, conditionals, and quantifiers |
 | `translation/functions/` | Mixed Bool/Int functions and predicates, quoted names, argument order, unused parameters, and congruence |
 | `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |
 | `translation/quantifiers/` | Nested forall/exists, shadowing, Bool binders, unused variables, and quantifier hints |
-| `translation/chc/` | Facts, multiple relation premises, guards, false heads, definitions, named clauses, and relations over uninterpreted sorts |
+| `translation/chc/` | Facts, multiple relation premises, guards, false heads, definitions, named clauses, and relations over uninterpreted sorts and arrays |
 | `translation/sessions/` | SMT/CHC checks with push/pop, temporary assumptions, resets, local/global term and sort declarations, reused symbols, and shared helpers |
 
 Quantifier hints `:pattern`, `:no-pattern`, and `:qid` are checked and removed without

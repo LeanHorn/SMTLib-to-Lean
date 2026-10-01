@@ -309,8 +309,8 @@ private def checkDefinitions : IO Unit := do
     ("discarded-argument", "(define-fun f ((x Int)) Int 0) (assert (= (f (^ 1 0)) 0))", 3, "POW"),
     ("discarded-body", "(define-fun f ((x Int)) Int 0) (define-fun g () Int (f (^ 1 0)))", 3, "POW"),
     ("alias-string", "(define-sort Bad () String)", 2, "unsupported sort alias"),
-    ("alias-array", "(define-sort Bad (T) (Array T T))", 2, "unsupported sort alias"),
-    ("alias-nested-bv", "(define-sort Bad () (Array Int (_ BitVec 8)))", 2, "unsupported sort alias"),
+    ("alias-array-string", "(define-sort Bad (T) (Array T String))", 2, "unsupported sort alias"),
+    ("alias-nested-string", "(define-sort Bad () (Array Int (Array String (_ BitVec 8))))", 2, "unsupported sort alias"),
     ("alias-unknown", "(define-sort Bad () Missing)", 2, "declared"),
     ("alias-recursive", "(define-sort Bad () Bad)", 2, "declared"),
     ("alias-forward", "(define-sort A () B) (define-sort B () Int)", 2, "declared"),
@@ -357,7 +357,7 @@ private def checkNamedAssertions : IO Unit := do
     ("open", "(assert (forall ((x Int)) (! (> x 0) :named bad)))", 2, "Cannot name a term in a binder"),
     ("operator", "(assert (! (= (^ 1 0) 0) :named bad))", 2, "POW"),
     ("discarded", "(assert (let ((ignored (! (^ 1 0) :named bad))) true))", 2, "POW"),
-    ("discarded-sort", "(assert (let ((ignored (! \"a\" :named bad))) true))", 2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
+    ("discarded-sort", "(assert (let ((ignored (! \"a\" :named bad))) true))", 2, "unsupported value sort"),
     ("unknown-attribute", "(assert (! true :unknown (:named fake)))", 2, "unsupported annotation"),
     ("after-check", "(check-sat) (assert (! true :named later))", 3, "after check-sat")
   ] do
@@ -372,9 +372,9 @@ private def checkRejectedQueries : IO Unit := do
       1, "cannot parse logic string"),
     ("string", "(set-logic ALL)\n(declare-const x String)\n(check-sat)",
       2, "unsupported declaration sort"),
-    ("array-argument", "(set-logic ALL)\n(declare-fun f ((Array Int Int)) Int)\n(check-sat)",
+    ("array-argument-string", "(set-logic ALL)\n(declare-fun f ((Array Int String)) Int)\n(check-sat)",
       2, "unsupported declaration sort"),
-    ("array-result", "(set-logic ALL)\n(declare-fun f (Bool) (Array Int Int))\n(check-sat)",
+    ("array-result-string", "(set-logic ALL)\n(declare-fun f (Bool) (Array Int String))\n(check-sat)",
       2, "unsupported declaration sort"),
     ("string-argument", "(set-logic ALL)\n(declare-fun f (String) Int)\n(check-sat)",
       2, "unsupported declaration sort"),
@@ -392,7 +392,7 @@ private def checkRejectedQueries : IO Unit := do
       2, "unsupported bound variable sort"),
     ("quantifier-in-qf", "(set-logic QF_LIA)\n(assert (forall ((x Int)) (> x 0)))\n(check-sat)",
       2, "quantifiers require"),
-    ("bound-array", "(set-logic ALL)\n(assert (exists ((a (Array Int Int))) true))\n(check-sat)",
+    ("bound-array-string", "(set-logic ALL)\n(assert (exists ((a (Array Int String))) true))\n(check-sat)",
       2, "unsupported bound variable sort"),
     ("ite-unsupported-branch", "(set-logic ALL)\n(assert (forall ((p Bool)) (= (ite p 1 (^ 1 0)) 1)))\n(check-sat)",
       2, "POW"),
@@ -417,7 +417,7 @@ private def checkRejectedQueries : IO Unit := do
     ("ite-branches", "(set-logic ALL)\n(assert (ite true false 1))\n(check-sat)",
       2, "type"),
     ("ite-string", "(set-logic ALL)\n(assert (= (ite true \"a\" \"b\") \"a\"))\n(check-sat)",
-      2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
+      2, "unsupported value sort"),
     ("ite-widths", "(set-logic ALL)\n(assert (= (ite true #b0 #b01) #b0))\n(check-sat)",
       2, "type"),
     ("push", "(set-logic QF_UF)\n(push 1)\n(check-sat)",
@@ -426,18 +426,18 @@ private def checkRejectedQueries : IO Unit := do
       2, "unsupported command: pop"),
     ("horn", "(set-logic HORN)\n(assert true)\n(check-sat)",
       1, "unsupported logic"),
-    ("logic", "(set-logic QF_ABV)\n(assert true)\n(check-sat)",
+    ("logic", "(set-logic QF_S)\n(assert true)\n(check-sat)",
       1, "unsupported logic"),
     ("xor-sort", "(set-logic ALL)\n(assert (xor true 1))\n(check-sat)",
       2, "Boolean subexpression"),
     ("distinct-mixed", "(set-logic ALL)\n(assert (distinct true 1))\n(check-sat)",
       2, "type"),
     ("distinct-string", "(set-logic ALL)\n(assert (distinct \"a\" \"b\"))\n(check-sat)",
-      2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
+      2, "unsupported value sort"),
     ("distinct-widths", "(set-logic ALL)\n(assert (distinct #b0 #b01))\n(check-sat)",
       2, "type"),
     ("string-equality", "(set-logic ALL)\n(assert (= \"a\" \"b\"))\n(check-sat)",
-      2, "expected Bool, Int, Real, BitVec, or a declared uninterpreted sort"),
+      2, "unsupported value sort"),
     ("assuming", "(set-logic QF_UF)\n(check-sat-assuming (true))",
       2, "expected a user-declared"),
     ("missing-check", "(set-logic QF_UF)\n(assert true)",
@@ -886,6 +886,78 @@ private def checkBitvectorConversions : IO Unit := do
     (assert |(_ int2bv 4294967296)|)\n; (_ int_to_bv 4294967296)\n\
     (assert (= ((_ |int2bv| 8) (- 1)) #xff))(check-sat)" fun _ => pure ()).runIO
 
+private def checkArrays : IO Unit := do
+  let path := "tests/translation/arrays/operations.smt2"
+  checkAccepted path (← IO.FS.readFile path) #["a", "b", "i", "j", "p", "f"] 5
+    (#["set-logic", "define-sort"] ++ Array.replicate 6 "declare-fun" ++
+      #["define-fun"] ++ Array.replicate 5 "assert") fun query => do
+      let #[a, _, i, _, _, _] := query.declarations
+        | throw (.error "expected six array fixture declarations")
+      let sort := a.term.getSort!
+      require (sort.isArray && sort.getArrayIndexSort!.isInteger && sort.getArrayElementSort!.isInteger)
+        "array alias lost its native index/element sorts"
+      let read := query.assertions[0]![0]!
+      let write := read[0]!
+      require (read.getKind! == .SELECT && write.getKind! == .STORE &&
+        write[0]! == a.term && write[1]! == i.term)
+        "definition expansion lost array or index identity"
+  for logic in #["QF_AX", "QF_ABV", "QF_AUFBV", "QF_ALIA", "QF_AUFLIA", "QF_AUFNIA",
+      "ALIA", "AUFLIA", "AUFLIRA", "AUFNIA", "AUFNIRA", "ABV", "AUFBV"] do
+    checkAccepted logic s!"(set-logic {logic})(assert true)(check-sat)" #[] 1 #["set-logic", "assert"]
+  for (name, input, count) in #[
+    ("nested", "tests/translation/arrays/nested.smt2", 5),
+    ("constants", "tests/translation/arrays/constants.smt2", 8)
+  ] do
+    (parseAndInspectQuery (← IO.FS.readFile input) (name := name) fun query => do
+      require (query.assertions.size == count) s!"{name}: wrong assertion count"
+      require (!query.invoked.contains "check-sat") "array parsing invoked a solver query"
+    ).runIO
+  -- The native const-array payload is not in getChildren. Record it even if let discards it.
+  (parseAndInspectQuery "(set-logic ALL)(assert (let ((unused ((as const (Array Int Int)) 7))) true))(check-sat)"
+    fun query => do
+      require (query.assertions[0]!.getKind! == .CONST_BOOLEAN) "expected native let expansion"
+      let values := query.assertionArrayConstants.flatten
+      require (values.size == 1 && values[0]!.getNumChildren == 0 &&
+        values[0]!.getConstArrayBase!.getIntegerValue! == 7) "erased const-array requirement was lost"
+  ).runIO
+  for hint in #[":pattern ((select ((as const (Array Int Int)) 0) i))",
+      ":no-pattern (select ((as const (Array Int Int)) 0) i)"] do
+    (parseAndInspectQuery s!"(set-logic ALL)(assert (forall ((i Int)) (! (= i i) {hint})))(check-sat)"
+      fun query => require query.assertionArrayConstants.flatten.isEmpty
+        "nonsemantic hint introduced constant-array laws").runIO
+  (parseAndInspectQuery "(set-logic ALL)(assert (forall ((i Int)) \
+    (! (let ((unused ((as const (Array Int Int)) 0))) (= i i)) \
+       :pattern ((select ((as const (Array Int Int)) 1) i)))))(check-sat)" fun query => do
+      let values := query.assertionArrayConstants.flatten
+      require (values.size == 1 && values[0]!.getConstArrayBase!.getIntegerValue! == 0)
+        "hint changed the retained constant-array payload"
+  ).runIO
+  (parseAndInspectQuery "(set-logic ALL)(assert (= (select \
+    (! ((as const (Array Int Int)) 0) :named zero) 0) 0))(check-sat)" fun query =>
+      require (query.assertionArrayConstants.flatten.size == 1) "named array lost its constructor"
+  ).runIO
+  for (name, body) in #[
+    ("bad-select", "(assert (= (select 0 1) 0))"),
+    ("bad-index", "(declare-const a (Array Int Int))(assert (= (select a true) 0))"),
+    ("bad-store", "(declare-const a (Array Int Int))(assert (= (store a 0 true) a))"),
+    ("bad-arity", "(declare-const a (Array Int Int))(assert (= (store a 0) a))"),
+    ("bad-constant", "(assert (= ((as const (Array Int Int)) true) ((as const (Array Int Int)) 0)))"),
+    ("symbolic-constant", "(declare-const x Int)(assert (= (select ((as const (Array Int Int)) x) 0) x))"),
+    ("erased-string-array", "(assert (let ((unused ((as const (Array Int String)) \"x\"))) true))")
+  ] do
+    let called ← IO.mkRef false
+    let result ← (parseAndInspectQuery ("(set-logic ALL)" ++ body ++ "(check-sat)")
+      (fun _ => called.set true) (name := name)).run
+    require (!(← called.get)) s!"{name}: invalid array reached inspect"
+    match result with
+    | .error _ => pure ()
+    | .ok _ => throw (IO.userError s!"{name}: invalid array was accepted")
+  checkRejected "global-named-constant"
+    "(set-option :global-declarations true)(set-logic ALL)\
+    (assert (! (let ((erased ((as const (Array Int Int)) 0))) true) :named p))(check-sat)"
+    3 "global :named terms are unsupported"
+  IO.println "Array parser passed: native identities, nested sorts, const payloads, aliases, and rejection cases"
+
 def main : IO Unit := do
   checkAcceptedQueries
   checkSolverOptions
@@ -901,6 +973,7 @@ def main : IO Unit := do
   checkBitvectorShifts
   checkBitvectorDivision
   checkBitvectorConversions
+  checkArrays
   checkRejectedQueries
   checkDefinitions
   checkNamedAssertions

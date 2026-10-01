@@ -59,8 +59,8 @@ def readDefinition (equation : cvc5.Term) (source : Source.Ref)
   let symbol := equation[0]!
   let sort ← ofExcept symbol.getSort
   unless (← ofExcept symbol.getKind) == .CONSTANT &&
-      (isScalarSort sort query.sorts || (← isSupportedFunction sort query.sorts)) do
-    throw (.unsupported s!"unsupported definition signature: {sort}; expected Bool, Int, Real, BitVec, or declared uninterpreted sorts")
+      (isValueSort sort query.sorts || (← isSupportedFunction sort query.sorts)) do
+    throw (.unsupported s!"unsupported definition signature: {sort}; expected supported value sorts")
   let value := equation[1]!
   let (parameters, body) ← if (← ofExcept value.getKind) == .LAMBDA then do
       unless value.getNumChildren == 2 && (← ofExcept value[0]!.getKind) == .VARIABLE_LIST do

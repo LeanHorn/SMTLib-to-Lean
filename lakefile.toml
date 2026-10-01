@@ -15,6 +15,10 @@ rev = "7e3365990661b697ccb30e92d6912f4cc6589322"
 [[lean_lib]]
 name = "Smt2Lean"
 
+[[lean_lib]]
+name = "ArrayModelTests"
+roots = ["tests.backend.ArrayModel"]
+
 [[lean_exe]]
 name = "smt2lean"
 root = "Main"
@@ -41,3 +45,8 @@ supportInterpreter = true
 [[lean_exe]]
 name = "testHorn"
 root = "tests.backend.Horn"
+
+[[lean_exe]]
+name = "testArrays"
+root = "tests.backend.Arrays"
+supportInterpreter = true

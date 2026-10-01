@@ -11,7 +11,7 @@ open Lean Meta Qq
 
 /-- Names reserved for the operator definitions copied into generated files. -/
 def isHelper (name : Name) : Bool :=
-  #[`SMT.xor, `SMT.intDiv, `SMT.intMod, `SMT.realDiv,
+  #[`SMT.xor, `SMT.intDiv, `SMT.intMod, `SMT.realDiv, `SMT.arrayLaws, `SMT.constArrayLaw,
     `SMT.bvnand, `SMT.bvnor, `SMT.bvxnor, `SMT.bvcomp,
     `SMT.bvshl, `SMT.bvlshr, `SMT.bvashr].contains name || match name with
     | .str `SMT suffix => suffix.startsWith "distinct" &&
@@ -30,6 +30,20 @@ private def define (name : Name) (levels : List Name) (value : Expr) : MetaM Nam
 
 def xor : MetaM Name :=
   define `SMT.xor [] q(fun (p q : Prop) => (p ∧ ¬q) ∨ (¬p ∧ q))
+
+/-- An arbitrary nonempty array carrier satisfying the three ArraysEx laws. -/
+def arrayLaws : MetaM Name :=
+  define `SMT.arrayLaws [] q(fun (I E A : Type) (select : A → I → E)
+    (store : A → I → E → A) =>
+      Nonempty A ∧
+      (∀ a i v, select (store a i v) i = v) ∧
+      (∀ a i j v, i ≠ j → select (store a i v) j = select a j) ∧
+      (∀ a b, (∀ i, select a i = select b i) → a = b))
+
+/-- Constant arrays extend a model only for array sorts using the const constructor. -/
+def constArrayLaw : MetaM Name :=
+  define `SMT.constArrayLaw [] q(fun (I E A : Type) (select : A → I → E)
+    (const : E → A) => ∀ v i, select (const v) i = v)
 
 /-- Keep bitvector operators named in generated statements. -/
 def bitvec (kind : cvc5.Kind) : MetaM Name := do

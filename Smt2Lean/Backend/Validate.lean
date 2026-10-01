@@ -2,9 +2,12 @@ import Smt2Lean.Backend.Types
 
 namespace Smt2Lean.Backend
 
-def isScalarSort (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : Bool :=
+/-- Supported first-order value sorts, including recursively nested arrays. -/
+partial def isValueSort (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : Bool :=
   sort.isBoolean || sort.isInteger || sort.isReal ||
-    (sort.isBitVector && sort.getBitVectorSize! != 0) || sorts.any (·.sort == sort)
+    (sort.isBitVector && sort.getBitVectorSize! != 0) || sorts.any (·.sort == sort) ||
+    (sort.isArray && isValueSort sort.getArrayIndexSort! sorts &&
+      isValueSort sort.getArrayElementSort! sorts)
 
 /-- Reject indices that cvc5 would silently saturate before we can inspect its AST. -/
 def validateBitvectorIndices (tokens : Array String) : cvc5.Env Unit := do
@@ -32,12 +35,12 @@ def integerLiteral? (term : cvc5.Term) : Option Int := Id.run do
   let result := value.getIntegerValue!
   return some (if negative then -result else result)
 
-/-- First-order functions over Bool, Int, Real, BitVec, and declared uninterpreted sorts. -/
+/-- First-order functions over supported scalar and array sorts. -/
 def isSupportedFunction (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : cvc5.Env Bool := do
   unless sort.isFunction do return false
   let domains ← ofExcept sort.getFunctionDomainSorts
   let result ← ofExcept sort.getFunctionCodomainSort
-  return !domains.isEmpty && domains.all (isScalarSort · sorts) && isScalarSort result sorts
+  return !domains.isEmpty && domains.all (isValueSort · sorts) && isValueSort result sorts
 
 /-- Check sorts, operators, declarations, and bound-variable scope. -/
 def validateTerm (root : cvc5.Term)
@@ -45,8 +48,8 @@ def validateTerm (root : cvc5.Term)
     (bound : Array cvc5.Term := #[]) (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
   for binder in bound do
     unless (← ofExcept binder.getKind) == .VARIABLE &&
-        isScalarSort (← ofExcept binder.getSort) sorts do
-      throw (.unsupported "definition parameters must have Bool, Int, Real, BitVec, or declared uninterpreted sorts")
+        isValueSort (← ofExcept binder.getSort) sorts do
+      throw (.unsupported "definition parameters must have a supported value sort")
   let mut pending : Array (cvc5.Term × Array cvc5.Term) := #[(root, bound)]
   let mut visited : Std.HashSet (cvc5.Term × Array cvc5.Term) := {}
   while !pending.isEmpty do
@@ -56,10 +59,19 @@ def validateTerm (root : cvc5.Term)
     if visited.contains (term, bound) then continue
     visited := visited.insert (term, bound)
     let sort ← ofExcept term.getSort
-    unless isScalarSort sort sorts do
-      throw (.unsupported s!"expected Bool, Int, Real, BitVec, or a declared uninterpreted sort, got {sort}")
+    unless isValueSort sort sorts do
+      throw (.unsupported s!"unsupported value sort: {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if kind == .CONST_ARRAY then
+      unless sort.isArray && term.isConstArray && children.isEmpty do
+        throw (.unsupported "expected a native constant-array value")
+      let base ← ofExcept term.getConstArrayBase
+      unless base.getSort! == sort.getArrayElementSort! do
+        throw (.unsupported "constant-array value has the wrong element sort")
+      -- Native constant-array values have no ordinary children.
+      pending := pending.push (base, bound)
+      continue
     if kind == .FORALL || kind == .EXISTS then
       unless allowQuantifiers do
         throw (.unsupported "quantifiers require a quantified logic or ALL")
@@ -74,8 +86,8 @@ def validateTerm (root : cvc5.Term)
         unless (← ofExcept binder.getKind) == .VARIABLE do
           throw (.unsupported "expected a bound variable")
         let variableSort ← ofExcept binder.getSort
-        unless isScalarSort variableSort sorts do
-          throw (.unsupported s!"unsupported bound variable sort: {variableSort}; expected Bool, Int, Real, BitVec, or a declared uninterpreted sort")
+        unless isValueSort variableSort sorts do
+          throw (.unsupported s!"unsupported bound variable sort: {variableSort}")
         scope := scope.push binder
       pending := pending.push (children[1]!, scope)
       continue
@@ -120,6 +132,18 @@ def validateTerm (root : cvc5.Term)
           throw (.unsupported "to_real expects one Int argument")
         pure true
       | .ITE => pure (children.size == 3)
+      | .SELECT => do
+        unless children.size == 2 && children[0]!.getSort!.isArray &&
+            children[1]!.getSort! == children[0]!.getSort!.getArrayIndexSort! &&
+            sort == children[0]!.getSort!.getArrayElementSort! do
+          throw (.unsupported "select expects an array and an index of its index sort")
+        pure true
+      | .STORE => do
+        unless children.size == 3 && sort.isArray && children[0]!.getSort! == sort &&
+            children[1]!.getSort! == sort.getArrayIndexSort! &&
+            children[2]!.getSort! == sort.getArrayElementSort! do
+          throw (.unsupported "store expects an array, an index, and an element of matching sorts")
+        pure true
       | .AND | .OR | .XOR | .IMPLIES | .DISTINCT | .ADD | .SUB | .MULT | .INTS_DIVISION | .DIVISION =>
         pure (children.size >= 2)
       | .BITVECTOR_ADD | .BITVECTOR_MULT | .BITVECTOR_AND | .BITVECTOR_OR | .BITVECTOR_XOR
@@ -151,26 +175,78 @@ def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
   query.declarations ++ query.definitions.map fun d =>
     { name := d.symbol.toString, term := d.symbol, source := some d.source }
 
-/--
-cvc5 prints aliases with their bodies already resolved. A supported body is Bool,
-Int, Real, a positive-width BitVec, a declared sort, or a formal parameter. Tokenize this
-canonical header, respecting quoted names; cvc5 still handles alias syntax, arity, scope, and substitution.
--/
+/-- Preserve constant-array theory requirements even when let/definition expansion erases a use.
+The pinned parser accepts only value payloads; this profile additionally requires them to parse
+without local term bindings. No commands are invoked by this auxiliary term parser. -/
+def readArrayConstants (source : Source.Command) (solver : cvc5.Solver)
+    (symbols : cvc5.SymbolManager) (query : ParsedQuery) : cvc5.Env (Array cvc5.Term) := do
+  let parts := Source.tokenize source.text
+  let mut constants := #[]
+  let mut skipUntil := 0
+  for i in [:parts.size] do
+    if i < skipUntil then continue
+    -- Hints do not contribute terms or theory laws to the translated query.
+    if #[":pattern", ":no-pattern", ":qid"].contains parts[i]! then
+      let start := i + 1
+      let mut stop := start + 1
+      if parts[start]? == some "(" then
+        let mut depth := 1
+        while stop < parts.size && depth > 0 do
+          if parts[stop]! == "(" then depth := depth + 1
+          else if parts[stop]! == ")" then depth := depth - 1
+          stop := stop + 1
+      skipUntil := stop
+      continue
+    unless parts[i]? == some "(" && parts[i + 1]? == some "(" &&
+        parts[i + 2]? == some "as" &&
+        (parts[i + 3]? == some "const" || parts[i + 3]? == some "|const|") do continue
+    let mut depth := 1
+    let mut stop := i + 1
+    while stop < parts.size && depth > 0 do
+      if parts[stop]! == "(" then depth := depth + 1
+      else if parts[stop]! == ")" then depth := depth - 1
+      stop := stop + 1
+    let expression := parts.extract i stop
+    if expression.contains ":named" then
+      throw (.unsupported "constant-array payloads cannot contain :named annotations; name the whole array expression instead")
+    let parser ← cvc5.InputParser.new solver (some symbols)
+    parser.setStringInput (String.intercalate " " expression.toList)
+    let term ← try parser.nextTerm catch _ =>
+      throw (.unsupported "constant arrays require a self-contained native value; symbolic or locally bound payloads are unsupported")
+    unless term.isConstArray do
+      throw (.unsupported "expected a native constant-array value")
+    validateTerm term (knownTerms query) false (sorts := query.sorts)
+    unless constants.contains term do constants := constants.push term
+  return constants
+
+/-- All native roots needed to bind array models, including erased constant-array constructors. -/
+def arrayModelTerms (query : ParsedQuery) : Array cvc5.Term :=
+  query.declarations.map (·.term) ++ query.assertions ++ query.assertionArrayConstants.flatten ++
+    query.definitions.flatMap (fun d => #[d.symbol, d.body] ++ d.parameters ++ d.arrayConstants)
+
+/-- Recognize canonical sort syntax, including aliases with formal parameters. -/
+private partial def sortSyntax (names : Array String) : List String → Option (List String)
+  | "(" :: "Array" :: rest => do
+    let rest ← sortSyntax names rest
+    let ")" :: rest ← sortSyntax names rest | none
+    return rest
+  | "(" :: "_" :: "BitVec" :: width :: ")" :: rest =>
+    if width.toNat?.getD 0 > 0 then some rest else none
+  | name :: rest => if names.contains name then some rest else none
+  | _ => none
+
+/-- Check the resolved alias body; cvc5 handles syntax, arity, scope, and substitution. -/
 def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
   let tokens := Source.tokenize command.toString
   let some endParams := (tokens.extract 4 tokens.size).findIdx? (· == ")")
     | throw (.unsupported s!"unsupported sort alias: {command}")
   let endParams := endParams + 4
   let body := tokens.extract (endParams + 1) (tokens.size - 1)
-  let scalar := body.size == 1 &&
-    (#["Bool", "Int", "Real"].contains body[0]! || sorts.any (·.sort.toString == body[0]!) ||
-      (tokens.extract 4 endParams).contains body[0]!)
-  let bitvec := body.size == 5 && body.extract 0 3 == #["(", "_", "BitVec"] &&
-    body[4]? == some ")" && body[3]!.toNat?.getD 0 > 0
-  unless tokens[0]? == some "(" &&
-      tokens[1]? == some "define-sort" && tokens[3]? == some "(" &&
-      tokens.back? == some ")" && (scalar || bitvec) do
-    throw (.unsupported s!"unsupported sort alias: {command}; expected Bool, Int, Real, BitVec, a declared uninterpreted sort, or a sort parameter")
+  let names := #["Bool", "Int", "Real"] ++ sorts.map (·.sort.toString) ++ tokens.extract 4 endParams
+  unless tokens[0]? == some "(" && tokens[1]? == some "define-sort" &&
+      tokens[3]? == some "(" && tokens.back? == some ")" &&
+      sortSyntax names body.toList == some [] do
+    throw (.unsupported s!"unsupported sort alias: {command}; expected a supported value sort or sort parameter")
 
 /-- These metadata fields never become assumptions or select a proof target. -/
 def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do

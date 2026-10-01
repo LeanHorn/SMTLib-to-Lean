@@ -41,6 +41,8 @@ structure Problem where
   number : Nat := 1
   source : Option Source.Ref := none
   sorts : Array ParsedSort := #[]
+  /-- Retain array theory requirements from unused definitions and discarded source terms. -/
+  arrayTerms : Array cvc5.Term := #[]
   relations : Array Relation
   clauses : Array (Clause Premise)
 
@@ -53,8 +55,8 @@ def collectRelations (declarations : Array ParsedDeclaration) (queryNumber : Nat
       let sort ← ofExcept declaration.term.getSort
       let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
       let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
-      unless result.isBoolean && arguments.all (isScalarSort · sorts) do
-        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over Bool, Int, Real, BitVec, or declared uninterpreted sorts, got {sort}")
+      unless result.isBoolean && arguments.all (isValueSort · sorts) do
+        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over supported value sorts, got {sort}")
       return { toParsedDeclaration := declaration, argumentSorts := arguments }
     catch error =>
       throw (declaration.source.map (fun source => errorWithContext (source.context true queryNumber) error)
@@ -179,7 +181,9 @@ def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Prob
         head := clause.head
       }
     catch error => throw (errorWithContext s!"{context}: clause {i + 1}" error)
-  return { number := query.number, source := query.source, sorts := query.sorts, relations, clauses }
+  return {
+    number := query.number, source := query.source, sorts := query.sorts
+    arrayTerms := arrayModelTerms query, relations, clauses }
 
 /-- Parse and validate the whole CHC input, then inspect it once without solving. -/
 def parseAndInspectProblem (input : String) (inspect : Problem → cvc5.Env Unit)

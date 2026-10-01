@@ -1,6 +1,7 @@
 import Smt2Lean.Chc
 import Smt2Lean.Arithmetic
 import Smt2Lean.BitVec
+import Smt2Lean.Array
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
 import Smt.Reconstruct.Int
@@ -72,7 +73,7 @@ private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
 
 /-- Try our encodings first, then the upstream handlers for the supported theories. -/
 @[smt_term_reconstruct] private def reconstructTerm : Smt.TermReconstructor := fun term => do
-  for reconstruct in [BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
+  for reconstruct in [Arrays.reconstruct, BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
       Smt.Reconstruct.Prop.reconstructProp, Smt.Reconstruct.Builtin.reconstructBuiltin,
       Smt.Reconstruct.Int.reconstructInt, Smt.Reconstruct.UF.reconstructUF] do
     if let some value ← reconstruct term then return value
@@ -101,36 +102,42 @@ private def withCarriers [Inhabited α] (sorts : Array ParsedSort)
     inspect carriers sortCache
 
 /--
-Reconstruct a query with carriers, arithmetic choices, then declared term parameters.
-Use the parameters and assertions inside `inspect`, while their local context exists.
+Reconstruct with uninterpreted carriers, array models, arithmetic choices, and declared terms.
+Inspect the parameters, model laws, and assertions while their local context exists.
 -/
-def withAssertions [Inhabited α] (query : ParsedQuery)
-    (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
+private def withAssertionModel [Inhabited α] (query : ParsedQuery)
+    (inspect : Array Expr → Array Expr → Array Expr → MetaM α) : MetaM α := do
   withCarriers query.sorts fun carriers sortCache => do
     -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
     for h : i in [:query.assertions.size] do
       atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
         (validateAssertion query.assertions[i] query.declarations (sorts := query.sorts)).runIO
     Arithmetic.withZeroCases query.assertions fun zeroCases context => do
-      let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
-        atSource declaration.source s!"declaration '{declaration.name}'" (queryNumber := query.number) do
-          let sort ← ofExcept declaration.term.getSort
-          let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
-          let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
-          return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
-      withLocalDeclsDND declarations fun parameters => do
-        let mut termCache : Std.HashMap cvc5.Term Expr := {}
-        for declaration in query.declarations, parameter in parameters do
-          termCache := termCache.insert declaration.term parameter
-        let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i term =>
-          atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
-            let value ← Smt.Reconstruct.reconstructTerm term
-            checkPropositions #[value] (← get)
-            return value
-        -- Match the instance scope used when the emitted `if` expressions are elaborated.
-        let (assertions, _) ← withTermReconstruction <|
-          Elab.Tactic.classical <| reconstruction.run context { sortCache, termCache }
-        inspect (carriers ++ zeroCases ++ parameters) assertions
+      Arrays.withModels (arrayModelTerms query) sortCache context fun arrayParameters laws sortCache context => do
+        let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
+          atSource declaration.source s!"declaration '{declaration.name}'" (queryNumber := query.number) do
+            let sort ← ofExcept declaration.term.getSort
+            let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
+            let stem := if sort.isFunction then "f" else if sort.isBoolean then "p" else "x"
+            return (← mkFreshUserName (Name.mkSimple s!"{stem}{i}"), type)
+        withLocalDeclsDND declarations fun parameters => do
+          let mut termCache : Std.HashMap cvc5.Term Expr := {}
+          for declaration in query.declarations, parameter in parameters do
+            termCache := termCache.insert declaration.term parameter
+          let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i term =>
+            atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
+              let value ← Smt.Reconstruct.reconstructTerm term
+              checkPropositions #[value] (← get)
+              return value
+          -- Match the instance scope used when the emitted `if` expressions are elaborated.
+          let (assertions, _) ← withTermReconstruction <|
+            Elab.Tactic.classical <| reconstruction.run context { sortCache, termCache }
+          inspect (carriers ++ arrayParameters ++ zeroCases ++ parameters) laws assertions
+
+/-- Inspect reconstructed assertions while their interpretation parameters are in scope. -/
+def withAssertions [Inhabited α] (query : ParsedQuery)
+    (inspect : Array Expr → Array Expr → MetaM α) : MetaM α :=
+  withAssertionModel query fun parameters _ assertions => inspect parameters assertions
 
 private def reconstructAtom (relations : Std.HashMap cvc5.Term Expr)
     (atom : Chc.RelationAtom) : Smt.ReconstructM Expr := do
@@ -166,12 +173,12 @@ private def reconstructClause (context : Smt.Reconstruct.Context) (sortCache : S
     return value
 
 /--
-Reconstruct CHC clauses with carriers, arithmetic choices, then relation parameters.
+Reconstruct CHC clauses with carriers, array models, arithmetic choices, and relations.
 Each clause is `∀ variables, premise₁ → … → head`. Inspect the parameters and
-clauses inside the callback, while their Lean context and native terms are alive.
+model laws, and clauses inside the callback, while their context and native terms are alive.
 -/
-def withClauses [Inhabited α] (problem : Chc.Problem)
-    (inspect : Array Expr → Array Expr → MetaM α) : MetaM α := do
+private def withClauseModel [Inhabited α] (problem : Chc.Problem)
+    (inspect : Array Expr → Array Expr → Array Expr → MetaM α) : MetaM α := do
   withCarriers problem.sorts fun carriers sortCache => do
     let terms := problem.clauses.flatMap fun clause =>
       let premises := clause.premises.flatMap fun premise => match premise with
@@ -181,22 +188,30 @@ def withClauses [Inhabited α] (problem : Chc.Problem)
         | .falsity => #[]
         | .relation atom => atom.arguments
     Arithmetic.withZeroCases terms fun zeroCases context => do
-      let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
-        atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
-          let sort ← ofExcept relation.term.getSort
-          let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
-          return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
-      withLocalDeclsDND declarations fun parameters => do
-        let mut relations : Std.HashMap cvc5.Term Expr := {}
-        for relation in problem.relations, parameter in parameters do
-          relations := relations.insert relation.term parameter
-        let clauses ← problem.clauses.mapM fun clause =>
-          atSource clause.source s!"clause {clause.assertionNumber}" (chc := true) (queryNumber := problem.number) do
-            let value ← reconstructClause context sortCache relations clause
-            if (← mkForallFVars (carriers ++ zeroCases ++ parameters) value (usedOnly := false)).hasFVar then
-              throwError "clause contains variables outside its interpretation parameters"
-            return value
-        inspect (carriers ++ zeroCases ++ parameters) clauses
+      let modelTerms := problem.arrayTerms ++ problem.relations.map (·.term) ++ terms ++
+        problem.clauses.flatMap (fun c => c.binders.map (·.term))
+      Arrays.withModels modelTerms sortCache context fun arrayParameters laws sortCache context => do
+        let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
+          atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
+            let sort ← ofExcept relation.term.getSort
+            let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
+            return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
+        withLocalDeclsDND declarations fun parameters => do
+          let mut relations : Std.HashMap cvc5.Term Expr := {}
+          for relation in problem.relations, parameter in parameters do
+            relations := relations.insert relation.term parameter
+          let clauses ← problem.clauses.mapM fun clause =>
+            atSource clause.source s!"clause {clause.assertionNumber}" (chc := true) (queryNumber := problem.number) do
+              let value ← reconstructClause context sortCache relations clause
+              if (← mkForallFVars (carriers ++ arrayParameters ++ zeroCases ++ parameters) value (usedOnly := false)).hasFVar then
+                throwError "clause contains variables outside its interpretation parameters"
+              return value
+          inspect (carriers ++ arrayParameters ++ zeroCases ++ parameters) laws clauses
+
+/-- Inspect reconstructed clauses while their interpretation parameters are in scope. -/
+def withClauses [Inhabited α] (problem : Chc.Problem)
+    (inspect : Array Expr → Array Expr → MetaM α) : MetaM α :=
+  withClauseModel problem fun parameters _ clauses => inspect parameters clauses
 
 /-- Permit Lean's foundations, but no admissions or query-specific axioms. -/
 def checkStatementAxioms (name : Name) : CoreM Unit := do
@@ -226,12 +241,13 @@ private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   return value
 
 /--
-Define the refutation over nonempty carriers, arithmetic choices, and declared terms.
-No assertions means `True`. Kernel-check the statement without proving it.
+Define the refutation over admissible models and declared terms.
+An empty assertion conjunction is `True`. Check the statement without proving it.
 -/
 def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM Expr := do
-  let value ← withAssertions query fun parameters assertions => do
+  let value ← withAssertionModel query fun parameters laws assertions => do
     let body ← mkArrow (mkAndN assertions.toList) q(False)
+    let body ← if laws.isEmpty then pure body else mkArrow (mkAndN laws.toList) body
     let carriers := parameters.extract 0 query.sorts.size
     let body ← mkForallFVars (parameters.extract query.sorts.size parameters.size) body (usedOnly := false)
     let body ← carriers.foldrM (init := body) fun carrier body => do
@@ -240,14 +256,14 @@ def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM 
   atSource query.source "Refutation" (defineProposition name value) (queryNumber := query.number)
 
 /--
-Define CHC model existence over nonempty carriers, arithmetic choices, and relations.
-Retain unused declarations; no clauses means `True`. Check without proving it.
+Define CHC model existence over admissible models and relations.
+Retain unused declarations; an empty clause conjunction is `True`. Check without proving it.
 -/
 def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr := do
-  let value ← withClauses problem fun parameters clauses => do
+  let value ← withClauseModel problem fun parameters laws clauses => do
     let carriers := parameters.extract 0 problem.sorts.size
     let interpretations := parameters.extract problem.sorts.size parameters.size
-    let body ← interpretations.foldrM (init := mkAndN clauses.toList) fun parameter body => do
+    let body ← interpretations.foldrM (init := mkAndN (laws.toList ++ clauses.toList)) fun parameter body => do
       mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
     carriers.foldrM (init := body) fun carrier body => do
       let body := mkApp2 (mkConst ``And) (← mkAppM ``Nonempty #[carrier]) body
