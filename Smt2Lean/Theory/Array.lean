@@ -1,4 +1,4 @@
-import Smt2Lean.Helpers
+import Smt2Lean.Theory.Helpers
 import Smt2Lean.Backend.Types
 
 namespace Smt2Lean.Arrays
@@ -15,7 +15,7 @@ private partial def addSort (sort : cvc5.Sort) : StateM (Array cvc5.Sort) Unit :
     addSort sort.getArrayElementSort!
     modify (·.push sort)
 
-private def collectSorts (terms : Array cvc5.Term)
+def collectSorts (terms : Array cvc5.Term)
     (constructors : Array Backend.ArrayConstructor) : Array cvc5.Sort × Array cvc5.Sort := Id.run do
   let mut sorts := #[]
   let mut constants := #[]
@@ -43,12 +43,11 @@ private def constructorKey (base : cvc5.Term) : String :=
   s!"SMT.constArray.{base.getId!}"
 
 /-- Introduce carriers and operations outside source binders, sharing each native sort's model. -/
-def withModels [Inhabited α] (terms : Array cvc5.Term)
+def withModels [Inhabited α] (sorts constants : Array cvc5.Sort)
     (sortCache : Std.HashMap cvc5.Sort Expr) (context : Smt.Reconstruct.Context)
     (inspect : Array Expr → Array Expr → Std.HashMap cvc5.Sort Expr →
       Smt.Reconstruct.Context → MetaM α)
     (constructors : Array Backend.ArrayConstructor := #[]) : MetaM α := do
-  let (sorts, constants) := collectSorts terms constructors
   go constants sorts.toList #[] #[] sortCache context
 where
   go (constants : Array cvc5.Sort) (sorts : List cvc5.Sort) (parameters laws : Array Expr)

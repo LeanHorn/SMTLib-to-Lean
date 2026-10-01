@@ -24,17 +24,6 @@ def validateBitvectorIndices (tokens : Array String) : cvc5.Env Unit := do
       if amount > 4294967295 then
         throw (.unsupported s!"{label} exceeds the native parser limit 4294967295")
 
-/-- cvc5 may retain signed integer numerals inside Real arithmetic. -/
-def integerLiteral? (term : cvc5.Term) : Option Int := Id.run do
-  let mut value := term
-  let mut negative := false
-  while value.getKind! == .NEG do
-    negative := !negative
-    value := value[0]!
-  if !value.getSort!.isInteger || !value.isIntegerValue then return none
-  let result := value.getIntegerValue!
-  return some (if negative then -result else result)
-
 /-- First-order functions over supported scalar and array sorts. -/
 def isSupportedFunction (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : cvc5.Env Bool := do
   unless sort.isFunction do return false
@@ -64,6 +53,22 @@ def validateTerm (root : cvc5.Term)
       throw (.unsupported s!"unsupported value sort: {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if kind == .APPLY_CONSTRUCTOR then
+      unless sort.isDatatype && !children.isEmpty do
+        throw (.unsupported "expected a datatype constructor application")
+      let datatype ← ofExcept sort.getDatatype
+      let mut found := false
+      for constructor in datatype do
+        if (← constructor.getTerm) == children[0]! then
+          unless children.size == constructor.getNumSelectors + 1 do
+            throw (.unsupported "wrong datatype constructor arity")
+          for h : i in [:constructor.getNumSelectors] do
+            unless children[i + 1]!.getSort! == (← constructor[i].getCodomainSort) do
+              throw (.unsupported "wrong datatype constructor field sort")
+          found := true
+      unless found do throw (.unsupported "unmapped datatype constructor")
+      pending := pending ++ (children.extract 1 children.size).map (·, bound)
+      continue
     if constructors.any (·.matches term) then
       unless children[2]!.getSort! == sort.getArrayElementSort! do
         throw (.unsupported "constant-array payload has the wrong element sort")
@@ -183,7 +188,7 @@ def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
 
 /-- All native roots needed to bind array models, including erased constant-array constructors. -/
 def arrayModelTerms (query : ParsedQuery) : Array cvc5.Term :=
-  query.declarations.map (·.term) ++ query.assertions ++ query.assertionArrayConstants.flatten ++
+  query.declarations.map (·.term) ++ query.assertionTerms ++ query.assertions.flatMap (·.arrayConstants) ++
     query.namedArrayConstants.flatMap (·.2) ++
     query.definitions.flatMap (fun d => #[d.symbol, d.body] ++ d.parameters ++ d.arrayConstants)
 

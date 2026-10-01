@@ -1,7 +1,7 @@
 import Smt2Lean.Chc
-import Smt2Lean.Arithmetic
-import Smt2Lean.BitVec
-import Smt2Lean.Array
+import Smt2Lean.Theory.Arithmetic
+import Smt2Lean.Theory.BitVec
+import Smt2Lean.Theory.Model
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
 import Smt.Reconstruct.Int
@@ -73,7 +73,7 @@ private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
 
 /-- Try our encodings first, then the upstream handlers for the supported theories. -/
 @[smt_term_reconstruct] private def reconstructTerm : Smt.TermReconstructor := fun term => do
-  for reconstruct in [Arrays.reconstruct, BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
+  for reconstruct in [Datatypes.reconstruct, Arrays.reconstruct, BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
       Smt.Reconstruct.Prop.reconstructProp, Smt.Reconstruct.Builtin.reconstructBuiltin,
       Smt.Reconstruct.Int.reconstructInt, Smt.Reconstruct.UF.reconstructUF] do
     if let some value ← reconstruct term then return value
@@ -110,10 +110,10 @@ private def withAssertionModel [Inhabited α] (query : ParsedQuery)
   withCarriers query.sorts fun carriers sortCache => do
     -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
     for h : i in [:query.assertions.size] do
-      atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
-        (validateAssertion query.assertions[i] query.declarations (sorts := query.sorts) (constructors := query.arrayConstructors)).runIO
-    Arithmetic.withZeroCases query.assertions fun zeroCases context => do
-      Arrays.withModels (arrayModelTerms query) sortCache context (constructors := query.arrayConstructors) fun arrayParameters laws sortCache context => do
+      atSource (some query.assertions[i].source) s!"assertion {i + 1}" (queryNumber := query.number) do
+        (validateAssertion query.assertions[i].term query.declarations (sorts := query.valueSorts) (constructors := query.arrayConstructors)).runIO
+    Arithmetic.withZeroCases query.assertionTerms fun zeroCases context => do
+      Models.withModels query.datatypes (arrayModelTerms query) sortCache context (constructors := query.arrayConstructors) fun arrayParameters laws sortCache context => do
         let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
           atSource declaration.source s!"declaration '{declaration.name}'" (queryNumber := query.number) do
             let sort ← ofExcept declaration.term.getSort
@@ -124,9 +124,9 @@ private def withAssertionModel [Inhabited α] (query : ParsedQuery)
           let mut termCache : Std.HashMap cvc5.Term Expr := {}
           for declaration in query.declarations, parameter in parameters do
             termCache := termCache.insert declaration.term parameter
-          let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i term =>
-            atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
-              let value ← Smt.Reconstruct.reconstructTerm term
+          let reconstruction : Smt.ReconstructM (Array Expr) := query.assertions.mapIdxM fun i assertion =>
+            atSource (some assertion.source) s!"assertion {i + 1}" (queryNumber := query.number) do
+              let value ← Smt.Reconstruct.reconstructTerm assertion.term
               checkPropositions #[value] (← get)
               return value
           -- Match the instance scope used when the emitted `if` expressions are elaborated.
@@ -190,7 +190,7 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
     Arithmetic.withZeroCases terms fun zeroCases context => do
       let modelTerms := problem.arrayTerms ++ problem.relations.map (·.term) ++ terms ++
         problem.clauses.flatMap (fun c => c.binders.map (·.term))
-      Arrays.withModels modelTerms sortCache context (constructors := problem.arrayConstructors) fun arrayParameters laws sortCache context => do
+      Models.withModels problem.datatypes modelTerms sortCache context (constructors := problem.arrayConstructors) fun arrayParameters laws sortCache context => do
         let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
           atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
             let sort ← ofExcept relation.term.getSort

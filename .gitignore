@@ -1,3 +1,4 @@
 .claude/
 .lake/
 /docs/
+__pycache__/

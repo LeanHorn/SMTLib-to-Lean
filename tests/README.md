@@ -3,7 +3,7 @@
 Run the complete translator suite from any working directory:
 
 ```sh
-tests/translation/run-demo.sh
+tests/run.sh
 ```
 
 This builds the CLI and Lean tests, runs each Lean test executable, then runs
@@ -21,7 +21,12 @@ This builds the CLI and Lean tests, runs each Lean test executable, then runs
 | `lake exe testArrays` | Complete array propositions, shared models, nested/quantified array interpretations, constant-array laws, and standalone emission |
 | `lake env python3 tests/cli.py` | CLI results, standalone file compilation, golden outputs, completed proofs, diagnostics, and output protection; build `smt2lean` first |
 
-The Lean test modules stay in `backend/`. Semantic tests elaborate generated text
+The Lean runners stay in `backend/`; `Support.lean` shares reconstruction and
+emission checks, and arithmetic, bitvector, session, and parser-term cases live in
+separate modules. The Python runner loads feature groups from `cli_checks/`.
+The existing `translation/run-demo.sh` command forwards to `run.sh`.
+
+Semantic tests elaborate generated text
 in memory and compare it with the reconstructed expressions. The CLI suite owns
 filesystem checks: it compiles both `Query.lean` and its statement section,
 refuses existing destinations, and preserves edited proofs. Core-only outputs
@@ -66,7 +71,7 @@ code unchanged after source comments are removed. Root `demo.smt2` and
 ## Original frontend queries
 
 ```sh
-tests/run.sh   # Replay the original SMT/CHC corpus through z3.
+tests/replay-corpus.sh   # Replay the original SMT/CHC corpus through z3.
 ```
 
 This separate script compares solver results with the answers recorded in the
@@ -336,3 +341,10 @@ remain rejected; previous unsupported-conversion tests now reject exponentiation
 lake exe smt2lean tests/translation/bitvec/conversions.smt2 --out bitvec-conversions-demo
 lake env lean bitvec-conversions-demo/Query.lean
 ```
+
+Datatype regressions are in `translation/datatypes/`: `constructors.smt2` combines
+enums, records, recursive/mutual types, definitions, quantifiers, and arrays;
+`chc.smt2` covers Horn arguments and guards; `sessions.smt2` covers scopes and resets.
+`backend/Datatypes.lean` checks native metadata, field order, emitted signatures,
+and complete targets. `cli_checks/datatypes.py` checks standalone output,
+constructor-law proofs, CHC models/refutations, and unsupported-feature rejection.

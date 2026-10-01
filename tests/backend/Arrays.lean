@@ -1,8 +1,8 @@
-import Smt2Lean.Pipeline
-import Lean.Elab.Frontend
+import tests.backend.Support
 import tests.backend.ArrayModel
 
 open Lean Meta Qq Classical
+open Smt2Lean.Tests
 open Smt2Lean.Backend Smt2Lean.Translate Smt2Lean.Emit
 
 -- Expand the contract here so expected propositions do not depend on emitted helpers.
@@ -13,50 +13,24 @@ local notation "arrayLaws" => (fun (I E A : Type) (read : A → I → E)
     (∀ a i j v, i ≠ j → read (write a i v) j = read a j) ∧
     (∀ a b, (∀ i, read a i = read b i) → a = b))
 
-private def checkEqual (actual expected : Expr) : MetaM Unit := do
-  unless ← isDefEq actual expected do
-    throwError "expected {expected}, got {actual}"
-
 private def checkStatement (query : ParsedQuery) (value expected : Expr)
     (kind : GoalKind := .refutation) (usesReal : Bool := false) : MetaM Unit := do
-  let (statement, proof) := match kind with
-    | .refutation => (`Refutation, `refutation)
-    | .problem => (`Problem, `problem)
+  let statement := match kind with
+    | .refutation => `Refutation
+    | .problem => `Problem
   checkEqual value expected
   if value.hasFVar || value.hasLooseBVars || value.hasMVar then
     throwError "array statement contains unresolved variables"
   checkEqual (← inferType value) q(Prop)
   checkStatementAxioms statement
-  let originalAxioms ← collectAxioms statement
   let source ← render value kind query.source query.assertionSources
   unless source.startsWith (if usesReal then "import Mathlib.Data.Real.Basic\n" else "import Init\n") do
     throwError "array output has the wrong imports"
-  unsafe enableInitializersExecution
-  let some emitted ← Elab.runFrontend source
-      (({} : Options).setBool `Elab.async false) "ArrayQuery.lean" `ArrayQuery
-    | throwError "standalone array output did not elaborate"
-  let some (.defnInfo definition) := emitted.find? statement
-    | throwError "array output is missing its statement"
-  let original ← deltaExpand value Smt2Lean.Helpers.isHelper
-  let reconstructed ← withEnv emitted <| deltaExpand definition.value Smt2Lean.Helpers.isHelper
-  checkEqual reconstructed original
-  let emittedAxioms ← withEnv emitted <| collectAxioms statement
-  unless emittedAxioms.size == originalAxioms.size && emittedAxioms.all originalAxioms.contains do
-    throwError "array emission changed statement axioms"
-  withEnv emitted <| checkStatementAxioms statement
-  let proofAxioms ← withEnv emitted <| collectAxioms proof
-  unless proofAxioms.contains ``sorryAx do
-    throwError "expected an unfinished array proof template"
+  checkEmission value kind query.source query.assertionSources
 
-private def checkRefutation (query : ParsedQuery) (expected : Expr)
+private def checkArrayRefutation (query : ParsedQuery) (expected : Expr)
     (usesReal : Bool := false) : MetaM Unit := do
   checkStatement query (← defineRefutation query) expected (usesReal := usesReal)
-
-private def runQuery (env : Environment) (name input : String)
-    (check : ParsedQuery → MetaM Unit) : IO Unit :=
-  (parseAndInspectQuery input (name := name) fun query => do
-    discard <| (check query).toIO { fileName := name, fileMap := default } { env }
-  ).runIO
 
 private def checkBasic (env : Environment) : IO Unit :=
   runQuery env "flat array operations" "
@@ -76,7 +50,7 @@ private def checkBasic (env : Environment) : IO Unit :=
     (assert (= (ite p a b) (f (update a i) j)))
     (assert (= (select (let ((x (store b j v))) x) i) (select b i)))
     (check-sat)" fun query => do
-      checkRefutation query q(∀ (A : Type) (read : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (read : A → Int → Int)
         (write : A → Int → Int → A) (a b : A) (i j v : Int) (p : Prop)
         (f : A → Int → A),
         arrayLaws Int Int A read write →
@@ -93,7 +67,7 @@ private def checkUnused (env : Environment) : IO Unit := do
     (declare-fun unused ((Array Int Bool)) (Array Bool Int))
     (assert true)
     (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (readA : A → Int → Prop)
+      checkArrayRefutation query q(∀ (A : Type) (readA : A → Int → Prop)
         (writeA : A → Int → Prop → A)
         (B : Type) (readB : B → Prop → Int) (writeB : B → Prop → Int → B)
         (_unused : A → B),
@@ -104,7 +78,7 @@ private def checkUnused (env : Environment) : IO Unit := do
     (define-fun unused ((a (Array Int Int))) Bool true)
     (assert true)
     (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (read : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (read : A → Int → Int)
         (write : A → Int → Int → A), arrayLaws Int Int A read write → True → False)
 
 private def checkSorts (env : Environment) : IO Unit :=
@@ -125,7 +99,7 @@ private def checkSorts (env : Environment) : IO Unit :=
     (assert (= (select (store c r v) r) v))
     (assert (= (select (store d u u) u) u))
     (check-sat)" fun query =>
-      checkRefutation query (usesReal := true) q(∀ U : Type, Nonempty U →
+      checkArrayRefutation query (usesReal := true) q(∀ U : Type, Nonempty U →
         ∀ (A : Type) (readA : A → Prop → Int) (writeA : A → Prop → Int → A)
           (B : Type) (readB : B → Int → Prop) (writeB : B → Int → Prop → B)
           (C : Type) (readC : C → Real → BitVec 4) (writeC : C → Real → BitVec 4 → C)
@@ -165,7 +139,7 @@ private def checkQuantified (env : Environment) : IO Unit := do
         (exists ((a (Array Int Int)))
           (and (= a (store before 0 1)) (= (select a 0) (select before 0)))))))
     (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (readA : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (readA : A → Int → Int)
         (writeA : A → Int → Int → A)
         (N : Type) (readN : N → A → A) (writeN : N → A → A → N)
         (a : A) (nested : N),
@@ -182,7 +156,7 @@ private def checkQuantified (env : Environment) : IO Unit := do
       let expected : Q(Prop) := q(∀ (A : Type) (read : A → Int → Int)
         (write : A → Int → Int → A), arrayLaws Int Int A read write →
         (∀ a : A, ∃ i : Int, read a i ≠ i) → False)
-      checkRefutation query expected
+      checkArrayRefutation query expected
       -- This translated refutation is false: a proper array model satisfies the input.
       let countermodel := q(fun h : ∀ (A : Type) (read : A → Int → Int)
           (write : A → Int → Int → A), arrayLaws Int Int A read write →
@@ -204,7 +178,7 @@ private def checkConstants (env : Environment) : IO Unit := do
       ((as const (Array Int Int)) 2)) true) i) 2))
     (assert (forall ((a (Array Int Int))) (= (select (store a i (select zero i)) i) 0)))
     (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (readA : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (readA : A → Int → Int)
         (writeA : A → Int → Int → A) (constA : Int → A)
         (B : Type) (readB : B → Prop → A) (writeB : B → Prop → A → B)
         (constB : A → B) (i : Int),
@@ -219,7 +193,7 @@ private def checkConstants (env : Environment) : IO Unit := do
     (declare-const x Int)
     (assert (|!| ((as const (Array Int Int)) x) 1))
     (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (read : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (read : A → Int → Int)
         (write : A → Int → Int → A) (const : Int → A)
         (f : A → Int → Prop) (x : Int),
         (arrayLaws Int Int A read write ∧ (∀ v i, read (const v) i = v)) →
@@ -230,7 +204,7 @@ private def checkConstants (env : Environment) : IO Unit := do
     (declare-const x Int)
     (assert (= ((as const (Array Int Int)) x) (const x)))
     (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (read : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (read : A → Int → Int)
         (write : A → Int → Int → A) (f : Int → A) (x : Int),
         arrayLaws Int Int A read write → f x = f x → False)
   runQuery env "symbolic constant arrays with native binding scopes" "
@@ -242,7 +216,7 @@ private def checkConstants (env : Environment) : IO Unit := do
     (assert (= (select ((as const (Array Int Int)) (! x :named payload)) 0) x))
     (assert (= (select ((as const (Array Int (Array Int Int))) (fill x)) 0) (fill x)))
     (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (readA : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (readA : A → Int → Int)
         (writeA : A → Int → Int → A) (constA : Int → A)
         (N : Type) (readN : N → Int → A) (writeN : N → Int → A → N)
         (constN : A → N) (x : Int),
@@ -255,7 +229,7 @@ private def checkConstants (env : Environment) : IO Unit := do
       "(define-fun unused () (Array Int Int) ((as const (Array Int Int)) 3)) (assert true)",
       "(assert (let ((unused ((as const (Array Int Int)) 3))) true))"] do
     runQuery env "erased constant array model" s!"(set-logic ALL) {input} (check-sat)" fun query =>
-      checkRefutation query q(∀ (A : Type) (read : A → Int → Int)
+      checkArrayRefutation query q(∀ (A : Type) (read : A → Int → Int)
         (write : A → Int → Int → A) (const : Int → A),
         (arrayLaws Int Int A read write ∧ (∀ v i, read (const v) i = v)) → True → False)
   runQuery env "constant array only in an ignored pattern" "
@@ -263,7 +237,7 @@ private def checkConstants (env : Environment) : IO Unit := do
     (assert (forall ((i Int)) (! (= i i)
       :pattern ((select ((as const (Array Int Int)) 0) i)))))
     (check-sat)" fun query =>
-      checkRefutation query q((∀ i : Int, i = i) → False)
+      checkArrayRefutation query q((∀ i : Int, i = i) → False)
 
 private def checkHorn (env : Environment) : IO Unit := do
   let check (path : String) (expected : Expr) : IO Unit := do

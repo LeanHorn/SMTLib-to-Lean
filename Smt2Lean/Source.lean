@@ -34,6 +34,7 @@ def Ref.context (ref : Ref) (chc : Bool := false) (queryNumber : Nat := 1) : Str
 structure Command where
   source : Ref
   text : String
+  tokens : Array String
   deriving BEq, Inhabited, Repr
 
 structure Error where
@@ -96,7 +97,7 @@ def tokenize (input : String) : Array String := Id.run do
 
 /-- Check scope counts before native parsing, which already changes the symbol scope. -/
 def Command.scopeChange (command : Command) : Except String (Option (String × Nat)) := do
-  let parts := tokenize command.text
+  let parts := command.tokens
   let kind := parts[1]?.getD ""
   unless kind == "push" || kind == "pop" do return none
   let #["(", _, value, ")"] := parts | throw s!"{kind}: expected one SMT-LIB numeral"
@@ -109,7 +110,7 @@ def Command.scopeChange (command : Command) : Except String (Option (String × N
 
 /-- Reject unaudited attributes and recover labels before cvc5 erases or merges them. -/
 def Command.withNames (command : Command) : Except String Command := do
-  let parts := tokenize command.text
+  let parts := command.tokens
   unless #["assert", "define-fun", "define-const"].contains (parts[1]?.getD "") do
     return command
   let mut names := #[]
@@ -177,7 +178,8 @@ def Reader.next (initial : Reader input) (file : String)
         depth := depth - 1
         if depth == 0 then
           let source := { file, number := reader.number, span := { start, stop := reader.position } }
-          return (some { source, text := String.extract begin reader.cursor },
+          let text := String.extract begin reader.cursor
+          return (some { source, text, tokens := tokenize text },
             { reader with number := reader.number + 1 })
   let (what, opened) := match mode with
     | .string => ("string", quoteStart)

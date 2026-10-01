@@ -43,8 +43,7 @@ structure State where
   constructors : Array ArrayConstructor := #[]
 
 /-- Reserve a prefix absent from every original lexeme, including quoted symbols. -/
-def initial (input : String) : State := Id.run do
-  let tokens := Source.tokenize input
+def initial (tokens : Array String) : State := Id.run do
   let mut number := 0
   while tokens.any (fun token => (SExpr.atom token).name.startsWith s!"smt2lean.internal.{number}.") do
     number := number + 1
@@ -196,7 +195,7 @@ private partial def lower (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
 /-- Rewrite only term-bearing commands. Source text and locations remain unchanged. -/
 def prepare (command : Source.Command) (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
     (query : ParsedQuery) : StateT State cvc5.Env (String × Requirements × Bindings) := do
-  let tokens := Source.tokenize command.text
+  let tokens := command.tokens
   unless #["assert", "define-fun", "get-value"].contains (tokens[1]?.getD "") do
     return (command.text, #[], #[])
   let (expression, stop) ← match readExpr tokens 0 with
@@ -205,15 +204,17 @@ def prepare (command : Source.Command) (solver : cvc5.Solver) (symbols : cvc5.Sy
   unless stop == tokens.size do throw (.error "unexpected trailing tokens")
   let .list items := expression | throw (.error "expected a command")
   let bindings := query.namedArrayConstants.reverse ++
-    (knownTerms query).map (fun declaration => (declaration.term.getSymbol!, #[]))
+    (knownTerms query).map (fun declaration => (declaration.term.getSymbol!, #[])) ++
+    query.datatypes.flatMap (fun group => group.types.flatMap fun datatype =>
+      datatype.constructors.map (fun constructor => (constructor.name, #[])))
   if tokens[1]? == some "define-fun" && items.size == 5 then
     let .list parameters := items[2]! | throw (.error "expected definition parameters")
     let locals := parameters.filterMap fun parameter => match parameter with
       | .list pair => pair[0]?.map (fun name => (name.name, #[]))
       | _ => none
-    let body ← lower solver symbols query.sorts (locals ++ bindings) items[4]!
+    let body ← lower solver symbols query.valueSorts (locals ++ bindings) items[4]!
     return ((SExpr.list (items.set! 4 body.expression)).render, body.requirements, body.names)
-  let result ← lower solver symbols query.sorts bindings expression
+  let result ← lower solver symbols query.valueSorts bindings expression
   return (result.expression.render, result.requirements, result.names)
 
 /-- Internal native declarations must never become source parameters. -/

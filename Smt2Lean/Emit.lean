@@ -1,5 +1,6 @@
 import Smt2Lean.Source
-import Smt2Lean.Helpers
+import Smt2Lean.Emit.Datatype
+import Smt2Lean.Theory.Helpers
 import Smt.Reconstruct.Int.Core
 import Mathlib.Algebra.Order.Floor.Defs
 
@@ -92,6 +93,8 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
 Single-query files retain their original names and formatting. -/
 def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[]) : MetaM String := do
   if goals.isEmpty then throwError "expected at least one translated query"
+  let datatypeGroups ← Datatypes.groups (goals.map (·.value))
+  let datatypeDeclarations ← Datatypes.render datatypeGroups printExpr
   let mut helpers : Array Name := #[]
   for goal in goals do
     for name in goal.value.getUsedConstants.filter Helpers.isHelper do
@@ -101,11 +104,11 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[]) :
     renderGoal goal (if goals.size == 1 then none else some (i + 1))
   let requests := String.join (skipped.toList.map fun command =>
     sourceComment "unexecuted request" command.source ++ s!"-- Not executed: {reprStr command.text}\n")
-  let usesReal := goals.any fun goal => (goal.value.find? (·.isConstOf ``Real)).isSome
+  let usesReal := (← Datatypes.usesReal datatypeGroups) || goals.any fun goal => (goal.value.find? (·.isConstOf ``Real)).isSome
   let usesFloor := goals.any fun goal => (goal.value.find? (·.isConstOf ``Int.floor)).isSome
   let imports := if usesFloor then "import Mathlib.Algebra.Order.Archimedean.Real.Basic"
     else if usesReal then "import Mathlib.Data.Real.Basic" else "import Init"
-  return imports ++ "\n\n-- Statements\n\n" ++ requests ++ helperDefinitions ++
+  return imports ++ "\n\n-- Statements\n\n" ++ requests ++ datatypeDeclarations ++ helperDefinitions ++
     String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
     String.intercalate "\n" (entries.toList.map Prod.snd)
 

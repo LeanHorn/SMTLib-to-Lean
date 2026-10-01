@@ -38,10 +38,10 @@ private def checkParser : IO Unit := do
     require (domains.size == 1 && domains.all (·.isInteger) &&
       (← ofExcept signature.getFunctionCodomainSort).isBoolean)
       "expected k_1 : Int → Bool"
-    require (query.assertions.size == 3) "expected three assertions"
+    require (query.assertionTerms.size == 3) "expected three assertions"
     let relations ← collectRelations query.declarations
     require (relations.size == 1) "expected one CHC relation"
-    let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
+    let clauses ← query.assertionTerms.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
     require (clauses.map (·.assertionNumber) == #[1, 2, 3]) "wrong assertion numbers"
     require (clauses.map (·.binders.size) == #[3, 5, 3]) "lh_sum_rec lost universal variables"
     require (clauses.map (headName ∘ (·.head)) == #["k_1", "k_1", "false"])
@@ -51,7 +51,7 @@ private def checkParser : IO Unit := do
       let premise := clause.premises[0]!
       require ((← ofExcept premise.getKind) == .AND && premise.getNumChildren == count)
         "lh_sum_rec premise changed"
-    for assertion in query.assertions do
+    for assertion in query.assertionTerms do
       require ((← ofExcept assertion.getSort).isBoolean &&
         (← ofExcept assertion.getKind) == .FORALL)
         "expected a universally quantified Bool assertion"
@@ -84,7 +84,7 @@ private def checkClauses : IO Unit := do
       "wrong relation signatures"
     for relation in relations, declaration in query.declarations do
       require (relation.term == declaration.term) "relation identity changed"
-    let clauses ← query.assertions.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
+    let clauses ← query.assertionTerms.mapIdxM fun i assertion => extractClause relations (i + 1) assertion
     require (clauses.map (·.assertionNumber) == (List.range 16).toArray.map (· + 1))
       "wrong clause count or source assertion numbers"
     require (clauses.map (·.binders.size) == #[0, 0, 0, 0, 0, 3, 3, 1, 5, 0, 0, 3, 4, 4, 2, 4])
@@ -94,7 +94,7 @@ private def checkClauses : IO Unit := do
     require (clauses.map (headName ∘ (·.head)) ==
       #["P", "R", "done", "True", "a b", "P", "R", "done", "R", "false", "false", "false", "R", "R", "R", "R"])
       "wrong clause heads"
-    let facts ← (query.assertions.extract 0 5).mapM (recognizeFact relations)
+    let facts ← (query.assertionTerms.extract 0 5).mapM (recognizeFact relations)
     require (facts.map (·.relation.term) == (query.declarations.extract 0 5).map (·.term))
       "facts refer to the wrong declarations"
     require (facts.map (fun f => f.arguments.map toString) ==
@@ -160,7 +160,7 @@ private def checkRejectedFacts : IO Unit := do
       ("(set-logic HORN)\n" ++ body ++ "\n(check-sat)") (name := name) (mode := .chc)
       fun query => do
         let relations ← collectRelations query.declarations
-        for assertion in query.assertions do discard <| recognizeFact relations assertion
+        for assertion in query.assertionTerms do discard <| recognizeFact relations assertion
 
 private def checkBoundData : IO Unit := do
   let input := "(set-logic HORN)\n(declare-const p Bool)\n(declare-fun R (Bool) Bool)\n" ++
@@ -168,7 +168,7 @@ private def checkBoundData : IO Unit := do
     "(assert (forall ((p Bool)) (=> (not p) (R p))))\n(check-sat)"
   (parseAndInspectQuery input (mode := .chc) fun query => do
     let relations ← collectRelations query.declarations
-    let quantified := query.assertions[0]!
+    let quantified := query.assertionTerms[0]!
     let bound := quantified[0]![0]!
     let some atom ← relationAtom? relations quantified[1]!
       | throw (.error "expected R applied to a bound Bool variable")
@@ -202,8 +202,8 @@ private def checkRejectedClauses : IO Unit := do
     expectError name reason <| parseAndInspectQuery input (name := name) (mode := .chc)
       fun query => do
         let relations ← collectRelations query.declarations
-        for h : i in [:query.assertions.size] do
-          discard <| extractClause relations (i + 1) query.assertions[i]
+        for h : i in [:query.assertionTerms.size] do
+          discard <| extractClause relations (i + 1) query.assertionTerms[i]
 
 private def checkNativeIdentity : IO Unit :=
   expectError "native identity" "undeclared CHC relation" do

@@ -1,10 +1,20 @@
-import Smt2Lean.Helpers
-import Smt2Lean.Backend.Validate
+import Smt2Lean.Theory.Helpers
 import Mathlib.Algebra.Order.Archimedean.Real.Basic
 
 namespace Smt2Lean.Arithmetic
 
 open Lean Meta Qq
+
+/-- cvc5 may retain signed integer numerals inside Real arithmetic. -/
+private def integerLiteral? (term : cvc5.Term) : Option Int := Id.run do
+  let mut value := term
+  let mut negative := false
+  while value.getKind! == .NEG do
+    negative := !negative
+    value := value[0]!
+  if !value.getSort!.isInteger || !value.isIntegerValue then return none
+  let result := value.getIntegerValue!
+  return some (if negative then -result else result)
 
 /-- Recognize nonzero literals, including unary minus, without rewriting the query. -/
 private def nonzeroLiteral (term : cvc5.Term) : Bool := Id.run do
@@ -53,7 +63,7 @@ def withZeroCases [Inhabited α] (terms : Array cvc5.Term)
 
 /-- Lift Int operands to Real without changing their cached Int reconstruction. -/
 private def realOperand (term : cvc5.Term) : Smt.ReconstructM Expr := do
-  if let some value := Backend.integerLiteral? term then
+  if let some value := integerLiteral? term then
     let literal : Q(Real) ← mkNumeral q(Real) value.natAbs
     return if value < 0 then q(-$literal) else literal
   if term.getSort!.isInteger then

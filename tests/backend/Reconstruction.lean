@@ -58,7 +58,7 @@ def main : IO Unit := do
   (parseAndInspectQuery input (name := "reconstruction") fun query => do
     unless query.invoked == #["set-logic", "assert"] do
       throw (.error s!"unexpected native invocation trace: {query.invoked}")
-    let #[assertion] := query.assertions
+    let #[assertion] := query.assertionTerms
       | throw (.error "expected one assertion")
     discard <| (checkReconstruction assertion).toIO
       { fileName := "reconstruction", fileMap := default } { env }

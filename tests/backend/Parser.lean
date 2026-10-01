@@ -1,48 +1,14 @@
-import Smt2Lean.Backend.Parser
+import tests.backend.ParserTerms
 
-open Smt2Lean.Backend
+open Smt2Lean.Backend Smt2Lean.Tests.Parser
 
 private def fixtureDir : System.FilePath := "tests/translation/bool"
-
-private def require (condition : Bool) (message : String) : IO Unit := do
-  unless condition do throw (IO.userError message)
-
-private def checkAccepted (name input : String) (names : Array String) (count : Nat)
-    (invoked : Array String)
-    (inspect : ParsedQuery → cvc5.Env Unit := fun _ => pure ()) : IO Unit := do
-  let calls ← IO.mkRef 0
-  (parseAndInspectQuery input (name := name) fun query => do
-    calls.modify (· + 1)
-    require (query.declarations.map (·.name) == names) s!"{name}: wrong declarations"
-    require (query.assertions.size == count) s!"{name}: wrong assertion count"
-    require (query.assertionSources.size == count) s!"{name}: missing assertion locations"
-    require (query.invoked == invoked) s!"{name}: unexpected invocation trace: {query.invoked}"
-    for left in query.declarations do
-      for right in query.declarations do
-        if left.name != right.name then
-          require (left.term != right.term) s!"{name}: declaration identities collapsed"
-    inspect query
-  ).runIO
-  require ((← calls.get) == 1) s!"{name}: expected exactly one inspection"
-
-private def checkRejected (name input : String) (ordinal : Nat) (reason : String) : IO Unit := do
-  let inspected ← IO.mkRef false
-  let result ← (parseAndInspectQuery input
-    (fun _ => inspected.set true) (name := name)).run
-  require (!(← inspected.get)) s!"{name}: invalid input reached inspect"
-  match result with
-  | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
-  | .error error =>
-    let message := toString error
-    require (message.contains s!"{name}:" && (message.contains s!": command {ordinal}:" || message.contains s!": command {ordinal} (:named "))
-      s!"{name}: wrong error location: {message}"
-    require (message.contains reason) s!"{name}: wrong rejection reason: {message}"
 
 private def checkConnectives (name input : String) : IO Unit :=
   checkAccepted name input #["True", "a b", "p", "q", "r", "unused"] 17
     (#["set-logic"] ++ Array.replicate 6 "declare-fun" ++ Array.replicate 17 "assert")
     fun query => do
-      require (query.assertions[0]? == query.declarations[0]?.map (·.term))
+      require (query.assertionTerms[0]? == query.declarations[0]?.map (·.term))
         s!"{name}: |True| must refer to the declared variable, not the Boolean literal"
 
 private def checkAcceptedQueries : IO Unit := do
@@ -84,7 +50,7 @@ private def checkAcceptedQueries : IO Unit := do
   checkAccepted "arithmetic.smt2" arithmetic #["x", "y", "z", "p"] 15
     (#["set-logic"] ++ Array.replicate 4 "declare-fun" ++ Array.replicate 15 "assert")
     fun query => do
-      let chainGroups := query.assertions.back![1]!.getChildren
+      let chainGroups := query.assertionTerms.back![1]!.getChildren
       require (chainGroups.size == 4) "expected all four comparison chains"
       for chain in chainGroups do
         require ((← ofExcept chain.getKind) == .AND && chain.getNumChildren == 3)
@@ -99,11 +65,11 @@ private def checkAcceptedQueries : IO Unit := do
     (#["set-logic", "declare-fun", "declare-fun"] ++ Array.replicate 9 "assert")
     fun query => do
       let #[x, p] := query.declarations | throw (.error "expected two declarations")
-      require (query.assertions[0]![0]! == x.term && query.assertions[1]! == query.assertions[0]!)
+      require (query.assertionTerms[0]![0]! == x.term && query.assertionTerms[1]! == query.assertionTerms[0]!)
         "let binding order changed the outer Int reference"
-      require (query.assertions[2]![0]! == p.term)
+      require (query.assertionTerms[2]![0]! == p.term)
         "let binding captured the outer Bool reference"
-      let swapped := query.assertions[4]!
+      let swapped := query.assertionTerms[4]!
       require (swapped[0]! == p.term && swapped[1]![0]! == x.term)
         "simultaneous bindings lost their outer identities across sorts"
   let functions ← IO.FS.readFile "tests/translation/functions/applications.smt2"
@@ -115,7 +81,7 @@ private def checkAcceptedQueries : IO Unit := do
       fun query => do
         let #[_, g, _, _, x, y, _, _, _, _, _, _, _, _] := query.declarations
           | throw (.error "expected fourteen declarations")
-        let application := query.assertions[0]![0]!
+        let application := query.assertionTerms[0]![0]!
         require ((← ofExcept application.getKind) == .APPLY_UF)
           "expected an uninterpreted function application"
         require (application.getChildren == #[g.term, x.term, y.term])
@@ -129,7 +95,7 @@ private def checkAcceptedQueries : IO Unit := do
       #["x", "p", "R", "f", "True"] 9
       (#["set-logic"] ++ Array.replicate 5 "declare-fun" ++ Array.replicate 9 "assert")
       fun query => do
-        let outer := query.assertions[3]!
+        let outer := query.assertionTerms[3]!
         let body := outer[1]!
         let inner := body[0]!
         let outerVar := outer[0]![0]!
@@ -160,8 +126,8 @@ private def checkSolverOptions : IO Unit := do
       query.source.map (·.number) == some 21) "configuration lost its original source"
     let #[declaration] := query.declarations | throw (.error "expected one declaration")
     let p := declaration.term
-    require (query.assertions[0]! == p && (← ofExcept query.assertions[1]!.getKind) == .NOT &&
-      query.assertions[1]![0]! == p) "configuration changed the assertions"
+    require (query.assertionTerms[0]! == p && (← ofExcept query.assertionTerms[1]!.getKind) == .NOT &&
+      query.assertionTerms[1]![0]! == p) "configuration changed the assertions"
   for key in #[":produce-models", ":produce-proofs", ":produce-unsat-cores", ":print-success"] do
     for value in #["1", "yes", "TRUE", "\"true\"", "|true|", "(true)", "falsehood"] do
       checkRejected s!"invalid-{key}"
@@ -202,7 +168,7 @@ private def checkSessions : IO Unit := do
   (parseAndInspectSession (← IO.FS.readFile path) (name := path) fun query => do
     let i := (← seen.get).size
     require (query.number == i + 1) "wrong query number"
-    require (query.assertions.size == #[1, 2, 3, 2, 1, 3, 2, 2][i]!) "wrong active assertion count"
+    require (query.assertionTerms.size == #[1, 2, 3, 2, 1, 3, 2, 2][i]!) "wrong active assertion count"
     require (query.definitions.size == #[0, 1, 1, 1, 0, 1, 1, 1][i]!) "popped definition leaked"
     require (query.declarations.map (·.name) ==
       #[#["p"], #["p", "x"], #["p", "x", "q"], #["p", "x"], #["p"], #["p", "x"], #["p", "x"], #["p", "x"]][i]!)
@@ -212,7 +178,7 @@ private def checkSessions : IO Unit := do
       (query.commands.filter (·.text == "(check-sat)")).size == query.number)
       "query lost its source or command history"
     require (!query.invoked.contains "check-sat") "a solver query was invoked"
-    for term in query.assertions do validateAssertion term query.declarations
+    for term in query.assertionTerms do validateAssertion term query.declarations
     let ids ← query.declarations.mapM (fun d => ofExcept d.term.getId)
     seen.modify (·.push ids)
   ).runIO
@@ -224,7 +190,7 @@ private def checkSessions : IO Unit := do
   let calls ← IO.mkRef 0
   (parseAndInspectSession "(set-logic ALL) (check-sat) (check-sat) (push 2)" fun query => do
     calls.modify (· + 1)
-    require (query.assertions.isEmpty && query.declarations.isEmpty) "empty checks gained assertions"
+    require (query.assertionTerms.isEmpty && query.declarations.isEmpty) "empty checks gained assertions"
   ).runIO
   require ((← calls.get) == 2) "repeated checks or an open final scope were lost"
   for (body, checks, command, reason) in #[
@@ -270,9 +236,9 @@ private def checkDefinitions : IO Unit := do
         require (query.commands[definition.source.number - 1]!.text.startsWith "(define-fun")
           "definition lost its source command"
       let some x := query.declarations[0]? | throw (.error "missing x")
-      require (query.assertions[0]![0]![0]! == x.term)
+      require (query.assertionTerms[0]![0]![0]! == x.term)
         "nullary definition lost its definition-time global"
-      for term in query.assertions do validateAssertion term query.declarations
+      for term in query.assertionTerms do validateAssertion term query.declarations
   for (logic, body, trace) in #[
     ("QF_UF", "(define-fun p () Bool true)", #["define-fun"]),
     ("QF_LIA", "(define-fun id ((x Int)) Int x)", #["define-fun"]),
@@ -334,8 +300,8 @@ private def checkNamedAssertions : IO Unit := do
       require (query.assertionSources.map (·.names) == #[#["positive"], #[], #["same body"],
         #["left (;):named", "right"], #[], #["next value"], #["line\nname", "also"]])
         "labels were lost, merged, or parsed inside quoted text"
-      require (query.assertions[0]! == query.assertions[1]![0]! &&
-        query.assertions[0]! == query.assertions[2]!) "named reference changed its body"
+      require (query.assertionTerms[0]! == query.assertionTerms[1]![0]! &&
+        query.assertionTerms[0]! == query.assertionTerms[2]!) "named reference changed its body"
       require (query.definitions.size == 1) "native named bindings became artificial definitions"
   let invalid := "(set-logic ALL)\n  (assert (! (= (^ 1 0) 0) :named |bad body|))\n(check-sat)"
   match ← (parseAndInspectQuery invalid (fun _ => throw (.error "invalid query reached inspect"))
@@ -485,7 +451,7 @@ private def checkQuantifierHints : IO Unit := do
       Array.replicate 10 "assert") fun query => do
     require (query.commands.any (·.text.contains ":no-pattern")) "lost original hints"
     require (query.assertionSources.flatMap (·.names) == #["allP"]) "qid became a label"
-    let mut pending := query.assertions ++ query.definitions.map (·.body)
+    let mut pending := query.assertionTerms ++ query.definitions.map (·.body)
     while !pending.isEmpty do
       let term := pending.back!
       pending := pending.pop
@@ -610,7 +576,7 @@ private def checkAssumptions : IO Unit := do
       #["p"] (if input == "(check-sat-assuming ())" then 0 else if input == "(check-sat-assuming (p))" then 1 else 3)
       #["set-logic", "declare-fun"] fun query => do
         require (query.checkCommand == "check-sat-assuming" &&
-          query.assumptionCount == query.assertions.size) "lost assumptions"
+          query.assumptionCount == query.assertionTerms.size) "lost assumptions"
   for literal in #["true", "false", "(not true)", "(and p p)", "(not (not p))", "x", "f", "missing"] do
     let input := "(set-logic ALL)(declare-const p Bool)(declare-const x Int)" ++
       "(declare-fun f (Bool) Bool)(check-sat-assuming (" ++ literal ++ "))"
@@ -621,7 +587,7 @@ private def checkAssumptions : IO Unit := do
   (parseAndInspectSession "(set-logic ALL)(declare-const p Bool)(assert p)(check-sat-assuming ((not p)))(check-sat)"
     fun query => do
       require (!query.invoked.contains "check-sat-assuming") "solver invoked"
-      seen.modify (·.push query.assertions.size)).runIO
+      seen.modify (·.push query.assertionTerms.size)).runIO
   require ((← seen.get) == #[2, 1]) "assumptions leaked into next check"
 
 private def checkResets : IO Unit := do
@@ -632,7 +598,7 @@ private def checkResets : IO Unit := do
       (onSkipped := fun command => skipped.modify (·.push command.text)) fun query => do
     require (!query.invoked.any (fun command => command.startsWith "get-" || command.startsWith "check-sat"))
       "an observational request or solver query was invoked"
-    seen.modify (·.push (query.declarations.size, query.definitions.size, query.assertions.size))).runIO
+    seen.modify (·.push (query.declarations.size, query.definitions.size, query.assertionTerms.size))).runIO
   require ((← seen.get) == #[(2, 1, 3), (0, 0, 0), (1, 0, 1), (1, 1, 1),
       (1, 1, 0), (2, 1, 1), (0, 0, 0)]) "reset/global scopes changed active bindings"
   require ((← skipped.get) == #["(get-model)", "(get-value (p neg))", "(get-proof)",
@@ -656,318 +622,6 @@ private def checkResets : IO Unit := do
     "(set-option :global-declarations false)(set-logic ALL)(reset)(set-option :global-declarations false)(set-logic ALL)(push 1)(declare-const p Bool)(pop 1)(check-sat)"
     fun query => require query.declarations.isEmpty "global option was not reset").runIO
   IO.println "Resets passed: declaration/definition lifetimes and unexecuted observational requests"
-
-private def checkSorts : IO Unit := do
-  let expected := #[(1, 1), (2, 2), (1, 1), (2, 2), (1, 0), (1, 0), (1, 0), (0, 0)]
-  let identities ← IO.mkRef (#[] : Array (Array UInt64))
-  (parseAndInspectSession (← IO.FS.readFile "tests/translation/sessions/sorts.smt2") fun query => do
-    require ((query.sorts.size, query.declarations.size) == expected[query.number - 1]!)
-      "incorrect sort/declaration lifetimes"
-    identities.modify (·.push (query.sorts.map (fun s => hash s.sort)))
-    for sort in query.sorts do
-      require (sort.source.isSome && sort.sort.isUninterpretedSort) "missing sort identity or source"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "solver query invoked"
-  ).runIO
-  let ids ← identities.get
-  require (ids.size == 8 && ids[0]! == ids[2]! && ids[1]![1]! != ids[3]![1]! &&
-      ids[0]! != ids[4]! && ids[4]! != ids[5]! && ids[5]! == ids[6]!)
-    "sort identity did not follow declaration scopes"
-  for (name, body, ordinal, reason) in #[
-    ("sort-arity", "(declare-sort S 1)", 2, "only arity 0"),
-    ("sort-mismatch", "(declare-sort S 0)(declare-sort T 0)(declare-const s S)(declare-const t T)(assert (= s t))",
-      6, "type"),
-    ("sort-after-check", "(check-sat)(declare-sort S 0)", 3, "after check-sat"),
-    ("sort-alias-hidden-string", "(declare-sort S 0)(define-sort Bad (T) String)", 3, "unsupported sort alias")
-  ] do
-    checkRejected name ("(set-logic ALL)" ++ body ++ "(check-sat)") ordinal reason
-  for body in #[
-    "(push 1)(declare-sort S 0)(pop 1)(declare-const x S)",
-    "(declare-sort S 0)(reset-assertions)(declare-const x S)",
-    "(declare-sort S 0)(define-sort Alias () S)(reset-assertions)(declare-const x Alias)",
-    "(declare-sort S 0)(reset)(set-logic ALL)(declare-const x S)",
-    "(declare-sort S 0)(set-option :global-declarations true)"
-  ] do
-    match ← (parseAndInspectSession ("(set-logic ALL)" ++ body ++ "(check-sat)") (fun _ => pure ())).run with
-    | .ok _ => throw (IO.userError s!"accepted invalid sort lifetime: {body}")
-    | .error _ => pure ()
-  IO.println "Sort parsing passed: native identity, aliases, local/global scopes, and resets"
-
-private def checkDivision : IO Unit := do
-  let path := "tests/translation/int/division.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 11 && query.definitions.size == 2) "division fixture lost terms"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "division invoked a solver query"
-  ).runIO
-  for term in #["(div 1)", "(mod 1)", "(mod 1 2 3)", "(div true 2)", "(mod 1 false)", "(div 1.5 2)"] do
-    match ← (parseAndInspectQuery s!"(set-logic ALL)(assert (= {term} 0))(check-sat)" (fun _ => pure ())).run with
-    | .ok _ => throw (IO.userError s!"accepted ill-typed division: {term}")
-    | .error _ => pure ()
-
-private def checkReals : IO Unit := do
-  checkAccepted "closed-real-comparison"
-    "(set-logic ALL)(assert (< 1.0 2.0))(check-sat)" #[] 1 #["set-logic", "assert"]
-  let path := "tests/translation/real/arithmetic.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 12 && query.definitions.size == 2) "Real fixture lost terms"
-    let some declaration := query.declarations[0]? | throw (.error "missing Real declaration")
-    require declaration.term.getSort!.isReal "Real alias lost its sort"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "Real query invoked a solver"
-  ).runIO
-  for logic in #["QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA"] do
-    let input := s!"(set-logic {logic})(declare-const x Real)(assert (= (+ x 1) 2))(check-sat)"
-    (parseAndInspectQuery input fun query => do
-      require (query.logic == some logic) "lost Real logic"
-      require (query.assertions.size == 1) "lost Real assertion"
-    ).runIO
-  for (body, ordinal, reason) in #[
-    ("(assert (= (sin 1.0) 0.0))", 2, "SINE"),
-    ("(define-fun bad () Real (^ 2.0 3))", 2, "POW"),
-    ("(assert (= (/ true 1.0) 0.0))", 2, "arithmetic"),
-    ("(assert (= (/ 1.0) 0.0))", 2, "invalid kind")
-  ] do
-    checkRejected "unsupported-real" s!"(set-logic ALL){body}(check-sat)" ordinal reason
-
-private def checkConversions : IO Unit := do
-  let path := "tests/translation/real/conversions.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 12 && query.definitions.size == 2)
-      "conversion fixture lost terms"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "mixed query invoked a solver"
-  ).runIO
-  for logic in #["QF_LIRA", "QF_NIRA", "QF_UFLIRA", "QF_UFNIRA", "LIRA", "NIRA", "UFLIRA", "UFNIRA"] do
-    let input := s!"(set-logic {logic})(declare-const i Int)(declare-const x Real)\
-      (assert (= (to_real i) x))(assert (= (to_int x) i))(assert (is_int x))(check-sat)"
-    (parseAndInspectQuery input fun query => do
-      require (query.logic == some logic && query.assertions.size == 3) "lost mixed logic or terms"
-    ).runIO
-  for body in #["(assert (= (to_real true) 0.0))", "(assert (= (to_real 1.5) 0.0))",
-      "(assert (= (to_int false) 0))", "(assert (is_int true))", "(assert (is_int 1.0 2.0))"] do
-    checkRejected "invalid-conversion" s!"(set-logic ALL){body}(check-sat)" 2 ""
-
-
-private def checkBitvectors : IO Unit := do
-  let path := "tests/translation/bitvec/arithmetic.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 16 && query.definitions.size == 2) "BV fixture lost terms"
-    let some declaration := query.declarations[0]? | throw (.error "missing BV declaration")
-    require (declaration.term.getSort!.getBitVectorSize! == 4) "BV alias lost its width"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "BV query invoked a solver"
-  ).runIO
-  for logic in #["QF_BV", "QF_UFBV", "BV", "UFBV"] do
-    (parseAndInspectQuery s!"(set-logic {logic})(declare-const x (_ BitVec 8))\
-      (assert (= (bvadd x #x01) #x00))(check-sat)" fun query => do
-      require (query.logic == some logic && query.assertions.size == 1) "lost BV logic or assertion"
-    ).runIO
-  for (body, ordinal, reason) in #[
-    ("(declare-const x (_ BitVec 0))", 2, "Illegal bitvector size"),
-    ("(define-sort Zero () (_ BitVec 0))", 2, "Illegal bitvector size"),
-    ("(assert (= (_ bv256 8) #x00))", 2, "overflow"),
-    ("(assert (= (bvadd #b0 #b00) #b0))", 2, "comparable bit-vector"),
-    ("(declare-fun f ((_ BitVec 4)) Bool)(assert (f #x00))", 3, "type"),
-    ("(assert (bvcomp #x0 #x0))", 2, "Bool"),
-    ("(assert (= (bvsub #x5 #x3 #x1) #x1))", 2, "invalid kind"),
-    ("(assert (bvsdivo #x8 #xf))", 2, "BITVECTOR_SDIVO")
-  ] do
-    checkRejected "invalid-bv" s!"(set-logic ALL){body}(check-sat)" ordinal reason
-  checkRejected "qf-bv-quantifier"
-    "(set-logic QF_BV)(assert (forall ((x (_ BitVec 4))) (= x x)))(check-sat)" 2 "quantif"
-
-private def checkBitvectorWidths : IO Unit := do
-  let path := "tests/translation/bitvec/widths.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 10 && query.definitions.size == 1) "lost width-changing terms"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "BV query invoked a solver"
-    let concat := query.assertions[0]![0]!
-    require (concat.getKind! == .BITVECTOR_CONCAT && concat.getNumChildren == 3 &&
-      concat.getSort!.getBitVectorSize! == 8) "concat lost operands or result width"
-  ).runIO
-  for (body, reason) in #[
-    ("(= ((_ extract 4 0) #xf) #b01111)", "high extract index is bigger"),
-    ("(= ((_ extract 0 1) #xf) #b1)", "high extract index is smaller"),
-    ("(= ((_ extract 0) #xf) #b1)", "invalid number of indices"),
-    ("(= ((_ extract 1 0 0) #xf) #b1)", "invalid number of indices"),
-    ("(= ((_ extract -1 0) #xf) #b1)", "Negative numerals"),
-    ("(= ((_ repeat 0) #xf) #xf)", "number of repeats > 0"),
-    ("(= ((_ zero_extend -1) #xf) #xf)", "Negative numerals"),
-    ("(= ((_ sign_extend 1) #xf #xf) #b11111)", "invalid kind"),
-    ("(= (concat #xf) #xf)", "invalid kind"),
-    ("(= ((_ extract 0 0) 1) #b1)", "expecting a bit-vector"),
-    ("(= ((_ zero_extend 4) #xf) #xf)", "same type"),
-    ("(= ((_ repeat 2) #xf) #xf)", "same type")
-  ] do
-    checkRejected "invalid-bv-width" s!"(set-logic ALL)(assert {body})(check-sat)" 2 reason
-
-private def checkBitvectorShifts : IO Unit := do
-  let path := "tests/translation/bitvec/shifts.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 8 && query.definitions.size == 2) "lost shift/rotation terms"
-    let some amount := query.declarations[1]? | throw (.error "missing shift amount")
-    let shift := query.assertions[0]![0]!
-    require (shift.getKind! == .BITVECTOR_SHL && shift.getNumChildren == 2 &&
-      shift[1]! == amount.term) "shift lost its variable amount"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "shift query invoked a solver"
-  ).runIO
-  for (body, reason) in #[
-    ("(= (bvshl #x1 #b1) #x2)", "comparable bit-vector"),
-    ("(= (bvashr #x8 1) #xc)", "expecting a bit-vector"),
-    ("(= (bvlshr #x8 #x1 #x1) #x2)", "invalid kind"),
-    ("(= ((_ rotate_left -1) #x8) #x1)", "Negative numerals"),
-    ("(= ((_ rotate_right 1 2) #x8) #x4)", "invalid number of indices"),
-    ("(= ((_ rotate_left 1) #x8 #x1) #x1)", "invalid kind"),
-    ("(= ((_ rotate_right 1) true) #b1)", "expecting a bit-vector"),
-    ("(= (rotate_left #x8 #x1) #x1)", "not declared"),
-    ("(= ((_ rotate_left 4294967296) #x8) #x8)", "rotation index exceeds"),
-    ("(= ((_ |rotate_right| 99999999999999999999999) #x8) #x8)", "rotation index exceeds")
-  ] do
-    checkRejected "invalid-bv-shift" s!"(set-logic ALL)(assert {body})(check-sat)" 2 reason
-  -- The guard must respect comments, strings, and quoted symbols.
-  (parseAndInspectQuery "(set-logic ALL)\
-    (set-info :source \"(_ rotate_left 4294967296)\")\
-    (declare-const |(_ rotate_right 4294967296)| Bool)\
-    (assert |(_ rotate_right 4294967296)|)\n; (_ rotate_left 4294967296)\n\
-    (assert (= ((_ |rotate_left| 0) #x1) #x1))(check-sat)" fun _ => pure ()).runIO
-
-private def checkBitvectorDivision : IO Unit := do
-  let path := "tests/translation/bitvec/division.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 6 && query.definitions.size == 1) "lost BV division terms"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "BV division invoked a solver"
-  ).runIO
-  for op in #["bvudiv", "bvurem", "bvsdiv", "bvsrem", "bvsmod"] do
-    for (args, reason) in #[
-      ("#x1 #b1", "comparable bit-vector"),
-      ("1 #x1", "expecting a bit-vector"),
-      ("#x1", "invalid kind"),
-      ("#x1 #x1 #x1", "invalid kind")
-    ] do
-      checkRejected "invalid-bv-division"
-        s!"(set-logic ALL)(assert (= ({op} {args}) #x1))(check-sat)" 2 reason
-
-private def checkBitvectorConversions : IO Unit := do
-  let path := "tests/translation/bitvec/conversions.smt2"
-  (parseAndInspectQuery (← IO.FS.readFile path) (name := path) fun query => do
-    require (query.assertions.size == 7 && query.definitions.size == 2) "lost BV conversion terms"
-    for i in [:2] do
-      let equality := query.assertions[i]!
-      let expected := if i == 0 then cvc5.Kind.INT_TO_BITVECTOR else .BITVECTOR_UBV_TO_INT
-      require (equality[0]!.getKind! == expected && equality[1]!.getKind! == expected)
-        "legacy conversion alias changed its native kind"
-    require (query.assertions[2]![0]!.getKind! == .BITVECTOR_SBV_TO_INT) "lost signed conversion"
-    require (!(query.invoked.any (·.startsWith "check-sat"))) "conversion invoked a solver"
-  ).runIO
-  for (body, reason) in #[
-    ("(= ((_ int_to_bv 0) 1) #b1)", "expecting bit-width > 0"),
-    ("(= ((_ int_to_bv -1) 1) #x1)", "Negative numerals"),
-    ("(= ((_ int_to_bv 4 4) 1) #x1)", "invalid number of indices"),
-    ("(= ((_ int_to_bv 4) 1.0) #x1)", "expecting integer term"),
-    ("(= ((_ int_to_bv 4) true) #x1)", "expecting integer term"),
-    ("(= ((_ int_to_bv 4) 1 2) #x1)", "invalid kind"),
-    ("(= (ubv_to_int 1) 1)", "expecting bit-vector term"),
-    ("(= (ubv_to_int #x1 #x2) 1)", "invalid kind"),
-    ("(= (sbv_to_int true) 1)", "expecting bit-vector term"),
-    ("(bvnego #x1 #x2)", "invalid kind"),
-    ("(bvnego 1)", "expecting a bit-vector term"),
-    ("(= (bv2int #xff) 255)", "not declared")
-  ] do
-    checkRejected "invalid-bv-conversion" s!"(set-logic ALL)(assert {body})(check-sat)" 2 reason
-  for op in #["bvuaddo", "bvsaddo", "bvumulo", "bvsmulo"] do
-    for (args, reason) in #[
-      ("#x1 #b1", "comparable bit-vector"), ("#x1 1", "comparable bit-vector"),
-      ("#x1", "invalid kind"), ("#x1 #x1 #x1", "invalid kind")
-    ] do
-      checkRejected "invalid-bv-overflow" s!"(set-logic QF_BV)(assert ({op} {args}))(check-sat)" 2 reason
-  for op in #["int_to_bv", "int2bv", "|int_to_bv|", "|int2bv|"] do
-    checkRejected "wide-bv-conversion"
-      s!"(set-logic ALL)(assert (= ((_ {op} 4294967296) 1) #x1))(check-sat)" 2 "conversion width exceeds"
-  -- The index guard must ignore text inside comments, strings, and quoted names.
-  (parseAndInspectQuery "(set-logic ALL)\
-    (set-info :source \"(_ int_to_bv 4294967296)\")\
-    (declare-const |(_ int2bv 4294967296)| Bool)\
-    (assert |(_ int2bv 4294967296)|)\n; (_ int_to_bv 4294967296)\n\
-    (assert (= ((_ |int2bv| 8) (- 1)) #xff))(check-sat)" fun _ => pure ()).runIO
-
-private def checkArrays : IO Unit := do
-  let path := "tests/translation/arrays/operations.smt2"
-  checkAccepted path (← IO.FS.readFile path) #["a", "b", "i", "j", "p", "f"] 5
-    (#["set-logic", "define-sort"] ++ Array.replicate 6 "declare-fun" ++
-      #["define-fun"] ++ Array.replicate 5 "assert") fun query => do
-      let #[a, _, i, _, _, _] := query.declarations
-        | throw (.error "expected six array fixture declarations")
-      let sort := a.term.getSort!
-      require (sort.isArray && sort.getArrayIndexSort!.isInteger && sort.getArrayElementSort!.isInteger)
-        "array alias lost its native index/element sorts"
-      let read := query.assertions[0]![0]!
-      let write := read[0]!
-      require (read.getKind! == .SELECT && write.getKind! == .STORE &&
-        write[0]! == a.term && write[1]! == i.term)
-        "definition expansion lost array or index identity"
-  for logic in #["QF_AX", "QF_ABV", "QF_AUFBV", "QF_ALIA", "QF_AUFLIA", "QF_AUFNIA",
-      "ALIA", "AUFLIA", "AUFLIRA", "AUFNIA", "AUFNIRA", "ABV", "AUFBV"] do
-    checkAccepted logic s!"(set-logic {logic})(assert true)(check-sat)" #[] 1 #["set-logic", "assert"]
-  for (name, input, count) in #[
-    ("nested", "tests/translation/arrays/nested.smt2", 5),
-    ("constants", "tests/translation/arrays/constants.smt2", 13)
-  ] do
-    (parseAndInspectQuery (← IO.FS.readFile input) (name := name) fun query => do
-      require (query.assertions.size == count) s!"{name}: wrong assertion count"
-      require (!query.invoked.contains "check-sat") "array parsing invoked a solver query"
-    ).runIO
-  -- Retain the constructor sort even if native let expansion discards its application.
-  (parseAndInspectQuery "(set-logic ALL)(assert (let ((unused ((as const (Array Int Int)) 7))) true))(check-sat)"
-    fun query => do
-      require (query.assertions[0]!.getKind! == .CONST_BOOLEAN) "expected native let expansion"
-      let values := query.assertionArrayConstants.flatten
-      require (values.size == 1 && query.arrayConstructors.size == 1 &&
-        values[0]! == query.arrayConstructors[0]!.base) "erased const-array requirement was lost"
-  ).runIO
-  for hint in #[":pattern ((select ((as const (Array Int Int)) 0) i))",
-      ":no-pattern (select ((as const (Array Int Int)) 0) i)"] do
-    (parseAndInspectQuery s!"(set-logic ALL)(assert (forall ((i Int)) (! (= i i) {hint})))(check-sat)"
-      fun query => require query.assertionArrayConstants.flatten.isEmpty
-        "nonsemantic hint introduced constant-array laws").runIO
-  (parseAndInspectQuery "(set-logic ALL)(assert (forall ((i Int)) \
-    (! (let ((unused ((as const (Array Int Int)) 0))) (= i i)) \
-       :pattern ((select ((as const (Array Int Int)) 1) i)))))(check-sat)" fun query => do
-      let values := query.assertionArrayConstants.flatten
-      require (values.size == 1 && values[0]! == query.arrayConstructors[0]!.base)
-        "hint changed the retained constant-array payload"
-  ).runIO
-  (parseAndInspectQuery "(set-logic ALL)(assert (= (select \
-    (! ((as const (Array Int Int)) 0) :named zero) 0) 0))(check-sat)" fun query =>
-      require (query.assertionArrayConstants.flatten.size == 1) "named array lost its constructor"
-  ).runIO
-  for (name, body) in #[
-    ("bad-select", "(assert (= (select 0 1) 0))"),
-    ("quoted-as", "(assert (= (select ((|as| const (Array Int Int)) 0) 0) 0))"),
-    ("bad-index", "(declare-const a (Array Int Int))(assert (= (select a true) 0))"),
-    ("bad-store", "(declare-const a (Array Int Int))(assert (= (store a 0 true) a))"),
-    ("bad-arity", "(declare-const a (Array Int Int))(assert (= (store a 0) a))"),
-    ("bad-constant", "(assert (= ((as const (Array Int Int)) true) ((as const (Array Int Int)) 0)))"),
-    ("erased-wrong-payload", "(assert (let ((unused ((as const (Array Int Int)) true))) true))"),
-    ("erased-string-array", "(assert (let ((unused ((as const (Array Int String)) \"x\"))) true))")
-  ] do
-    let called ← IO.mkRef false
-    let result ← (parseAndInspectQuery ("(set-logic ALL)" ++ body ++ "(check-sat)")
-      (fun _ => called.set true) (name := name)).run
-    require (!(← called.get)) s!"{name}: invalid array reached inspect"
-    match result with
-    | .error _ => pure ()
-    | .ok _ => throw (IO.userError s!"{name}: invalid array was accepted")
-  for input in #[
-    "(set-logic ALL)(declare-const x Int)(assert (= (select ((as const (Array Int Int)) x) 0) x))(check-sat)",
-    "(set-logic QF_ALIA)(assert (let ((v 7)) (= (select ((as const (Array Int Int)) v) 0) v)))(check-sat)",
-    "(set-logic ALL)(assert (= (select ((as const (Array Int Int)) (! 0 :named v)) 0) v))(check-sat)",
-    "(set-option :global-declarations true)(set-logic ALL)(push 1)\
-      (assert (! (let ((erased ((as const (Array Int Int)) 0))) true) :named p))\
-      (pop 1)(check-sat-assuming (p))"
-  ] do
-    (parseAndInspectSession input fun query => do
-      require (!query.invoked.contains "check-sat") "constant-array adapter invoked a solver query"
-      require (query.declarations.all (fun d => !d.name.startsWith "smt2lean.internal."))
-        "private parser carriers became source declarations"
-      require (!(arrayModelTerms query).isEmpty) "constant-array requirement was lost"
-    ).runIO
-  IO.println "Array parser passed: native identities, nested sorts, const payloads, aliases, and rejection cases"
 
 def main : IO Unit := do
   checkAcceptedQueries

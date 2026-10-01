@@ -16,8 +16,9 @@ rev = "7e3365990661b697ccb30e92d6912f4cc6589322"
 name = "Smt2Lean"
 
 [[lean_lib]]
-name = "ArrayModelTests"
-roots = ["tests.backend.ArrayModel"]
+name = "TestSupport"
+roots = ["tests.backend.ArrayModel", "tests.backend.Support", "tests.backend.Arithmetic",
+  "tests.backend.BitVec", "tests.backend.Datatypes", "tests.backend.Sessions", "tests.backend.ParserSupport", "tests.backend.ParserTerms"]
 
 [[lean_exe]]
 name = "smt2lean"

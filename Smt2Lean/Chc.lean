@@ -41,6 +41,7 @@ structure Problem where
   number : Nat := 1
   source : Option Source.Ref := none
   sorts : Array ParsedSort := #[]
+  datatypes : Array DatatypeGroup := #[]
   /-- Retain array theory requirements from unused definitions and discarded source terms. -/
   arrayTerms : Array cvc5.Term := #[]
   arrayConstructors : Array ArrayConstructor := #[]
@@ -173,12 +174,12 @@ private def validatePremises (relations : Array Relation) (terms : Array cvc5.Te
 
 /-- Validate every clause of an already parsed/scope-checked query before returning a problem. -/
 def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Problem := do
-  let relations ← collectRelations query.declarations query.number query.sorts
+  let relations ← collectRelations query.declarations query.number query.valueSorts
   let clauses : Array (Clause Premise) ← query.assertions.mapIdxM fun i assertion => do
-    let source := query.assertionSources[i]?
+    let source := some assertion.source
     let context := source.map (·.context true query.number) |>.getD s!"{name}: query {query.number}"
     try
-      let clause ← extractClause relations (i + 1) assertion source query.arrayConstructors
+      let clause ← extractClause relations (i + 1) assertion.term source query.arrayConstructors
       let premises ← validatePremises relations clause.premises query.arrayConstructors
       return {
         assertionNumber := clause.assertionNumber
@@ -189,7 +190,7 @@ def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Prob
       }
     catch error => throw (errorWithContext s!"{context}: clause {i + 1}" error)
   return {
-    number := query.number, source := query.source, sorts := query.sorts
+    number := query.number, source := query.source, sorts := query.sorts, datatypes := query.datatypes
     arrayTerms := arrayModelTerms query, arrayConstructors := query.arrayConstructors, relations, clauses }
 
 /-- Parse and validate the whole CHC input, then inspect it once without solving. -/

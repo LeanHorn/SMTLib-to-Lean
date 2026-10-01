@@ -1,4 +1,4 @@
-import Smt2Lean.Helpers
+import Smt2Lean.Theory.Helpers
 
 namespace Smt2Lean.BitVec
 
