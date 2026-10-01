@@ -1,0 +1,17 @@
+; Testers and matches as Horn guards and relation arguments.
+(set-logic HORN)
+(declare-datatype D ((zero) (pair (left Int) (right Int)) (link (next D))))
+(declare-fun Reach (D) Bool)
+(declare-fun R (Int) Bool)
+(declare-fun Stored ((Array Int D)) Bool)
+(define-fun get ((d D)) Int (match d (((pair x y) (+ x y)) (rest 0))))
+(assert (Reach zero))
+(assert (forall ((d D)) (=> (Reach d) (Reach (link d)))))
+(assert (R (get (pair 2 3))))
+(assert (forall ((d D)) (=> (and (Reach d) (is-pair d)) (R (get d)))))
+(assert (forall ((d D)) (=> (and (Reach d) ((_ is zero) d)
+  (match d ((zero false) (rest true)))) false)))
+(assert (forall ((d D)) (Stored (match d
+  (((link rest) ((as const (Array Int D)) rest))
+   (whole ((as const (Array Int D)) whole)))))))
+(check-sat)

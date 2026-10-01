@@ -1,6 +1,7 @@
 import Smt2Lean.Backend.Types
 import Smt2Lean.Theory.BitVec
 import Smt2Lean.Theory.Helpers
+import Lean.Meta.Constructions.CasesOn
 
 namespace Smt2Lean.Datatypes
 
@@ -22,6 +23,37 @@ private def constructorName (type : Name) (index : Nat) (name : String) : Name :
 
 private def constructorKey (term : cvc5.Term) : String :=
   s!"SMT.datatype.{term.getId!}"
+
+private def testerKey (term : cvc5.Term) : String := s!"SMT.tester.{term.getId!}"
+
+def getConstructor (term : cvc5.Term) : Smt.ReconstructM Expr := do
+  let some value := (← read).userNames[constructorKey term]?
+    | throwError "unmapped datatype constructor: {term}"
+  return value
+
+def getTesterConstructor (term : cvc5.Term) : Smt.ReconstructM Expr := do
+  let some value := (← read).userNames[testerKey term]?
+    | throwError "unmapped datatype tester: {term}"
+  return value
+
+/-- Keep unused case fields anonymous in emitted functions. -/
+def anonymousUnused : Expr → Expr
+  | .lam name type body info =>
+    .lam (if body.hasLooseBVar 0 then name else `_) type (anonymousUnused body) info
+  | value => value
+
+/-- Build case analysis using a synchronously kernel-checked eliminator. -/
+def casesOn (input result : Expr) (branches : Array Expr) : MetaM Expr := do
+  let domain ← inferType input
+  let typeName := domain.getAppFn.constName!
+  let name := mkCasesOnName typeName
+  unless (← getEnv).contains name do
+    let declaration ← ofExceptKernelException (mkCasesOnImp (← getEnv).toKernelEnv typeName)
+    let env ← ofExceptKernelException <| (← getEnv).addDeclCore 0 1000 declaration none
+    setEnv (markAuxRecursor env name)
+  let motive ← withLocalDeclD `_ domain fun x => mkLambdaFVars #[x] result (usedOnly := false)
+  return mkAppN (mkConst name [← getLevel result])
+    (domain.getAppArgs ++ #[motive, input] ++ branches)
 
 private def externalSort (sort : cvc5.Sort) : Bool :=
   sort.isUninterpretedSort || sort.isArray || sort.isDatatype
@@ -117,14 +149,16 @@ def bind (group : CompiledGroup) (cache : Std.HashMap cvc5.Sort Expr)
     cache := cache.insert datatype.sort (mkAppN (mkConst name) parameters)
     for h : j in [:datatype.constructors.size] do
       let constructor := datatype.constructors[j]
-      context := { context with userNames := (context.userNames.insert (constructorKey constructor.term)
-          (mkAppN (mkConst (constructorName name j constructor.name)) parameters)) }
+      let value := mkAppN (mkConst (constructorName name j constructor.name)) parameters
+      let userNames := context.userNames
+        |>.insert (constructorKey constructor.term) value
+        |>.insert (testerKey constructor.tester) value
+      context := { context with userNames }
   return (cache, context)
 
 def reconstruct : Smt.TermReconstructor := fun term => do
   unless term.getKind! == .APPLY_CONSTRUCTOR do return none
-  let some constructor := (← read).userNames[constructorKey term[0]!]?
-    | throwError "unmapped datatype constructor: {term[0]!}"
+  let constructor ← getConstructor term[0]!
   return mkAppN constructor (← (term.getChildren.extract 1 term.getNumChildren).mapM Smt.Reconstruct.reconstructTerm)
 
 end Smt2Lean.Datatypes

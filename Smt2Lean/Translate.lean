@@ -2,6 +2,7 @@ import Smt2Lean.Chc
 import Smt2Lean.Theory.Arithmetic
 import Smt2Lean.Theory.BitVec
 import Smt2Lean.Theory.Model
+import Smt2Lean.Theory.Match
 import Smt.Reconstruct.Prop
 import Smt.Reconstruct.Builtin
 import Smt.Reconstruct.Int
@@ -73,7 +74,8 @@ private def reconstructQuantifier : Smt.TermReconstructor := fun term => do
 
 /-- Try our encodings first, then the upstream handlers for the supported theories. -/
 @[smt_term_reconstruct] private def reconstructTerm : Smt.TermReconstructor := fun term => do
-  for reconstruct in [Selectors.reconstruct, Datatypes.reconstruct, Arrays.reconstruct, BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
+  for reconstruct in [Datatypes.reconstructTester, Datatypes.reconstructMatch, Selectors.reconstruct,
+      Datatypes.reconstruct, Arrays.reconstruct, BitVec.reconstruct, Arithmetic.reconstruct, reconstructOperators, reconstructQuantifier,
       Smt.Reconstruct.Prop.reconstructProp, Smt.Reconstruct.Builtin.reconstructBuiltin,
       Smt.Reconstruct.Int.reconstructInt, Smt.Reconstruct.UF.reconstructUF] do
     if let some value ← reconstruct term then return value

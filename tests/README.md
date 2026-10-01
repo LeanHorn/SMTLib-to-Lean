@@ -355,7 +355,16 @@ Completed proofs establish matching-constructor projection, permit different
 wrong-constructor results for different inputs, and require equal inputs to agree.
 Single-constructor records introduce no fallback parameter.
 
+`matches.smt2` and `matches-chc.smt2` combine standard `(_ is constructor)` and
+legacy `is-constructor` testers, exhaustive flat patterns, whole-value catch-all
+bindings, duplicate branches, and nested matches. Tests check branch priority,
+capture avoidance across definitions and quantifiers, mutual/external field types,
+symbolic constant arrays, and session lifetimes. Completed proofs establish tester
+characterization and match results, including shadowing and early catch-alls.
+Malformed patterns, unsupported operators in unused branches, and forbidden Horn
+relations/quantifiers fail without producing output.
+
 ```sh
-lake exe smt2lean tests/translation/datatypes/selectors.smt2 --out selectors-demo
-lake env lean selectors-demo/Query.lean
+lake exe smt2lean tests/translation/datatypes/matches.smt2 --out matches-demo
+lake env lean matches-demo/Query.lean
 ```

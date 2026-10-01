@@ -61,7 +61,8 @@ def readDatatypes (sorts : Array cvc5.Sort) (query : ParsedQuery) (source : Sour
           selector := ← selector.getTerm
           sort := ← selector.getCodomainSort }
       constructors := constructors.push {
-        name := ← ofExcept constructor.getName, term := ← constructor.getTerm, fields }
+        name := ← ofExcept constructor.getName, term := ← constructor.getTerm
+        tester := ← constructor.getTesterTerm, fields }
     types := types.push {
       name := ← ofExcept datatype.getName, sort, source := some source, constructors }
   let known := query.valueSorts ++ types.map (·.toParsedSort)

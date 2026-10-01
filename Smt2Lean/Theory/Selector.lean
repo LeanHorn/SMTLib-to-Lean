@@ -1,16 +1,10 @@
 import Smt2Lean.Theory.Datatype
-import Lean.Meta.Constructions.CasesOn
 
 namespace Smt2Lean.Selectors
 
 open Lean Meta Backend
 
 private def key (selector : cvc5.Term) : String := s!"SMT.selector.{selector.getId!}"
-
-private def anonymousUnused : Expr → Expr
-  | .lam name type body info =>
-    .lam (if body.hasLooseBVar 0 then name else `_) type (anonymousUnused body) info
-  | value => value
 
 /-- Include selectors inside native constant arrays, whose payloads are not children. -/
 private def usedSelectors (terms : Array cvc5.Term) : Std.HashSet cvc5.Term := Id.run do
@@ -35,11 +29,6 @@ private def compile (typeName : Name) (constructor field : Nat) (sourceName : St
     s!"s{constructor}_{field}_{Datatypes.namePart sourceName}"
   if (← getEnv).contains name then return name
   let info ← getConstInfoInduct typeName
-  let casesName := mkCasesOnName typeName
-  unless (← getEnv).contains casesName do
-    let declaration ← ofExceptKernelException (mkCasesOnImp (← getEnv).toKernelEnv typeName)
-    let env ← ofExceptKernelException <| (← getEnv).addDeclCore 0 1000 declaration none
-    setEnv (markAuxRecursor env casesName)
   forallTelescope info.type fun parameters _ => do
     let domain := mkAppN (mkConst typeName) parameters
     let signature ← instantiateForall (← getConstInfoCtor info.ctors[constructor]!).type parameters
@@ -53,10 +42,8 @@ private def compile (typeName : Name) (constructor field : Nat) (sourceName : St
           forallTelescope signature fun fields _ => do
             let value := if i == constructor then fields[field]!
               else mkApp fallbacks[0]! input
-            return anonymousUnused (← mkLambdaFVars fields value (usedOnly := false))
-        let motive ← mkLambdaFVars #[input] result (usedOnly := false)
-        let value := mkAppN (mkConst casesName [← getLevel result])
-          (parameters ++ #[motive, input] ++ alternatives)
+            return Datatypes.anonymousUnused (← mkLambdaFVars fields value (usedOnly := false))
+        let value ← Datatypes.casesOn input result alternatives
         Helpers.define name [] (← mkLambdaFVars (parameters ++ fallbacks ++ #[input]) value
           (usedOnly := false))
 

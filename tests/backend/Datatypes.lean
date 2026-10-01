@@ -54,9 +54,38 @@ def checkDatatypes (env : Environment) : IO Unit := do
       checkEqual value q(∃ choice : $d → Int, ∃ r : Int → Prop,
         r 7 ∧ (choice ($other 1) = choice ($other 2) → False))
       checkEmission value .problem
-  for file in ["constructors", "chc", "selectors", "selectors-chc"] do
+  runQuery env "match-branches-and-capture" "
+    (set-logic ALL)
+    (declare-datatype D ((a) (b (value Int)) (c (left Int) (right Int))))
+    (declare-const x Int)
+    (define-fun pick ((d D) (x Int)) Int
+      (match d ((a x) ((b x) x) ((c x y) y))))
+    (assert ((_ is a) a))
+    (assert (not (is-b a)))
+    (assert (is-b (b x)))
+    (assert (not ((_ is a) (c 1 2))))
+    (assert (= (pick a x) x))
+    (assert (= (pick (b 7) x) 7))
+    (assert (= (pick (c 7 8) x) 8))
+    (assert (forall ((x Int)) (= (pick (b (+ x 1)) x) (+ x 1))))
+    (assert (= (match (c 1 2) (((c x y) y) ((c x y) x) (rest 3))) 2))
+    (assert (= (match (b 7)
+      ((whole (match whole (((b x) x) (rest 0)))) ((b x) 99))) 7))
+    (check-sat)" fun query =>
+      checkRefutation query q(∀ x : Int,
+        True ∧ ¬False ∧ True ∧ ¬False ∧ x = x ∧ (7 : Int) = 7 ∧ (8 : Int) = 8 ∧
+        (∀ x : Int, x + 1 = x + 1) ∧ (2 : Int) = 2 ∧ (7 : Int) = 7 → False)
+  runProblem env "match-chc-target" "
+    (set-logic HORN)
+    (declare-datatype D ((a) (b (value Int))))
+    (declare-fun R (Int) Bool)
+    (assert (R (match (b 7) (((b x) x) (rest 0)))))
+    (assert (=> ((_ is a) (b 7)) false))
+    (check-sat)" fun problem =>
+      checkProblem problem q(∃ r : Int → Prop, r 7 ∧ (False → False))
+  for file in ["constructors", "chc", "selectors", "selectors-chc", "matches", "matches-chc"] do
     let input ← IO.FS.readFile s!"tests/translation/datatypes/{file}.smt2"
-    if file == "chc" || file == "selectors-chc" then
+    if file == "chc" || file.endsWith "-chc" then
       runProblem env file input fun problem => do
         unless file != "chc" || (problem.datatypes.size == 2 && problem.relations.size == 3 && problem.clauses.size == 5) do
           throwError "datatype CHC lost declarations, relations, or clauses"

@@ -1,4 +1,4 @@
-"""Datatype translation, constructor semantics, and native scope regressions."""
+"""Datatype constructors, selectors, testers, match semantics, and native scopes."""
 
 from .support import ROOT, run, check_generated, check_lean
 
@@ -7,7 +7,8 @@ def check_datatypes(lean, tmp):
     fixtures = ROOT / "tests/translation/datatypes"
     for fixture, goal, count in [("constructors", "Refutation", 1),
                                  ("chc", "Problem", 1), ("sessions", "Refutation", 10),
-                                 ("selectors", "Refutation", 1), ("selectors-chc", "Problem", 1)]:
+                                 ("selectors", "Refutation", 1), ("selectors-chc", "Problem", 1),
+                                 ("matches", "Refutation", 1), ("matches-chc", "Problem", 1)]:
         output = tmp / f"datatypes-{fixture}"
         run(fixtures / f"{fixture}.smt2", "--out", output)
         generated = check_generated(lean, output, goal=goal, count=count)
@@ -132,7 +133,54 @@ example (choice : SMT.Datatypes.g0.T0_D → Int) (x : Int) :
 """))
     check_lean(lean, checked, complete=True)
 
-    # Reject later unsupported features without leaving a partial session artifact.
+    # Complete the emitted obligation: binders, repeated branches, catch-all, and testers.
+    source, output = tmp / "match-laws.smt2", tmp / "match-laws"
+    source.write_text("""(set-logic ALL)
+(declare-datatype D ((a) (b (value Int))))
+(define-fun get ((d D) (x Int)) Int (match d ((a x) ((b x) x))))
+(assert (not (and
+  (forall ((x Int)) (= (get (b (+ x 1)) x) (+ x 1)))
+  (forall ((x Int)) (= (get a x) x))
+  (= (match (b 7) (((b x) x) ((b y) (+ y 1)) (rest 0))) 7)
+  (= (match (b 7) ((whole whole) ((b x) a))) (b 7))
+  ((_ is b) (b 7)) (not (is-b a)))))
+(check-sat)
+""")
+    run(source, "--out", output)
+    generated = check_generated(lean, output)
+    checked = tmp / "MatchLaws.lean"
+    checked.write_text(generated.replace("  sorry\n", """
+  intro h
+  apply h
+  exact ⟨fun _ => rfl, fun _ => rfl, rfl, rfl, True.intro, fun h => h⟩
+""") + r'''
+example (d : SMT.Datatypes.g0.T0_D) :
+    SMT.Testers.g0.T0_D.c1_b d ↔ ∃ x, d = SMT.Datatypes.g0.T0_D.c1_b x := by
+  cases d with
+  | c0_a =>
+    constructor
+    · intro h; exact False.elim h
+    · rintro ⟨_, h⟩; cases h
+  | c1_b x => exact ⟨fun _ => ⟨x, rfl⟩, fun _ => True.intro⟩
+''')
+    check_lean(lean, checked, complete=True)
+
+    source, output = tmp / "match-model.smt2", tmp / "match-model"
+    source.write_text("""(set-logic HORN)
+(declare-datatype D ((a) (b (value Int))))
+(declare-fun R (Int) Bool)
+(assert (R (match (b 7) (((b x) x) (rest 0)))))
+(assert (=> ((_ is a) (b 7)) false))
+(check-sat)
+""")
+    run(source, "--out", output)
+    generated = check_generated(lean, output, goal="Problem")
+    checked = tmp / "MatchModel.lean"
+    checked.write_text(generated.replace("  sorry\n",
+                      "  exact ⟨fun _ => True, True.intro, fun h => h⟩\n"))
+    check_lean(lean, checked, complete=True)
+
+    # Reject malformed/unsupported terms without leaving a partial session artifact.
     common = "(set-logic ALL) (declare-datatype D ((a) (b (field Int)))) (check-sat) "
     rejected = [
         ("selector-sort", common + "(assert (= (field 0) 0))", ""),
@@ -144,8 +192,25 @@ example (choice : SMT.Datatypes.g0.T0_D → Int) (x : Int) :
          "(declare-datatype D ((box (|const| (Array Int Int))))) "
          "(assert (= (select ((as |const| (Array Int Int)) 0) 0) 0))",
          "Type ascription"),
-        ("tester", common + "(assert ((_ is a) a))", "APPLY_TESTER"),
-        ("match", common + "(assert (match a ((a true) ((b x) false))))", "MATCH"),
+        ("tester-sort", common + "(assert ((_ is a) 0))", ""),
+        ("tester-arity", common + "(assert ((_ is a) a a))", ""),
+        ("match-incomplete", common + "(assert (match a ((a true))))", "exhaustive"),
+        ("match-result", common + "(assert (match a ((a true) ((b x) 0))))", ""),
+        ("match-nested", common + "(assert (match a ((a true) ((b (b x)) false))))", ""),
+        ("match-scope", common + "(assert (and (match a ((a true) ((b x) true))) (= x 0)))", ""),
+        ("match-dead-operator", common + "(assert (= (match a ((rest 0) ((b x) (^ x 2)))) 0))",
+         "unsupported operator"),
+        ("match-duplicate-variable", "(set-logic ALL) "
+         "(declare-datatype D ((a) (b (left Int) (right Int)))) (check-sat) "
+         "(assert (match a ((a true) ((b x x) true))))", "duplicate match pattern variable"),
+        ("match-shadow-const", common +
+         "(assert (= (match a ((a 0) ((b const) (select ((as const (Array Int Int)) 0) 0)))) 0))", ""),
+        ("match-horn-relation", "(set-logic HORN) (declare-datatype D ((a) (b))) "
+         "(declare-fun R (D) Bool) (check-sat) "
+         "(assert (=> (match a ((a false) (rest (R rest)))) false)) (check-sat)", "CHC relation inside"),
+        ("match-horn-quantifier", "(set-logic HORN) (declare-datatype D ((a) (b))) (check-sat) "
+         "(assert (=> (match a ((a false) (rest (forall ((x Int)) (= x x))))) false)) (check-sat)",
+         "leading forall"),
         ("parametric", "(set-logic ALL) (declare-datatypes ((List 1)) "
          "((par (T) ((nil) (cons (head T) (tail (List T)))))))", "parametric"),
         ("nested", "(set-logic ALL) (declare-datatype D ((a) (b (field (Array Int D)))))",

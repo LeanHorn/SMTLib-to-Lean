@@ -17,11 +17,12 @@ private partial def instantiate (tm : cvc5.TermManager) (term : cvc5.Term)
   let key := (term, variables, values)
   if let some result := (← get)[key]? then return result
   let kind ← ofExcept term.getKind
-  let result ← if kind == .FORALL || kind == .EXISTS then do
+  let result ← if kind == .FORALL || kind == .EXISTS || kind == .MATCH_BIND_CASE then do
     let old := term[0]!.getChildren
     let fresh ← old.mapM fun v => do tm.mkVar (← ofExcept v.getSort) (← ofExcept v.getSymbol)
-    let body ← instantiate tm term[1]! (old ++ variables) (fresh ++ values)
-    tm.mkTerm kind #[← tm.mkTerm .VARIABLE_LIST fresh, body]
+    let children ← (term.getChildren.extract 1 term.getNumChildren).mapM fun child =>
+      instantiate tm child (old ++ variables) (fresh ++ values)
+    tm.mkTerm kind (#[← tm.mkTerm .VARIABLE_LIST fresh] ++ children)
   else
     rebuild tm term (← term.getChildren.mapM fun c => instantiate tm c variables values)
   modify (·.insert key result)

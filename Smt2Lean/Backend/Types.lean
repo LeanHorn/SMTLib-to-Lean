@@ -42,6 +42,7 @@ structure DatatypeField where
 structure DatatypeConstructor where
   name : String
   term : cvc5.Term
+  tester : cvc5.Term
   fields : Array DatatypeField
   deriving Inhabited
 

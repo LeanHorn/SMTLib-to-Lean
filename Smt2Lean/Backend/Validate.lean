@@ -1,4 +1,4 @@
-import Smt2Lean.Backend.Types
+import Smt2Lean.Backend.Match
 
 namespace Smt2Lean.Backend
 
@@ -53,6 +53,22 @@ def validateTerm (root : cvc5.Term)
       throw (.unsupported s!"unsupported value sort: {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if kind == .MATCH then
+      let cases ← readMatchCases term
+      pending := pending.push (children[0]!, bound)
+      for branch in cases do
+        pending := pending.push (branch.body, bound ++ branch.binders)
+      continue
+    if kind == .APPLY_TESTER then
+      unless sort.isBoolean && children.size == 2 && children[1]!.getSort!.isDatatype do
+        throw (.unsupported "expected a datatype tester and one datatype argument")
+      let datatype ← ofExcept children[1]!.getSort!.getDatatype
+      let mut found := false
+      for constructor in datatype do
+        if (← constructor.getTesterTerm) == children[0]! then found := true
+      unless found do throw (.unsupported "tester belongs to another datatype")
+      pending := pending.push (children[1]!, bound)
+      continue
     if kind == .APPLY_SELECTOR then
       unless children.size == 2 && children[1]!.getSort!.isDatatype &&
           isValueSort children[1]!.getSort! sorts do

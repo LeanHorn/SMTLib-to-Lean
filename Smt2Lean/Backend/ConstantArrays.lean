@@ -134,6 +134,27 @@ private partial def lower (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
         expression := .list #[.atom "store", .atom baseName, .atom indexName, payload.expression]
         requirements := merge #[base] payload.requirements }
   let head := items[0]?.map SExpr.render |>.getD ""
+  if head == "match" && items.size == 3 then
+    let .list cases := items[2]! | throw (.error "expected match branches")
+    let input ← lower solver symbols sorts bindings items[1]!
+    let mut rewritten := #[]
+    let mut requirements := input.requirements
+    let mut names := input.names
+    let mut globals := input.names.reverse ++ bindings
+    for branch in cases do
+      let .list pair := branch | throw (.error "expected a match branch")
+      unless pair.size == 2 do throw (.error "expected a pattern and branch body")
+      -- Pattern syntax is not a term. Only its variables shadow names in the body.
+      let variables := match pair[0]! with
+        | .atom name => #[SExpr.atom name]
+        | .list pattern => pattern.extract 1 pattern.size
+      let locals := variables.map fun binder => (binder.name, #[])
+      let body ← lower solver symbols sorts (locals ++ globals) pair[1]!
+      rewritten := rewritten.push (.list #[pair[0]!, body.expression])
+      requirements := merge requirements body.requirements
+      names := names ++ body.names
+      globals := body.names.reverse ++ globals
+    return { expression := .list #[items[0]!, input.expression, .list rewritten], requirements, names }
   if head == "let" && items.size == 3 then
     if let .list bindingsSyntax := items[1]! then
       let mut rewritten := #[]

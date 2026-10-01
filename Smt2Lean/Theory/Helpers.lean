@@ -11,7 +11,7 @@ open Lean Meta Qq
 
 /-- Names reserved for the operator definitions copied into generated files. -/
 def isHelper (name : Name) : Bool :=
-  (`SMT.Selectors).isPrefixOf name ||
+  (`SMT.Selectors).isPrefixOf name || (`SMT.Testers).isPrefixOf name ||
   #[`SMT.xor, `SMT.intDiv, `SMT.intMod, `SMT.realDiv, `SMT.arrayLaws, `SMT.constArrayLaw,
     `SMT.bvnand, `SMT.bvnor, `SMT.bvxnor, `SMT.bvcomp,
     `SMT.bvshl, `SMT.bvlshr, `SMT.bvashr].contains name || match name with
