@@ -160,6 +160,10 @@ private def checkQuantified (env : Environment) : IO Unit := do
       (exists ((y (Array Int Int))) (= (store x 0 1) y))))
     (assert (= (select (store nested a a) a) a))
     (assert (forall ((x (Array (Array Int Int) (Array Int Int)))) (= (select x a) a)))
+    (assert (forall ((a (Array Int Int)))
+      (let ((before a))
+        (exists ((a (Array Int Int)))
+          (and (= a (store before 0 1)) (= (select a 0) (select before 0)))))))
     (check-sat)" fun query =>
       checkRefutation query q(∀ (A : Type) (readA : A → Int → Int)
         (writeA : A → Int → Int → A)
@@ -167,7 +171,9 @@ private def checkQuantified (env : Environment) : IO Unit := do
         (a : A) (nested : N),
         (arrayLaws Int Int A readA writeA ∧ arrayLaws A A N readN writeN) →
         ((∀ x : A, ∃ y : A, writeA x 0 1 = y) ∧
-          readN (writeN nested a a) a = a ∧ (∀ x : N, readN x a = a)) → False)
+          readN (writeN nested a a) a = a ∧ (∀ x : N, readN x a = a) ∧
+          (∀ before : A, ∃ after : A,
+            after = writeA before 0 1 ∧ readA after 0 = readA before 0)) → False)
   runQuery env "restricted arrays admit no identity" "
     (set-logic ALL)
     (assert (forall ((a (Array Int Int)))
