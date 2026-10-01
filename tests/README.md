@@ -40,7 +40,7 @@ compile without it. The integer proof uses `propext`; the other three are axiom-
 | `translation/int/` | Exact literals beyond 64 bits, arithmetic including div/mod, comparisons, distinct, conditionals, and contradictory bounds |
 | `translation/real/` | Exact rationals, arithmetic, comparisons, conditionals, mixed function signatures, bindings, and shared division-at-zero interpretations |
 | `translation/bitvec/` | Modular arithmetic, bitwise operations, comparisons, width changes, shifts, rotations, division/remainders, Int conversions, and overflow predicates |
-| `translation/arrays/` | Reads, writes, equality, aliases/functions, nested sorts, quantifiers, and native constant arrays |
+| `translation/arrays/` | Reads, writes, equality, aliases/functions, nested sorts, quantifiers, and literal/symbolic constant arrays |
 | `translation/sorts/` | Nonempty uninterpreted carriers, mixed functions, aliases, definitions, equality/distinct, conditionals, and quantifiers |
 | `translation/functions/` | Mixed Bool/Int functions and predicates, quoted names, argument order, unused parameters, and congruence |
 | `translation/bindings/` | Simultaneous/nested let, nonrecursive definitions, sort aliases, named subterms, and capture avoidance |

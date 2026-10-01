@@ -1,4 +1,5 @@
 import Smt2Lean.Backend.Definitions
+import Smt2Lean.Backend.ConstantArrays
 
 /-!
 Parse SMT-LIB commands without solving. Track native symbol scopes and active
@@ -7,13 +8,15 @@ assertions, then inspect each check while its scope is alive.
 
 namespace Smt2Lean.Backend
 
-/-- Only the active arrays and native assertion count roll back on pop. -/
+/-- Counts needed to restore declarations, assertions, names, and aliases on pop. -/
 private structure Scope where
   sorts : Nat
   declarations : Nat
   definitions : Nat
   assertions : Nat
   nativeAssertions : Nat
+  namedConstants : Nat
+  aliases : Nat
 
 /-- cvc5 binds named terms directly to their bodies. Check even bodies erased by let. -/
 private def validateNamedTerms (names : Array String) (tm : cvc5.TermManager) (solver : cvc5.Solver)
@@ -24,19 +27,13 @@ private def validateNamedTerms (names : Array String) (tm : cvc5.TermManager) (s
   for name in names do
     parser.setStringInput s!"|{name}|"
     let body ← withoutQuantifierHints tm (← parser.nextTerm)
-    validateTerm body (knownTerms query) allowQuantifiers (sorts := query.sorts)
+    validateTerm body (knownTerms query) allowQuantifiers (sorts := query.sorts) (constructors := query.arrayConstructors)
 
 private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) : cvc5.Env Unit := do
   let response := (← command.invoke solver symbols).trimAscii.toString
   unless response.isEmpty || response == "success" do
     throw (.error s!"{command.getCommandName}: {response}")
-
-/-- Global named bodies can outlive assertions, including erased theory terms. -/
-private def checkGlobalArrayNames (global : Bool) (command : Source.Command)
-    (constants : Array cvc5.Term) : cvc5.Env Unit := do
-  if global && !command.source.names.isEmpty && !constants.isEmpty then
-    throw (.unsupported "constant arrays in commands introducing global :named terms are unsupported")
 
 /-- SMT-LIB 2.6 assumptions are user-defined Boolean constants or their negations. -/
 private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
@@ -67,9 +64,9 @@ private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
     unless (← ofExcept term.getSort).isBoolean do
       throw (.unsupported s!"check-sat-assuming: expected a Boolean constant: {spelling}")
     let term ← withoutQuantifierHints tm term
-    validateAssertion term (knownTerms query) allowQuantifiers query.sorts
+    validateAssertion term (knownTerms query) allowQuantifiers query.sorts query.arrayConstructors
     let term ← expandDefinitions tm query.definitions term
-    validateAssertion term query.declarations allowQuantifiers query.sorts
+    validateAssertion term query.declarations allowQuantifiers query.sorts query.arrayConstructors
     let term ← if negative then tm.mkTerm .NOT #[term] else pure term
     -- Negated nullary relations are Horn safety clauses. Validate the result as usual.
     let term ← if query.logic == some "HORN" && negative then
@@ -103,7 +100,8 @@ private def parseScript
   if !singleQuery then solver.setOption "incremental" "true"
   let mut symbols ← cvc5.SymbolManager.new tm
   let mut parser ← cvc5.InputParser.new solver (some symbols)
-  parser.setStringInput input (name := name)
+  let mut arrayParser := ConstantArrays.initial input
+  let adaptArrays := (Source.tokenize input).any (fun token => token == "const" || token == "|const|")
   let mut query : ParsedQuery := {}
   let mut allowQuantifiers := true
   let mut checked := false
@@ -154,6 +152,25 @@ private def parseScript
           validateBitvectorIndices parts
         if parts[1]? == some "get-value" && parts.contains ":named" then
           throw (.unsupported "observational requests cannot introduce named terms")
+      let mut arrayConstants := #[]
+      let mut namedConstants := #[]
+      let text ← match command? with
+        | none => pure ""
+        | some command => do
+          let kind := (Source.tokenize command.text)[1]?.getD ""
+          if adaptArrays && #["declare-sort", "declare-fun", "declare-const", "define-sort",
+              "define-fun", "assert", "push", "check-sat", "check-sat-assuming", "get-value"].contains kind then
+            let (_, state) ← (ConstantArrays.initializeAliases tm solver symbols).run arrayParser
+            arrayParser := state
+          if adaptArrays then
+            let ((text, constants, names), state) ← (ConstantArrays.prepare command solver symbols query).run arrayParser
+            arrayParser := state
+            arrayConstants := constants
+            namedConstants := names
+            query := { query with arrayConstructors := state.constructors }
+            pure text
+          else pure command.text
+      parser.setStringInput text (name := name)
       let cmd ← parser.nextCommand
       if cmd.isNull then
         unless command?.isNone do throw (.error "source reader and cvc5 command streams disagree")
@@ -188,6 +205,9 @@ private def parseScript
         if logic == "HORN" && mode == .smt then
           throw (.unsupported s!"unsupported logic: {cmd}")
         invokeCommand cmd solver symbols
+        if adaptArrays then
+          let (_, state) ← (ConstantArrays.initializeAliases tm solver symbols).run arrayParser
+          arrayParser := state
         allowQuantifiers := !logic.startsWith "QF_"
         query := { query with logic := some logic, invoked := query.invoked.push commandName }
       | "declare-sort" =>
@@ -201,12 +221,15 @@ private def parseScript
         let sort := sorts.back!
         unless sort.isUninterpretedSort do
           throw (.unsupported s!"expected an uninterpreted sort, got {sort}")
+        if adaptArrays then
+          let (_, state) ← (ConstantArrays.rememberSort solver symbols sort parts[2]!).run arrayParser
+          arrayParser := state
         query := { query with
           sorts := query.sorts.push { name := ← ofExcept sort.getSymbol, sort, source := some command.source }
           invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
         invokeCommand cmd solver symbols
-        let terms ← symbols.getDeclaredTerms
+        let terms := ConstantArrays.sourceDeclarations arrayParser (← symbols.getDeclaredTerms)
         unless terms.size == query.declarations.size + 1 do
           throw (.error "expected one new declaration")
         let term := terms.back!
@@ -227,8 +250,6 @@ private def parseScript
         unless assertions.size == nativeCount + 1 do
           throw (.error "expected one native defining equation")
         let definition ← readDefinition (← addedAssertion before assertions) command.source query tm allowQuantifiers
-        let arrayConstants ← readArrayConstants command solver symbols query
-        checkGlobalArrayNames globalDeclarations command arrayConstants
         let definition := { definition with arrayConstants }
         nativeCount := assertions.size
         query := { query with
@@ -249,11 +270,9 @@ private def parseScript
             throw (.error "expected one new native assertion")
           let term ← addedAssertion before assertions
           let term ← withoutQuantifierHints tm term
-          validateAssertion term (knownTerms query) allowQuantifiers query.sorts
+          validateAssertion term (knownTerms query) allowQuantifiers query.sorts query.arrayConstructors
           let term ← expandDefinitions tm query.definitions term
-          validateAssertion term query.declarations allowQuantifiers query.sorts
-          let arrayConstants ← readArrayConstants command solver symbols query
-          checkGlobalArrayNames globalDeclarations command arrayConstants
+          validateAssertion term query.declarations allowQuantifiers query.sorts query.arrayConstructors
           nativeCount := assertions.size
           query := { query with
             assertions := query.assertions.push term
@@ -287,7 +306,7 @@ private def parseScript
           solver.setOption "incremental" "true"
           symbols ← cvc5.SymbolManager.new tm
           parser ← cvc5.InputParser.new solver (some symbols)
-          parser.setStringInput (String.extract reader.cursor input.endPos) (name := name)
+          arrayParser := ConstantArrays.initial input
           query := { number := checks + 1, commands := query.commands, invoked := query.invoked }
           globalDeclarations := false
           inStartMode := true
@@ -296,10 +315,11 @@ private def parseScript
         else
           query := { query with assertions := #[], assertionSources := #[], assertionArrayConstants := #[] }
           if !globalDeclarations then
-            query := { query with sorts := #[], declarations := #[], definitions := #[] }
+            query := { query with sorts := #[], declarations := #[], definitions := #[], namedArrayConstants := #[] }
+            arrayParser := { arrayParser with aliases := #[], arrayAlias := none, initialized := false }
           nativeCount := query.definitions.size
           unless (← solver.getAssertions).size == nativeCount &&
-              (← symbols.getDeclaredTerms) == query.declarations.map (·.term) &&
+              ConstantArrays.sourceDeclarations arrayParser (← symbols.getDeclaredTerms) == query.declarations.map (·.term) &&
               (← symbols.getDeclaredSorts) == query.sorts.map (·.sort) do
             throw (.error "native and translator reset states disagree")
         query := { query with invoked := query.invoked.push commandName }
@@ -317,7 +337,8 @@ private def parseScript
           let scope : Scope := {
             sorts := query.sorts.size
             declarations := query.declarations.size, definitions := query.definitions.size
-            assertions := query.assertions.size, nativeAssertions := nativeCount }
+            assertions := query.assertions.size, nativeAssertions := nativeCount
+            namedConstants := query.namedArrayConstants.size, aliases := arrayParser.aliases.size }
           scopes := scopes ++ Array.replicate count scope
         else if count > 0 then
           let remaining := scopes.size - count
@@ -326,13 +347,17 @@ private def parseScript
             sorts := if globalDeclarations then query.sorts else query.sorts.extract 0 scope.sorts
             declarations := if globalDeclarations then query.declarations else query.declarations.extract 0 scope.declarations
             definitions := if globalDeclarations then query.definitions else query.definitions.extract 0 scope.definitions
+            namedArrayConstants := if globalDeclarations then query.namedArrayConstants else
+              query.namedArrayConstants.extract 0 scope.namedConstants
             assertions := query.assertions.extract 0 scope.assertions
             assertionArrayConstants := query.assertionArrayConstants.extract 0 scope.assertions
             assertionSources := query.assertionSources.extract 0 scope.assertions }
+          if !globalDeclarations then
+            arrayParser := { arrayParser with aliases := arrayParser.aliases.extract 0 scope.aliases }
           nativeCount := scope.nativeAssertions + if globalDeclarations then query.definitions.size - scope.definitions else 0
           scopes := scopes.extract 0 remaining
         unless (← solver.getAssertions).size == nativeCount &&
-            (← symbols.getDeclaredTerms) == query.declarations.map (·.term) &&
+            ConstantArrays.sourceDeclarations arrayParser (← symbols.getDeclaredTerms) == query.declarations.map (·.term) &&
             (← symbols.getDeclaredSorts) == query.sorts.map (·.sort) do
           throw (.error "native and translator scopes disagree")
         query := { query with invoked := query.invoked.push commandName }
@@ -358,7 +383,9 @@ private def parseScript
         unless checked do throw (.error "exit before check-sat")
         exited := true
       | _ => throw (.unsupported s!"unsupported command: {commandName}")
-      query := { query with commands := query.commands.push command }
+      query := { query with
+        commands := query.commands.push command
+        namedArrayConstants := query.namedArrayConstants ++ namedConstants }
     catch error => throw (errorWithContext context error)
   unless checked do
     let source : Source.Ref := {

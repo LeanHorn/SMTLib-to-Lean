@@ -213,6 +213,44 @@ private def checkConstants (env : Environment) : IO Unit := do
         (readA (constA 0) i = 0 ∧ readA (writeA (constA 0) i 7) i = 7 ∧
           readA (readB (constB (constA 2)) True) i = 2 ∧
           (∀ a : A, readA (writeA a i (readA (constA 0) i)) i = 0)) → False)
+  runQuery env "quoted annotation keyword is an ordinary function" "
+    (set-logic ALL)
+    (declare-fun |!| ((Array Int Int) Int) Bool)
+    (declare-const x Int)
+    (assert (|!| ((as const (Array Int Int)) x) 1))
+    (check-sat)" fun query =>
+      checkRefutation query q(∀ (A : Type) (read : A → Int → Int)
+        (write : A → Int → Int → A) (const : Int → A)
+        (f : A → Int → Prop) (x : Int),
+        (arrayLaws Int Int A read write ∧ (∀ v i, read (const v) i = v)) →
+        f (const x) 1 → False)
+  runQuery env "user function named const is not the array constructor" "
+    (set-logic ALL)
+    (declare-fun const (Int) (Array Int Int))
+    (declare-const x Int)
+    (assert (= ((as const (Array Int Int)) x) (const x)))
+    (check-sat)" fun query =>
+      checkRefutation query q(∀ (A : Type) (read : A → Int → Int)
+        (write : A → Int → Int → A) (f : Int → A) (x : Int),
+        arrayLaws Int Int A read write → f x = f x → False)
+  runQuery env "symbolic constant arrays with native binding scopes" "
+    (set-logic ALL)
+    (declare-const x Int)
+    (define-fun fill ((x Int)) (Array Int Int) ((as const (Array Int Int)) x))
+    (assert (forall ((x Int)) (= (select (fill (+ x 1)) x) (+ x 1))))
+    (assert (let ((x 7)) (= (select ((as const (Array Int Int)) x) 0) x)))
+    (assert (= (select ((as const (Array Int Int)) (! x :named payload)) 0) x))
+    (assert (= (select ((as const (Array Int (Array Int Int))) (fill x)) 0) (fill x)))
+    (check-sat)" fun query =>
+      checkRefutation query q(∀ (A : Type) (readA : A → Int → Int)
+        (writeA : A → Int → Int → A) (constA : Int → A)
+        (N : Type) (readN : N → Int → A) (writeN : N → Int → A → N)
+        (constN : A → N) (x : Int),
+        (arrayLaws Int Int A readA writeA ∧ (∀ v i, readA (constA v) i = v) ∧
+          arrayLaws Int A N readN writeN ∧ (∀ v i, readN (constN v) i = v)) →
+        ((∀ y : Int, readA (constA (y + 1)) y = y + 1) ∧
+          readA (constA 7) 0 = 7 ∧ readA (constA x) 0 = x ∧
+          readN (constN (constA x)) 0 = constA x) → False)
   for input in #[
       "(define-fun unused () (Array Int Int) ((as const (Array Int Int)) 3)) (assert true)",
       "(assert (let ((unused ((as const (Array Int Int)) 3))) true))"] do
@@ -250,7 +288,8 @@ private def checkHorn (env : Environment) : IO Unit := do
       arrayLaws Int Int A read write ∧ (∀ v i, read (const v) i = v) ∧
       R (const 0) ∧
       (∀ a : A, R a → R (write a 0 0)) ∧
-      (∀ a : A, R a → read a 0 ≠ 0 → False))
+      (∀ a : A, R a → read a 0 ≠ 0 → False) ∧
+      (∀ v : Int, v = 0 → R (const v)))
 
 def main : IO Unit := do
   initSearchPath (← findSysroot)

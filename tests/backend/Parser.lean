@@ -906,19 +906,19 @@ private def checkArrays : IO Unit := do
     checkAccepted logic s!"(set-logic {logic})(assert true)(check-sat)" #[] 1 #["set-logic", "assert"]
   for (name, input, count) in #[
     ("nested", "tests/translation/arrays/nested.smt2", 5),
-    ("constants", "tests/translation/arrays/constants.smt2", 8)
+    ("constants", "tests/translation/arrays/constants.smt2", 13)
   ] do
     (parseAndInspectQuery (← IO.FS.readFile input) (name := name) fun query => do
       require (query.assertions.size == count) s!"{name}: wrong assertion count"
       require (!query.invoked.contains "check-sat") "array parsing invoked a solver query"
     ).runIO
-  -- The native const-array payload is not in getChildren. Record it even if let discards it.
+  -- Retain the constructor sort even if native let expansion discards its application.
   (parseAndInspectQuery "(set-logic ALL)(assert (let ((unused ((as const (Array Int Int)) 7))) true))(check-sat)"
     fun query => do
       require (query.assertions[0]!.getKind! == .CONST_BOOLEAN) "expected native let expansion"
       let values := query.assertionArrayConstants.flatten
-      require (values.size == 1 && values[0]!.getNumChildren == 0 &&
-        values[0]!.getConstArrayBase!.getIntegerValue! == 7) "erased const-array requirement was lost"
+      require (values.size == 1 && query.arrayConstructors.size == 1 &&
+        values[0]! == query.arrayConstructors[0]!.base) "erased const-array requirement was lost"
   ).runIO
   for hint in #[":pattern ((select ((as const (Array Int Int)) 0) i))",
       ":no-pattern (select ((as const (Array Int Int)) 0) i)"] do
@@ -929,7 +929,7 @@ private def checkArrays : IO Unit := do
     (! (let ((unused ((as const (Array Int Int)) 0))) (= i i)) \
        :pattern ((select ((as const (Array Int Int)) 1) i)))))(check-sat)" fun query => do
       let values := query.assertionArrayConstants.flatten
-      require (values.size == 1 && values[0]!.getConstArrayBase!.getIntegerValue! == 0)
+      require (values.size == 1 && values[0]! == query.arrayConstructors[0]!.base)
         "hint changed the retained constant-array payload"
   ).runIO
   (parseAndInspectQuery "(set-logic ALL)(assert (= (select \
@@ -938,11 +938,12 @@ private def checkArrays : IO Unit := do
   ).runIO
   for (name, body) in #[
     ("bad-select", "(assert (= (select 0 1) 0))"),
+    ("quoted-as", "(assert (= (select ((|as| const (Array Int Int)) 0) 0) 0))"),
     ("bad-index", "(declare-const a (Array Int Int))(assert (= (select a true) 0))"),
     ("bad-store", "(declare-const a (Array Int Int))(assert (= (store a 0 true) a))"),
     ("bad-arity", "(declare-const a (Array Int Int))(assert (= (store a 0) a))"),
     ("bad-constant", "(assert (= ((as const (Array Int Int)) true) ((as const (Array Int Int)) 0)))"),
-    ("symbolic-constant", "(declare-const x Int)(assert (= (select ((as const (Array Int Int)) x) 0) x))"),
+    ("erased-wrong-payload", "(assert (let ((unused ((as const (Array Int Int)) true))) true))"),
     ("erased-string-array", "(assert (let ((unused ((as const (Array Int String)) \"x\"))) true))")
   ] do
     let called ← IO.mkRef false
@@ -952,10 +953,20 @@ private def checkArrays : IO Unit := do
     match result with
     | .error _ => pure ()
     | .ok _ => throw (IO.userError s!"{name}: invalid array was accepted")
-  checkRejected "global-named-constant"
-    "(set-option :global-declarations true)(set-logic ALL)\
-    (assert (! (let ((erased ((as const (Array Int Int)) 0))) true) :named p))(check-sat)"
-    3 "global :named terms are unsupported"
+  for input in #[
+    "(set-logic ALL)(declare-const x Int)(assert (= (select ((as const (Array Int Int)) x) 0) x))(check-sat)",
+    "(set-logic QF_ALIA)(assert (let ((v 7)) (= (select ((as const (Array Int Int)) v) 0) v)))(check-sat)",
+    "(set-logic ALL)(assert (= (select ((as const (Array Int Int)) (! 0 :named v)) 0) v))(check-sat)",
+    "(set-option :global-declarations true)(set-logic ALL)(push 1)\
+      (assert (! (let ((erased ((as const (Array Int Int)) 0))) true) :named p))\
+      (pop 1)(check-sat-assuming (p))"
+  ] do
+    (parseAndInspectSession input fun query => do
+      require (!query.invoked.contains "check-sat") "constant-array adapter invoked a solver query"
+      require (query.declarations.all (fun d => !d.name.startsWith "smt2lean.internal."))
+        "private parser carriers became source declarations"
+      require (!(arrayModelTerms query).isEmpty) "constant-array requirement was lost"
+    ).runIO
   IO.println "Array parser passed: native identities, nested sorts, const payloads, aliases, and rejection cases"
 
 def main : IO Unit := do

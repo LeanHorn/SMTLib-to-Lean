@@ -1,4 +1,5 @@
 import Smt2Lean.Helpers
+import Smt2Lean.Backend.Types
 
 namespace Smt2Lean.Arrays
 
@@ -14,7 +15,8 @@ private partial def addSort (sort : cvc5.Sort) : StateM (Array cvc5.Sort) Unit :
     addSort sort.getArrayElementSort!
     modify (·.push sort)
 
-private def collectSorts (terms : Array cvc5.Term) : Array cvc5.Sort × Array cvc5.Sort := Id.run do
+private def collectSorts (terms : Array cvc5.Term)
+    (constructors : Array Backend.ArrayConstructor) : Array cvc5.Sort × Array cvc5.Sort := Id.run do
   let mut sorts := #[]
   let mut constants := #[]
   let mut pending := terms.reverse
@@ -26,6 +28,8 @@ private def collectSorts (terms : Array cvc5.Term) : Array cvc5.Sort × Array cv
     visited := visited.insert term
     sorts := (addSort term.getSort!).run sorts |>.2
     pending := pending ++ term.getChildren.reverse
+    if constructors.any (fun c => c.base == term || c.matches term) then
+      unless constants.contains term.getSort! do constants := constants.push term.getSort!
     if term.isConstArray then
       unless constants.contains term.getSort! do constants := constants.push term.getSort!
       pending := pending.push term.getConstArrayBase!
@@ -35,12 +39,16 @@ private def collectSorts (terms : Array cvc5.Term) : Array cvc5.Sort × Array cv
 private def operationKey (carrier : Expr) (operation : String) : String :=
   s!"SMT.array.{carrier.fvarId!.name}.{operation}"
 
+private def constructorKey (base : cvc5.Term) : String :=
+  s!"SMT.constArray.{base.getId!}"
+
 /-- Introduce carriers and operations outside source binders, sharing each native sort's model. -/
 def withModels [Inhabited α] (terms : Array cvc5.Term)
     (sortCache : Std.HashMap cvc5.Sort Expr) (context : Smt.Reconstruct.Context)
     (inspect : Array Expr → Array Expr → Std.HashMap cvc5.Sort Expr →
-      Smt.Reconstruct.Context → MetaM α) : MetaM α := do
-  let (sorts, constants) := collectSorts terms
+      Smt.Reconstruct.Context → MetaM α)
+    (constructors : Array Backend.ArrayConstructor := #[]) : MetaM α := do
+  let (sorts, constants) := collectSorts terms constructors
   go constants sorts.toList #[] #[] sortCache context
 where
   go (constants : Array cvc5.Sort) (sorts : List cvc5.Sort) (parameters laws : Array Expr)
@@ -68,8 +76,11 @@ where
           if constants.contains sort then
             withLocalDeclD (← mkFreshUserName `constArray) (← mkArrow element carrier) fun const => do
               let law := mkAppN (mkConst (← Helpers.constArrayLaw)) #[index, element, carrier, read, const]
-              let context := { context with
-                userNames := context.userNames.insert (operationKey carrier "const") const }
+              let mut userNames := context.userNames.insert (operationKey carrier "const") const
+              for constructor in constructors do
+                if constructor.base.getSort! == sort then
+                  userNames := userNames.insert (constructorKey constructor.base) const
+              let context := { context with userNames }
               go constants rest (parameters.push const) (laws.push law) cache context
           else
             go constants rest parameters laws cache context
@@ -78,6 +89,9 @@ where
 def reconstruct : Smt.TermReconstructor := fun term => do
   let kind ← ofExcept term.getKind
   unless kind == .SELECT || kind == .STORE || kind == .CONST_ARRAY do return none
+  if kind == .STORE then
+    if let some function := (← read).userNames[constructorKey term[0]!]? then
+      return mkApp function (← Smt.Reconstruct.reconstructTerm term[2]!)
   let sort ← ofExcept (if kind == .CONST_ARRAY then term.getSort else term[0]!.getSort)
   let some carrier := (← get).sortCache[sort]?
     | throwError "missing array carrier for {sort}"

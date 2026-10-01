@@ -45,7 +45,8 @@ def isSupportedFunction (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : c
 /-- Check sorts, operators, declarations, and bound-variable scope. -/
 def validateTerm (root : cvc5.Term)
     (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool)
-    (bound : Array cvc5.Term := #[]) (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
+    (bound : Array cvc5.Term := #[]) (sorts : Array ParsedSort := #[])
+    (constructors : Array ArrayConstructor := #[]) : cvc5.Env Unit := do
   for binder in bound do
     unless (← ofExcept binder.getKind) == .VARIABLE &&
         isValueSort (← ofExcept binder.getSort) sorts do
@@ -63,6 +64,11 @@ def validateTerm (root : cvc5.Term)
       throw (.unsupported s!"unsupported value sort: {sort}")
     let kind ← ofExcept term.getKind
     let children := term.getChildren
+    if constructors.any (·.matches term) then
+      unless children[2]!.getSort! == sort.getArrayElementSort! do
+        throw (.unsupported "constant-array payload has the wrong element sort")
+      pending := pending.push (children[2]!, bound)
+      continue
     if kind == .CONST_ARRAY then
       unless sort.isArray && term.isConstArray && children.isEmpty do
         throw (.unsupported "expected a native constant-array value")
@@ -166,62 +172,19 @@ def validateTerm (root : cvc5.Term)
 /-- Assertions must be Boolean and contain only the supported, scoped terms. -/
 def validateAssertion (root : cvc5.Term)
     (declarations : Array ParsedDeclaration) (allowQuantifiers : Bool := true)
-    (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
+    (sorts : Array ParsedSort := #[]) (constructors : Array ArrayConstructor := #[]) : cvc5.Env Unit := do
   unless (← ofExcept root.getSort).isBoolean do
     throw (.unsupported "expected a Bool assertion")
-  validateTerm root declarations allowQuantifiers (sorts := sorts)
+  validateTerm root declarations allowQuantifiers (sorts := sorts) (constructors := constructors)
 
 def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
   query.declarations ++ query.definitions.map fun d =>
     { name := d.symbol.toString, term := d.symbol, source := some d.source }
 
-/-- Preserve constant-array theory requirements even when let/definition expansion erases a use.
-The pinned parser accepts only value payloads; this profile additionally requires them to parse
-without local term bindings. No commands are invoked by this auxiliary term parser. -/
-def readArrayConstants (source : Source.Command) (solver : cvc5.Solver)
-    (symbols : cvc5.SymbolManager) (query : ParsedQuery) : cvc5.Env (Array cvc5.Term) := do
-  let parts := Source.tokenize source.text
-  let mut constants := #[]
-  let mut skipUntil := 0
-  for i in [:parts.size] do
-    if i < skipUntil then continue
-    -- Hints do not contribute terms or theory laws to the translated query.
-    if #[":pattern", ":no-pattern", ":qid"].contains parts[i]! then
-      let start := i + 1
-      let mut stop := start + 1
-      if parts[start]? == some "(" then
-        let mut depth := 1
-        while stop < parts.size && depth > 0 do
-          if parts[stop]! == "(" then depth := depth + 1
-          else if parts[stop]! == ")" then depth := depth - 1
-          stop := stop + 1
-      skipUntil := stop
-      continue
-    unless parts[i]? == some "(" && parts[i + 1]? == some "(" &&
-        parts[i + 2]? == some "as" &&
-        (parts[i + 3]? == some "const" || parts[i + 3]? == some "|const|") do continue
-    let mut depth := 1
-    let mut stop := i + 1
-    while stop < parts.size && depth > 0 do
-      if parts[stop]! == "(" then depth := depth + 1
-      else if parts[stop]! == ")" then depth := depth - 1
-      stop := stop + 1
-    let expression := parts.extract i stop
-    if expression.contains ":named" then
-      throw (.unsupported "constant-array payloads cannot contain :named annotations; name the whole array expression instead")
-    let parser ← cvc5.InputParser.new solver (some symbols)
-    parser.setStringInput (String.intercalate " " expression.toList)
-    let term ← try parser.nextTerm catch _ =>
-      throw (.unsupported "constant arrays require a self-contained native value; symbolic or locally bound payloads are unsupported")
-    unless term.isConstArray do
-      throw (.unsupported "expected a native constant-array value")
-    validateTerm term (knownTerms query) false (sorts := query.sorts)
-    unless constants.contains term do constants := constants.push term
-  return constants
-
 /-- All native roots needed to bind array models, including erased constant-array constructors. -/
 def arrayModelTerms (query : ParsedQuery) : Array cvc5.Term :=
   query.declarations.map (·.term) ++ query.assertions ++ query.assertionArrayConstants.flatten ++
+    query.namedArrayConstants.flatMap (·.2) ++
     query.definitions.flatMap (fun d => #[d.symbol, d.body] ++ d.parameters ++ d.arrayConstants)
 
 /-- Recognize canonical sort syntax, including aliases with formal parameters. -/

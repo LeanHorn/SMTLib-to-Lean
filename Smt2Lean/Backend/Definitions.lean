@@ -69,9 +69,9 @@ def readDefinition (equation : cvc5.Term) (source : Source.Ref)
     else pure (#[], value)
   let body ← withoutQuantifierHints tm body
   -- Check before expansion as well: even discarded arguments must be supported.
-  validateTerm body (knownTerms query) allowQuantifiers parameters query.sorts
+  validateTerm body (knownTerms query) allowQuantifiers parameters query.sorts query.arrayConstructors
   let body ← expandDefinitions tm query.definitions body
-  validateTerm body query.declarations allowQuantifiers parameters query.sorts
+  validateTerm body query.declarations allowQuantifiers parameters query.sorts query.arrayConstructors
   return { symbol, parameters, body, source }
 
 end Smt2Lean.Backend

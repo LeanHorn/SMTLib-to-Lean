@@ -85,7 +85,7 @@ Bitvectors support modular arithmetic, bitwise operations, signed/unsigned compa
 
 BV/Int conversions support `int_to_bv` (`int2bv`), `ubv_to_int` (`bv2nat`), and `sbv_to_int`. Overflow predicates include `bvnego`, `bvuaddo`, `bvsaddo`, `bvumulo`, and `bvsmulo`. Rotation indices and conversion widths cannot exceed `4294967295`; conversion widths must be positive.
 
-Arrays support `select`, `store`, equality, nested sorts, and quantification, including Horn relation arguments. Generated propositions bind nonempty array carriers and their read/write/extensionality laws explicitly. Constant arrays support self-contained native values, including nested constant arrays; symbolic or locally bound payloads and payloads containing `:named` remain unsupported. Commands combining constant arrays with global `:named` bindings are also rejected.
+Arrays support `select`, `store`, equality, nested sorts, and quantification, including Horn relation arguments. Generated propositions bind nonempty array carriers and their read/write/extensionality laws explicitly. Constant arrays support literal and symbolic payloads, including local bindings, definitions, named terms, and nested array values.
 
 Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
 

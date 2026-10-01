@@ -111,9 +111,9 @@ private def withAssertionModel [Inhabited α] (query : ParsedQuery)
     -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
     for h : i in [:query.assertions.size] do
       atSource query.assertionSources[i]? s!"assertion {i + 1}" (queryNumber := query.number) do
-        (validateAssertion query.assertions[i] query.declarations (sorts := query.sorts)).runIO
+        (validateAssertion query.assertions[i] query.declarations (sorts := query.sorts) (constructors := query.arrayConstructors)).runIO
     Arithmetic.withZeroCases query.assertions fun zeroCases context => do
-      Arrays.withModels (arrayModelTerms query) sortCache context fun arrayParameters laws sortCache context => do
+      Arrays.withModels (arrayModelTerms query) sortCache context (constructors := query.arrayConstructors) fun arrayParameters laws sortCache context => do
         let declarations ← query.declarations.mapIdxM fun i (declaration : ParsedDeclaration) =>
           atSource declaration.source s!"declaration '{declaration.name}'" (queryNumber := query.number) do
             let sort ← ofExcept declaration.term.getSort
@@ -190,7 +190,7 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
     Arithmetic.withZeroCases terms fun zeroCases context => do
       let modelTerms := problem.arrayTerms ++ problem.relations.map (·.term) ++ terms ++
         problem.clauses.flatMap (fun c => c.binders.map (·.term))
-      Arrays.withModels modelTerms sortCache context fun arrayParameters laws sortCache context => do
+      Arrays.withModels modelTerms sortCache context (constructors := problem.arrayConstructors) fun arrayParameters laws sortCache context => do
         let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
           atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
             let sort ← ofExcept relation.term.getSort

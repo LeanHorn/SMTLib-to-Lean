@@ -875,6 +875,24 @@ def check_arrays_extended(lean, tmp):
         ("constant-read", "(declare-const i Int)"
          "(assert (distinct (select ((as const (Array Int Int)) 0) i) 0))",
          "  intro A read write const i laws bad\n  exact bad (laws.2 0 i)\n"),
+        ("symbolic-read", "(declare-const v Int)(declare-const i Int)"
+         "(assert (distinct (select ((as const (Array Int Int)) v) i) v))",
+         "  intro A read write const v i laws bad\n  exact bad (laws.2 v i)\n"),
+        ("constant-store-same", "(declare-const v Int)(declare-const i Int)"
+         "(assert (distinct (select (store ((as const (Array Int Int)) v) i 7) i) 7))",
+         "  intro A read write const v i laws bad\n  exact bad (laws.1.2.1 (const v) i 7)\n"),
+        ("constant-store-other", "(declare-const v Int)(declare-const i Int)(declare-const j Int)"
+         "(assert (distinct i j))"
+         "(assert (distinct (select (store ((as const (Array Int Int)) v) i 7) j) v))",
+         "  intro A read write const v i j laws h\n"
+         "  exact h.2 ((laws.1.2.2.1 (const v) i j 7 h.1).trans (laws.2 v j))\n"),
+        ("unequal-constants", "(declare-sort I 0)(declare-const v Int)(declare-const w Int)"
+         "(assert (distinct v w))"
+         "(assert (= ((as const (Array I Int)) v) ((as const (Array I Int)) w)))",
+         "  intro I inhabited A read write const v w laws h\n"
+         "  obtain ⟨i⟩ := inhabited\n"
+         "  have same := congrArg (fun a => read a i) h.2\n"
+         "  rw [laws.2 v i, laws.2 w i] at same\n  exact h.1 same\n"),
         ("nested-update", "(declare-const a (Array Int (Array Int Int)))"
          "(declare-const row (Array Int Int))(declare-const i Int)(declare-const j Int)"
          "(assert (distinct (select (select (store a i row) i) j) (select row j)))",
@@ -903,10 +921,11 @@ theorem checked : Problem := by
     · intro a i j v different; simp [write, Ne.symm different]
     · intro a b same; exact funext same
   refine ⟨Int → Int, (fun a i => a i), write, (fun v _ => v),
-    (fun a => a 0 = 0), laws, ?_, rfl, ?_, ?_⟩
+    (fun a => a 0 = 0), laws, ?_, rfl, ?_, ?_, ?_⟩
   · intro v i; rfl
   · intro a _; simp [write]
   · intro a same different; exact different same
+  · intro v h; exact h
 
 #print axioms checked
 """)
@@ -929,18 +948,38 @@ theorem checked : Problem := by
 (reset)
 (set-logic ALL)
 (check-sat)
+(reset)
+(set-option :global-declarations true)
+(set-logic ALL)
+(push 1)
+(assert (and (! true :named unrelated) (= (select ((as const (Array Int Int)) 0) 0) 0)))
+(pop 1)
+(check-sat-assuming (unrelated))
+(push 1)
+(assert (! (let ((erased ((as const (Array Int Int)) 1))) true) :named kept))
+(pop 1)
+(check-sat-assuming (kept))
+(reset-assertions)
+(check-sat-assuming (kept))
+(reset)
+(push 1)
+(assert (= (select ((as const (Array Int Int)) 2) 0) 2))
+(pop 1)
+(assert (= (select ((as const (Array Int Int)) 3) 0) 3))
+(check-sat)
+(reset-assertions)
+(check-sat)
 """)
     run(source, "--out", output)
-    generated = check_generated(lean, output, count=7)
+    generated = check_generated(lean, output, count=12)
     assert generated.count("def SMT.constArrayLaw ") == 1
-    for number in range(1, 8):
+    for number in range(1, 13):
         body = generated.split(f"def Refutation_{number} : Prop :=\n", 1)[1]
         body = body.split("-- Source:", 1)[0].split("-- Proofs", 1)[0]
-        assert ("SMT.constArrayLaw" in body) == (number in [2, 4, 6]), (number, body)
+        assert ("SMT.constArrayLaw" in body) == (number in [2, 4, 6, 9, 10, 11]), (number, body)
     for name, tail in [
-        ("symbolic", "(declare-const v Int)(assert (= (select ((as const (Array Int Int)) v) 0) v))"),
-        ("local", "(assert (= (select (let ((v 0)) ((as const (Array Int Int)) v)) 0) 0))"),
-        ("named", "(assert (= (select ((as const (Array Int Int)) (! 0 :named payload)) 0) 0))"),
+        ("erased-wrong-payload", "(assert (let ((ignored ((as const (Array Int Int)) true))) true))"),
+        ("unbound-payload", "(assert (= (select ((as const (Array Int Int)) missing) 0) 0))"),
         ("wrong-index", "(assert (= (select ((as const (Array Int Int)) 0) true) 0))"),
         ("string-sort", "(declare-const unsupported (Array Int (Array Int String)))"),
     ]:
@@ -948,8 +987,6 @@ theorem checked : Problem := by
         source.write_text("(set-logic ALL)(assert (= (select ((as const (Array Int Int)) 0) 0) 0))"
                           "(check-sat)" + tail)
         result = run(source, "--out", output, code=1)
-        if name == "local":
-            assert "self-contained native value" in result.stderr, result.stderr
         assert not output.exists()
     source, output = tmp / "arrays-global-name.smt2", tmp / "arrays-global-name"
     source.write_text("""(set-option :global-declarations true)
@@ -961,9 +998,18 @@ theorem checked : Problem := by
 (assert (forall ((a (Array Int Int))) (exists ((i Int)) (distinct (select a i) 0))))
 (check-sat-assuming (p))
 """)
-    assert "global :named terms are unsupported" in run(source, "--out", output, code=1).stderr
+    run(source, "--out", output)
+    generated = check_generated(lean, output, count=2)
+    assert "SMT.constArrayLaw" in generated.split("def Refutation_2 : Prop :=", 1)[1]
+    assert "smt2lean.internal." not in generated
+    source, output = tmp / "arrays-hidden-relation.smt2", tmp / "arrays-hidden-relation"
+    source.write_text("(set-logic HORN)(declare-fun P (Int) Bool)"
+                      "(declare-fun R ((Array Int Bool)) Bool)"
+                      "(assert (forall ((x Int)) (R ((as const (Array Int Bool)) (P x)))))"
+                      "(check-sat)")
+    assert "CHC relation inside" in run(source, "--out", output, code=1).stderr
     assert not output.exists()
-    print("Extended array CLI passed: four fixtures, three completed proofs, seven scope snapshots, and rejected payloads")
+    print("Extended array CLI passed: symbolic constants, completed proofs, scope snapshots, and rejected payloads")
 
 
 def main():
