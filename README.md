@@ -81,24 +81,6 @@ The `sorry` warning means the proof is unfinished. Replace `sorry` with:
 Run the Lean command again; the proof now checks without `sorry`.
 For broader examples, try [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.smt2).
 
-## Research prototype in progress
-
-The translator supports a first-order SMT-LIB fragment over Bool, Int, Real, fixed-width bitvectors, and nonempty uninterpreted sorts (`declare-sort` of arity zero), including exact integer and real arithmetic, uninterpreted functions, quantifiers, nonrecursive definitions, let bindings, and incremental queries with `push`/`pop`, temporary `check-sat-assuming` assumptions, resets, and global declarations.
-
-Mixed Int/Real expressions support exact `to_real` casts, floor-based `to_int`, and `is_int`. Real output uses the pinned Mathlib; other output uses Lean core. Int/Real division at zero preserves arbitrary, shared interpretations.
-
-Bitvectors support modular arithmetic, bitwise operations, signed/unsigned comparisons, `bvcomp`, concatenation, extraction, zero/sign extension, repetition, shifts, rotations, and signed/unsigned division and remainders, including `bvsmod`. Division preserves SMT-LIB's specified zero-divisor and overflow behavior.
-
-BV/Int conversions support `int_to_bv` (`int2bv`), `ubv_to_int` (`bv2nat`), and `sbv_to_int`. Overflow predicates include `bvnego`, `bvuaddo`, `bvsaddo`, `bvumulo`, and `bvsmulo`. Rotation indices and conversion widths cannot exceed `4294967295`; conversion widths must be positive.
-
-Arrays support `select`, `store`, equality, nested sorts, and quantification, including Horn relation arguments. Generated propositions bind nonempty array carriers and their read/write/extensionality laws explicitly. Constant arrays support literal and symbolic payloads, including local bindings, definitions, named terms, and nested array values.
-
-Monomorphic datatypes support enums, records, direct recursion, and mutually recursive declaration groups. Constructors, selectors, testers, and exhaustive `match` expressions work with functions, quantifiers, definitions, arrays, and Horn clauses. Generated Lean inductives preserve constructor disjointness, injectivity, and finite-constructor semantics. Selectors return their field on the owning constructor and preserve shared, input-dependent arbitrary results on other constructors. Testers recognize their constructor; `match` selects the first matching branch, with branch-local field variables or a catch-all variable binding the whole value. Parametric datatypes and nested recursion remain unsupported.
-
-Supported constrained Horn clauses have universal binders, positive relation premises, quantifier-free and relation-free theory guards, and a relation or false head.
-
-Support for additional SMT-LIB theories and commands is under development.
-
 ## Tests
 
 Run the complete translator regression suite:
@@ -109,3 +91,8 @@ tests/run.sh
 
 To measure translation and Lean checking on your own inputs, see the
 [benchmark runner](benchmarks/README.md).
+
+## Research prototype in progress
+
+This prototype is part of ongoing research and active development. 
+We anticipate things will break and improve :)!
