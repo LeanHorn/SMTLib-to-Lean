@@ -1,5 +1,7 @@
 import Init
 
+set_option maxRecDepth 4096
+
 -- Statements
 
 -- Source: "tests/translation/int/bounds.smt2":6:1-6:12 (check-sat, command 5)

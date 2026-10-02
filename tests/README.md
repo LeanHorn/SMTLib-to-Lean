@@ -32,6 +32,9 @@ in memory and compare it with the reconstructed expressions. The CLI suite owns
 filesystem checks: it compiles both `Query.lean` and its statement section,
 refuses existing destinations, and preserves edited proofs. Core-only outputs
 are checked without package search paths; Real outputs use the pinned Mathlib.
+CLI checks cover the default `maxRecDepth 4096`, explicit overrides, invalid limits,
+and Lean rejecting an emitted limit that is too low. Anchor checks also verify
+that overrides reach the translator and are recorded in run metadata.
 
 Statement checks reject admissions and query-specific axioms, including transitive
 dependencies. Classical conditionals may use `propext`, `Classical.choice`, and

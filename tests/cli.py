@@ -24,13 +24,35 @@ def main():
         "lh_sum_rec": (CHC / "expected/Query.lean").read_text(),
     }
     help_text = run("--help").stdout
-    assert all(word in help_text for word in ["Usage:", "HORN", "Problem", "Refutation"])
+    assert all(word in help_text for word in ["Usage:", "HORN", "Problem", "Refutation", "--max-rec-depth", "4096"])
     for args in [(), ("--unknown",), ("input.smt2",),
                  ("input.smt2", "--out", ""), ("input.smt2", "--out", "--help")]:
         run(*args, code=2)
 
     with tempfile.TemporaryDirectory(prefix="smt2lean cli ") as temporary:
         tmp = Path(temporary)
+        fixture = FIXTURES / "contradiction.smt2"
+        for depth in ["0", "-1", "bad", "1.5", ""]:
+            output = tmp / "invalid-depth"
+            run(fixture, "--out", output, "--max-rec-depth", depth, code=2)
+            assert not output.exists()
+        run(fixture, "--out", tmp / "missing-depth", "--max-rec-depth", code=2)
+        for index, options in enumerate([
+            ["--out", tmp / "depth-after", "--max-rec-depth", "8192"],
+            ["--max-rec-depth", "8192", "--out", tmp / "depth-before"],
+        ]):
+            run(fixture, *options)
+            output = tmp / ("depth-after" if index == 0 else "depth-before")
+            generated = check_generated(lean, output)
+            assert generated == expected["contradiction"].replace("maxRecDepth 4096", "maxRecDepth 8192")
+
+        # Check that the emitted option actually controls Lean, not just the text.
+        output = tmp / "depth-too-low"
+        run(fixture, "--out", output, "--max-rec-depth", "1")
+        limited = subprocess.run([str(lean), "--json", str(output / "Query.lean")],
+                                 cwd=ROOT, capture_output=True, text=True)
+        assert limited.returncode != 0 and "runtime.maxRecDepth" in limited.stdout, limited
+
         for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7), ("sorts", "Refutation", 8)]:
             output = tmp / f"session-{fixture}"
             run(SESSIONS / f"{fixture}.smt2", "--out", output)

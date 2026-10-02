@@ -217,7 +217,8 @@ def check_case(record, directory, args, lean, env):
             record.update(outcome=label + "_" + result["status"], reason=result.get("reason", ""))
         return result["status"] == "passed"
 
-    if not stage("translation", [EXE, source, "--out", generated]):
+    if not stage("translation", [EXE, source, "--out", generated,
+                                 "--max-rec-depth", str(args.max_rec_depth)]):
         return
     query = generated / "Query.lean"
     rendered = query.read_bytes()
@@ -291,8 +292,10 @@ def main(argv=None):
     parser.add_argument("--max-input-mib", type=int, default=10)
     parser.add_argument("--max-file-mib", type=int, default=16, help="Per output/log file limit")
     parser.add_argument("--lean-memory-mib", type=int, default=2048)
+    parser.add_argument("--max-rec-depth", type=int, default=4096,
+                        help="Recursion limit emitted by smt2lean (default: 4096)")
     args = parser.parse_args(argv)
-    for key in ("translation_timeout", "lean_timeout", "max_input_mib", "max_file_mib", "lean_memory_mib"):
+    for key in ("translation_timeout", "lean_timeout", "max_input_mib", "max_file_mib", "lean_memory_mib", "max_rec_depth"):
         if not math.isfinite(getattr(args, key)) or getattr(args, key) <= 0:
             parser.error(f"{key.replace('_', '-')} must be positive")
     try:

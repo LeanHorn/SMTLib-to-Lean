@@ -1,8 +1,10 @@
 """Runner regressions: real Lean checks, controlled translator failures, temporary files."""
 
 import argparse
+from contextlib import redirect_stderr
 import csv
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -40,6 +42,8 @@ if '; error' in text:
     sys.stderr.write('smt2lean: reconstruction failed for symbol unsupported\\n')
     sys.exit(1)
 out = Path(sys.argv[3])
+assert sys.argv[4] == '--max-rec-depth'
+depth = int(sys.argv[5])
 out.mkdir()
 body = 'True'
 if '; unused' in text:
@@ -49,7 +53,8 @@ if '; admission' in text:
 if '; type_error' in text:
     body = '(37 : Nat)'
 proof = 'by sorry' if '; bad_template' not in text else 'by exact (37 : Nat)'
-(out / 'Query.lean').write_text('import Init\\n\\n-- Statements\\n\\ndef Refutation : Prop := ' + body +
+(out / 'Query.lean').write_text('import Init\\n\\nset_option maxRecDepth ' + str(depth) +
+    '\\n\\n-- Statements\\n\\ndef Refutation : Prop := ' + body +
     '\\n\\n-- Proofs\\n\\ntheorem refutation : Refutation := ' + proof + '\\n')
 '''
 
@@ -68,7 +73,8 @@ class AnchorTests(unittest.TestCase):
         self.executable.write_text(TRANSLATOR)
         self.executable.chmod(0o755)
         self.args = argparse.Namespace(max_input_mib=1, max_file_mib=1,
-                                      translation_timeout=2, lean_timeout=15, lean_memory_mib=512)
+                                      translation_timeout=2, lean_timeout=15, lean_memory_mib=512,
+                                      max_rec_depth=4096)
 
     def case(self, mode, *, text=None, selection=None):
         path = self.root / (mode + ".smt2")
@@ -180,17 +186,29 @@ class AnchorTests(unittest.TestCase):
         valid.write_text('(set-logic QF_UF)\n(assert false)\n(check-sat)\n')
         out = self.root / "run"
         command = [sys.executable, str(ROOT / 'benchmarks/run.py'), str(self.root / 'missing.smt2'),
-                   str(unsupported), str(valid), '--out', str(out)]
+                   str(unsupported), str(valid), '--out', str(out), '--max-rec-depth', '8192']
         first = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=90)
         self.assertEqual(first.returncode, 1, first.stderr)
         with (out / 'results.csv').open(newline='') as stream:
             rows = list(csv.DictReader(stream))
         self.assertEqual([r['outcome'] for r in rows], ['input_error', 'translation_unsupported', 'passed'])
-        self.assertEqual(json.loads((out / 'run.json').read_text())['status'], 'complete')
+        metadata = json.loads((out / 'run.json').read_text())
+        self.assertEqual(metadata['status'], 'complete')
+        self.assertEqual(metadata['arguments']['max_rec_depth'], 8192)
+        generated = out / rows[-1]['artifacts'] / 'generated/Query.lean'
+        self.assertIn('set_option maxRecDepth 8192\n', generated.read_text())
         before = (out / 'run.json').read_bytes()
         second = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(second.returncode, 2)
         self.assertEqual((out / 'run.json').read_bytes(), before)
+
+    def test_cli_rejects_invalid_recursion_depth_before_creating_output(self):
+        output = self.root / 'invalid-depth'
+        for depth in ['0', '-1', 'bad']:
+            with self.subTest(depth=depth), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                anchor.main(['--out', str(output), '--max-rec-depth', depth])
+            self.assertEqual(error.exception.code, 2)
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

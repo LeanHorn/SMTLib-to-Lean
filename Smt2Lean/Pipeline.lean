@@ -5,8 +5,10 @@ namespace Smt2Lean.Pipeline
 
 open Lean Meta Emit
 
-/-- Reconstruct at each check, but return output only after the entire session succeeds. -/
-def translateSession (input : String) (env : Environment) (name : String := "session") : IO String := do
+/-- Reconstruct at each check, but return output only after the entire session succeeds.
+`maxRecDepth` sets the recursion limit in the generated Lean file. -/
+def translateSession (input : String) (env : Environment) (name : String := "session")
+    (maxRecDepth : Nat := Emit.defaultMaxRecDepth) : IO String := do
   let state ← IO.mkRef ({ env } : Core.State)
   let skipped ← IO.mkRef (#[] : Array Source.Command)
   let goals ← IO.mkRef (#[] : Array Goal)
@@ -28,7 +30,7 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
     state.set checkedState
     goals.modify (·.push goal)
   ).runIO
-  let (source, _, _) ← (renderSession (← goals.get) (← skipped.get)).toIO context (← state.get)
+  let (source, _, _) ← (renderSession (← goals.get) (← skipped.get) maxRecDepth).toIO context (← state.get)
   return source
 
 end Smt2Lean.Pipeline

@@ -29,9 +29,8 @@ def checkEmission (value : Expr) (kind : GoalKind := .refutation)
       throwError "generated output lost assertion labels"
   let [statements, proofs] := source.splitOn "-- Proofs\n"
     | throwError "expected one Statements section followed by Proofs"
-  unless (statements.startsWith "import Init\n\n-- Statements\n\n" ||
-      statements.startsWith "import Mathlib.Data.Real.Basic\n\n-- Statements\n\n" ||
-      statements.startsWith "import Mathlib.Algebra.Order.Archimedean.Real.Basic\n\n-- Statements\n\n") &&
+  unless (["Init", "Mathlib.Data.Real.Basic", "Mathlib.Algebra.Order.Archimedean.Real.Basic"].any
+      fun module => statements.startsWith s!"import {module}\n\nset_option maxRecDepth 4096\n\n-- Statements\n\n") &&
       proofs.contains s!"theorem {theoremName} : {definitionName} := by\n  sorry\n" do
     throwError "wrong statement/proof layout"
   unsafe enableInitializersExecution

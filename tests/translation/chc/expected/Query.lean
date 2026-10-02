@@ -1,5 +1,7 @@
 import Init
 
+set_option maxRecDepth 4096
+
 -- Statements
 
 -- Source: "tests/chc/lh_sum_rec.smt2":28:1-28:12 (check-sat, command 7)

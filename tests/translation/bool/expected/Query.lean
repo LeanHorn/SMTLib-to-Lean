@@ -1,5 +1,7 @@
 import Init
 
+set_option maxRecDepth 4096
+
 -- Statements
 
 -- Source: "tests/translation/bool/contradiction.smt2":5:1-5:12 (check-sat, command 5)

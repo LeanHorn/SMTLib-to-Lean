@@ -1,5 +1,7 @@
 import Init
 
+set_option maxRecDepth 4096
+
 -- Statements
 
 -- Source: "tests/translation/functions/congruence.smt2":8:1-8:12 (check-sat, command 7)

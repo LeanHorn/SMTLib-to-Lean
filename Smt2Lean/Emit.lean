@@ -8,6 +8,9 @@ namespace Smt2Lean.Emit
 
 open Lean Meta
 
+/-- Recursion limit for checking generated Lean files. -/
+def defaultMaxRecDepth : Nat := 4096
+
 /-- Select the proposition and proof template to emit. -/
 inductive GoalKind where
   | refutation
@@ -92,7 +95,8 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
 
 /-- Emit helpers once, then all statements, then all unfinished proofs.
 Single-query files retain their original names and formatting. -/
-def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[]) : MetaM String := do
+def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
+    (maxRecDepth : Nat := defaultMaxRecDepth) : MetaM String := do
   if goals.isEmpty then throwError "expected at least one translated query"
   let datatypeGroups ← Datatypes.groups (goals.map (·.value))
   let datatypeDeclarations ← Datatypes.render datatypeGroups printExpr
@@ -109,14 +113,16 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[]) :
   let usesFloor := goals.any fun goal => (goal.value.find? (·.isConstOf ``Int.floor)).isSome
   let imports := if usesFloor then "import Mathlib.Algebra.Order.Archimedean.Real.Basic"
     else if usesReal then "import Mathlib.Data.Real.Basic" else "import Init"
-  return imports ++ "\n\n-- Statements\n\n" ++ requests ++ datatypeDeclarations ++ helperDefinitions ++
+  return imports ++ s!"\n\nset_option maxRecDepth {maxRecDepth}\n\n-- Statements\n\n" ++
+    requests ++ datatypeDeclarations ++ helperDefinitions ++
     String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
     String.intercalate "\n" (entries.toList.map Prod.snd)
 
 /-- Render one file with statements first, followed by unfinished proofs. -/
 def render (value : Expr) (kind : GoalKind := .refutation)
-    (source : Option Source.Ref := none) (assertions : Array Source.Ref := #[]) : MetaM String :=
-  renderSession #[{ value, kind, source, assertions }]
+    (source : Option Source.Ref := none) (assertions : Array Source.Ref := #[])
+    (maxRecDepth : Nat := defaultMaxRecDepth) : MetaM String :=
+  renderSession #[{ value, kind, source, assertions }] (maxRecDepth := maxRecDepth)
 
 /-- Write Query.lean in a new directory. Existing destinations are refused. -/
 def writeFile (output : System.FilePath) (source : String) : IO Unit := do
