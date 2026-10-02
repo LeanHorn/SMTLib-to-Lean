@@ -8,5 +8,6 @@ for test_target in testSource testParser testReconstruction testHorn testTransla
   lake env ".lake/build/bin/$test_target"
 done
 lake env python3 tests/cli.py
+lake env python3 tests/anchor.py
 
 echo "All translator checks and demos passed; all generated test files were temporary."

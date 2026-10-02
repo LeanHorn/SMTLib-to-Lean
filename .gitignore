@@ -2,3 +2,4 @@
 .lake/
 /docs/
 __pycache__/
+/benchmarks/results/

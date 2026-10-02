@@ -7,7 +7,7 @@ tests/run.sh
 ```
 
 This builds the CLI and Lean tests, runs each Lean test executable, then runs
-`cli.py`. Python 3 is required. Generated files go into temporary directories.
+`cli.py` and `anchor.py`. Python 3 is required. Generated files go into temporary directories.
 
 ## What each layer checks
 
@@ -20,6 +20,7 @@ This builds the CLI and Lean tests, runs each Lean test executable, then runs
 | `lake exe testTranslation` | Handwritten expected propositions, operator semantics, capture avoidance, cache isolation, re-elaborated output, and exact axiom dependencies |
 | `lake exe testArrays` | Complete array propositions, shared models, nested/quantified array interpretations, constant-array laws, and standalone emission |
 | `lake env python3 tests/cli.py` | CLI results, standalone file compilation, golden outputs, completed proofs, diagnostics, and output protection; build `smt2lean` first |
+| `lake env python3 tests/anchor.py` | Benchmark selection, pinned hashes, subprocess failures/limits, independent Lean checks, warning/admission separation, reports, and output protection |
 
 The Lean runners stay in `backend/`; `Support.lean` shares reconstruction and
 emission checks, and arithmetic, bitvector, session, and parser-term cases live in

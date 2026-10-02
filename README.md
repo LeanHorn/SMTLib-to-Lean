@@ -100,3 +100,6 @@ Run the complete translator regression suite:
 ```sh
 tests/run.sh
 ```
+
+To measure translation and Lean checking on your own inputs, see the
+[benchmark runner](benchmarks/README.md).
