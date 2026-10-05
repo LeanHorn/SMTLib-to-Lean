@@ -20,6 +20,9 @@ SOLVER_OPTIONS = """(set-option :produce-models true)
 (set-option :produce-unsat-cores true)
 (set-option :print-success true)
 (set-option :random-seed 42)
+(set-option :smt.mbqi false)
+(set-option :auto-config false)
+(set-option :model true)
 """
 
 
@@ -81,5 +84,4 @@ def check_generated(lean, output, *, goal="Refutation", count=1):
     check_lean(lean, standalone)
     standalone.unlink()
     return source
-
 

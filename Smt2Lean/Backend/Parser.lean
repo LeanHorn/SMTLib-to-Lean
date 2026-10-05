@@ -1,6 +1,7 @@
 import Smt2Lean.Backend.Definitions
 import Smt2Lean.Backend.Session
 import Smt2Lean.Backend.Datatypes
+import Smt2Lean.Backend.MatchWildcards
 
 /-!
 Parse SMT-LIB commands without solving. Track native symbol scopes and active
@@ -26,46 +27,31 @@ private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
   unless response.isEmpty || response == "success" do
     throw (.error s!"{command.getCommandName}: {response}")
 
-/-- SMT-LIB 2.6 assumptions are user-defined Boolean constants or their negations. -/
+/-- Parse supported Boolean assumptions without asserting them in the native solver.
+They belong only to the current check's snapshot, as specified by SMT-LIB 2.7. -/
 private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
     (solver : cvc5.Solver) (symbols : cvc5.SymbolManager) (query : ParsedQuery)
     (allowQuantifiers : Bool) : cvc5.Env (Array cvc5.Term) := do
   let parts := command.tokens
   unless parts.size ≥ 5 && parts[2]? == some "(" &&
       parts[parts.size - 2]? == some ")" && parts.back? == some ")" do
-    throw (.unsupported "check-sat-assuming: expected a list of Boolean literals")
+    throw (.unsupported "check-sat-assuming: expected a list of Boolean terms")
   let parser ← cvc5.InputParser.new solver (some symbols)
+  parser.setStringInput (String.intercalate " " (parts.extract 3 (parts.size - 2)).toList)
   let mut terms := #[]
-  let mut i := 3
-  while i < parts.size - 2 do
-    let negative := parts[i]? == some "("
-    if negative then
-      unless parts[i + 1]? == some "not" && parts[i + 3]? == some ")" do
-        throw (.unsupported "check-sat-assuming: expected a symbol or (not symbol)")
-      i := i + 2
-    let spelling := parts[i]!
-    let symbol := if spelling.startsWith "|" then
-      ((spelling.drop 1).dropEnd 1).toString else spelling
-    let declared := (knownTerms query).any (fun declaration => declaration.term.getSymbol! == symbol) ||
-      query.commands.any (·.source.names.contains symbol)
-    unless declared do
-      throw (.unsupported s!"check-sat-assuming: expected a user-declared or defined Boolean constant: {spelling}")
-    parser.setStringInput spelling
+  while true do
     let term ← parser.nextTerm
+    if term.isNull then break
     unless (← ofExcept term.getSort).isBoolean do
-      throw (.unsupported s!"check-sat-assuming: expected a Boolean constant: {spelling}")
+      throw (.unsupported "check-sat-assuming: expected a Boolean term")
     let term ← withoutQuantifierHints tm term
     validateAssertion term (knownTerms query) allowQuantifiers query.valueSorts query.arrayConstructors
     let term ← expandDefinitions tm query.definitions term
     validateAssertion term query.declarations allowQuantifiers query.valueSorts query.arrayConstructors
-    let term ← if negative then tm.mkTerm .NOT #[term] else pure term
-    -- Negated nullary relations are Horn safety clauses. Validate the result as usual.
-    let term ← if query.logic == some "HORN" && negative then
+    -- Preserve the established Horn safety-clause representation for negated assumptions.
+    let term ← if query.logic == some "HORN" && (← ofExcept term.getKind) == .NOT then
       tm.mkTerm .IMPLIES #[term[0]!, ← tm.mkFalse] else pure term
     terms := terms.push term
-    i := i + if negative then 2 else 1
-  unless i == parts.size - 2 do
-    throw (.unsupported "check-sat-assuming: malformed literal list")
   return terms
 
 /-- Native global equations can move: find the added term by occurrence count. -/
@@ -93,6 +79,7 @@ private def parseScript
   let mut parser ← cvc5.InputParser.new solver (some symbols)
   let inputTokens := Source.tokenize input
   let initialArrays := ConstantArrays.initial inputTokens
+  let wildcardStem := MatchWildcards.nameStem inputTokens
   let mut session : Session := { arrays := initialArrays }
   let adaptArrays := inputTokens.any (fun token => token == "const" || token == "|const|")
   let mut allowQuantifiers := true
@@ -136,18 +123,19 @@ private def parseScript
           throw (.error s!"pop {count} exceeds active scope depth {session.depth}")
       if let some command := command? then
         let parts := command.tokens
-        if #["assert", "define-fun", "check-sat-assuming", "get-value"].contains (parts[1]?.getD "") then
+        if #["assert", "define-fun", "define-const", "check-sat-assuming", "get-value"].contains (parts[1]?.getD "") then
           validateBitvectorIndices parts
-        if parts[1]? == some "get-value" && parts.contains ":named" then
-          throw (.unsupported "observational requests cannot introduce named terms")
+        if #["get-value", "check-sat-assuming"].contains (parts[1]?.getD "") && parts.contains ":named" then
+          throw (.unsupported "observational requests and assumptions cannot introduce named terms")
       let mut arrayConstants := #[]
       let mut namedConstants := #[]
       let text ← match command? with
         | none => pure ""
         | some command => do
+          let command ← ofExcept (MatchWildcards.prepare command wildcardStem |>.mapError cvc5.Error.error)
           let kind := command.tokens[1]?.getD ""
           if adaptArrays && #["declare-sort", "declare-fun", "declare-const", "define-sort",
-              "define-fun", "declare-datatype", "declare-datatypes", "assert", "push", "check-sat", "check-sat-assuming", "get-value"].contains kind then
+              "define-fun", "define-const", "declare-datatype", "declare-datatypes", "assert", "push", "check-sat", "check-sat-assuming", "get-value"].contains kind then
             let (_, state) ← (ConstantArrays.initializeAliases tm solver symbols).run session.arrays
             session := { session with arrays := state }
           if adaptArrays then
@@ -332,11 +320,12 @@ private def parseScript
         unless assertions.size == session.nativeCount do
           throw (.error "native and translator assertion counts disagree")
         let assumptions ← if commandName == "check-sat-assuming" then
-          readAssumptions command tm solver symbols session.query allowQuantifiers else pure #[]
+          readAssumptions { command with text, tokens := Source.tokenize text }
+            tm solver symbols session.query allowQuantifiers else pure #[]
         let snapshot := { session.query with
           source := some command.source, checkCommand := commandName
           assumptionCount := assumptions.size
-          assertions := session.query.assertions ++ assumptions.map (fun term => { term, source := command.source }) }
+          assertions := session.query.assertions ++ assumptions.map (fun term => { term, source := command.source, arrayConstants }) }
         if singleQuery then session := { session with query := snapshot }
         checked := true
         resultAvailable := true

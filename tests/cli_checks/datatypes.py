@@ -143,6 +143,8 @@ example (choice : SMT.Datatypes.g0.T0_D → Int) (x : Int) :
   (forall ((x Int)) (= (get a x) x))
   (= (match (b 7) (((b x) x) ((b y) (+ y 1)) (rest 0))) 7)
   (= (match (b 7) ((whole whole) ((b x) a))) (b 7))
+  (forall ((d D)) (= (match d (((b _) 7) (_ 3)))
+                     (match d (((b ignored) 7) (rest 3)))))
   ((_ is b) (b 7)) (not (is-b a)))))
 (check-sat)
 """)
@@ -152,7 +154,7 @@ example (choice : SMT.Datatypes.g0.T0_D → Int) (x : Int) :
     checked.write_text(generated.replace("  sorry\n", """
   intro h
   apply h
-  exact ⟨fun _ => rfl, fun _ => rfl, rfl, rfl, True.intro, fun h => h⟩
+  exact ⟨fun _ => rfl, fun _ => rfl, rfl, rfl, fun _ => rfl, True.intro, fun h => h⟩
 """) + r'''
 example (d : SMT.Datatypes.g0.T0_D) :
     SMT.Testers.g0.T0_D.c1_b d ↔ ∃ x, d = SMT.Datatypes.g0.T0_D.c1_b x := by

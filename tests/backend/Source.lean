@@ -67,6 +67,8 @@ def main : IO Unit := do
     ("(assert (! (! true :named inner) :named outer :named |also|))", #["inner", "outer", "also"]),
     ("(assert |:named|)", #[]),
     ("(assert (! (forall ((x Int)) (! true :pattern () :no-pattern x :qid |:named fake|)) :named real))", #["real"]),
+    ("(assert (! (forall ((x Int)) (! true :weight 0 :qid |:weight|)) :named weighted))", #["weighted"]),
+    ("(check-sat-assuming ((forall ((x Int)) (! true :weight 5))))", #[]),
     ("(set-info :source \":named fake \"\" :unknown\")", #[])
   ] do
     let (commands, _) ← readAll input
@@ -75,4 +77,9 @@ def main : IO Unit := do
       | .error message => throw (IO.userError message)
     require (command.source.names == expected && command.text == input)
       "named annotations changed text or lost labels"
+  for value in #["true", "-1", "01", "1.0", "\"5\"", "|5|", "(5)", ""] do
+    let (commands, _) ← readAll s!"(assert (! true :weight {value}))"
+    match commands[0]!.withNames with
+    | .ok _ => throw (IO.userError s!"accepted malformed weight: {value}")
+    | .error message => require (message.contains "invalid value for :weight") message
   IO.println "Source reader passed: exact bytes, quoting, UTF-8, line endings, and malformed input"

@@ -253,13 +253,16 @@ def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do
   let text := command.toString
   let keys := #[":status", ":source", ":category", ":license", ":notes"]
   if keys.any (fun key => text.startsWith s!"(set-info {key} ") then return
-  if text == "(set-info :smt-lib-version 2.6)" then return
+  if #["(set-info :smt-lib-version 2.6)", "(set-info :smt-lib-version 2.7)"].contains text then return
   throw (.unsupported s!"unsupported metadata: {text}")
 
 /-- Validate solver controls without applying them. Native parsing alone does not check values. -/
 def validateSolverOption (command : cvc5.Command) : cvc5.Env Unit := do
   let text := command.toString
-  for key in #[":produce-models", ":produce-proofs", ":produce-unsat-cores", ":print-success"] do
+  -- The last three controls occur in the saved LiquidHaskell/Flux transcripts.
+  -- They select solver heuristics or output, not the meaning of assertions.
+  for key in #[":produce-models", ":produce-proofs", ":produce-unsat-cores", ":print-success",
+      ":smt.mbqi", ":auto-config", ":model"] do
     if text.startsWith s!"(set-option {key} " then
       unless text == s!"(set-option {key} true)" || text == s!"(set-option {key} false)" do
         throw (.error s!"invalid value for {key}: expected true or false")

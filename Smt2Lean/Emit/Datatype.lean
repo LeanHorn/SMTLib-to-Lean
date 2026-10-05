@@ -6,13 +6,15 @@ open Lean Meta
 
 def isGenerated (name : Name) : Bool := (`SMT.Datatypes).isPrefixOf name
 
-/-- A nullary constructor can hide all evidence of its external field carriers.
-Keep those arguments explicit so re-elaboration cannot lose their identities. -/
+/-- Preserve hidden carrier parameters and case-analysis result types.
+An eliminator inside an equality may have no expected type during re-elaboration. -/
 def showParameters (value : Expr) : CoreM Expr :=
   Core.transform value (post := fun expression => do
     if expression.isApp then
       let .const name _ := expression.getAppFn | return .done expression
       if isGenerated name then
+        if name.getString! == "casesOn" then
+          return .done expression.setAppPPExplicit
         if let .ctorInfo info ← getConstInfo name then
           if info.numParams > 0 then return .done expression.setAppPPExplicit
     return .done expression)

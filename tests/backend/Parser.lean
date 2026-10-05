@@ -128,7 +128,24 @@ private def checkSolverOptions : IO Unit := do
     let p := declaration.term
     require (query.assertionTerms[0]! == p && (← ofExcept query.assertionTerms[1]!.getKind) == .NOT &&
       query.assertionTerms[1]![0]! == p) "configuration changed the assertions"
-  for key in #[":produce-models", ":produce-proofs", ":produce-unsat-cores", ":print-success"] do
+  for version in #["2.6", "2.7"] do
+    checkAccepted "version metadata"
+      s!"(set-info :smt-lib-version {version})(set-logic ALL)(assert true)(check-sat)"
+      #[] 1 #["set-logic", "assert"] fun query =>
+        require (query.commands[0]!.text == s!"(set-info :smt-lib-version {version})")
+          "version metadata was not retained"
+  for key in #[":smt.mbqi", ":auto-config", ":model"] do
+    for value in #["true", "false"] do
+      let option := s!"(set-option {key} {value})"
+      checkAccepted "frontend option"
+        s!"{option}(set-logic ALL)(declare-const p Bool)(assert p)(check-sat)"
+        #["p"] 1 #["set-logic", "declare-fun", "assert"] fun query => do
+          let #[declaration] := query.declarations | throw (.error "expected one declaration")
+          require (query.commands[0]!.text == option &&
+            query.assertionTerms[0]! == declaration.term)
+            "inert option changed assertions or lost its source"
+  for key in #[":produce-models", ":produce-proofs", ":produce-unsat-cores", ":print-success",
+      ":smt.mbqi", ":auto-config", ":model"] do
     for value in #["1", "yes", "TRUE", "\"true\"", "|true|", "(true)", "falsehood"] do
       checkRejected s!"invalid-{key}"
         s!"(set-logic ALL)\n(set-option {key} {value})\n(check-sat)"
@@ -138,7 +155,8 @@ private def checkSolverOptions : IO Unit := do
       s!"(set-logic ALL)\n(set-option :random-seed {value})\n(check-sat)"
       2 "invalid value for :random-seed"
   for (key, value) in #[(":incremental", "true"), (":produce-assertions", "true"), (":produce-models-extra", "true"),
-      (":unknown", "false"), (":regular-output-channel", "\"ignored.log\"")] do
+      (":unknown", "false"), (":finite-model-find", "true"), (":strings-exp", "true"),
+      (":regular-output-channel", "\"ignored.log\"")] do
     checkRejected s!"unsupported-{key}"
       s!"(set-logic ALL)\n(set-option {key} {value})\n(check-sat)"
       2 "unsupported solver option"
@@ -147,7 +165,8 @@ private def checkSolverOptions : IO Unit := do
     ("(set-option :random-seed 1 2)", 1, "Expected a RPAREN_TOK"),
     ("(set-info :unknown true)\n(check-sat)", 1, "unsupported metadata"),
     ("(set-info :global-declarations true)\n(check-sat)", 1, "unsupported metadata"),
-    ("(set-info :smt-lib-version 2.7)\n(check-sat)", 1, "unsupported metadata"),
+    ("(set-info :smt-lib-version 2.8)\n(check-sat)", 1, "unsupported metadata"),
+    ("(set-info :smt-lib-version \"2.7\")\n(check-sat)", 1, "unsupported metadata"),
     ("(set-option :produce-models true)\n(set-logic ALL)", 3, "expected one check-sat"),
     ("(set-logic ALL)\n(check-sat)\n(set-option :print-success false)", 3, "after check-sat"),
     ("(set-logic ALL)\n(check-sat)\n(exit)\n(set-option :produce-models true)", 4, "after exit")
@@ -362,8 +381,6 @@ private def checkRejectedQueries : IO Unit := do
       2, "unsupported bound variable sort"),
     ("ite-unsupported-branch", "(set-logic ALL)\n(assert (forall ((p Bool)) (= (ite p 1 (^ 1 0)) 1)))\n(check-sat)",
       2, "POW"),
-    ("quantifier-weight", "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :weight 5)))\n(check-sat)",
-      3, "unsupported annotation: :weight"),
     ("out-of-scope", "(set-logic ALL)\n(assert (forall ((x Int)) (= x x)))\n(assert (= x 0))\n(check-sat)",
       3, "x"),
     ("let-sibling-int", "(set-logic QF_LIA)\n(assert (let ((x 1) (y x)) (= y 1)))\n(check-sat)",
@@ -404,8 +421,8 @@ private def checkRejectedQueries : IO Unit := do
       2, "type"),
     ("string-equality", "(set-logic ALL)\n(assert (= \"a\" \"b\"))\n(check-sat)",
       2, "unsupported value sort"),
-    ("assuming", "(set-logic QF_UF)\n(check-sat-assuming (true))",
-      2, "expected a user-declared"),
+    ("assuming", "(set-logic ALL)\n(check-sat-assuming (1))",
+      2, "Boolean"),
     ("missing-check", "(set-logic QF_UF)\n(assert true)",
       3, "expected one check-sat"),
     ("repeated-check", "(set-logic QF_UF)\n(check-sat)\n(check-sat)",
@@ -460,7 +477,7 @@ private def checkQuantifierHints : IO Unit := do
         "hint reached the validated query"
       pending := pending ++ term.getChildren
   for (body, reason) in #[
-    ("(! (P x) :weight true)", "unsupported annotation: :weight"),
+    ("(! (P x) :weight true)", "invalid value for :weight"),
     ("(! (P x) :unknown yes)", "unsupported annotation: :unknown"),
     ("(! (P x) :fun-def)", "unsupported annotation: :fun-def"),
     ("(! (P (^ x 2)) :pattern ((P x)))", "POW"),
@@ -472,6 +489,22 @@ private def checkQuantifierHints : IO Unit := do
     checkRejected s!"hint-{body}"
       s!"(set-logic ALL)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) {body}))\n(check-sat)"
       3 reason
+  for weight in #["0", "5", "1234567890123456789012345678901234567890"] do
+    checkAccepted "weighted quantifier"
+      s!"(set-logic ALL)(declare-fun P (Int) Bool)\
+        (assert (! (forall ((x Int)) (! (P x) :weight {weight} :qid |:weight|)) :named weighted))(check-sat)"
+      #["P"] 1 #["set-logic", "declare-fun", "assert"] fun query => do
+        let #[declaration] := query.declarations | throw (.error "expected one declaration")
+        let term := query.assertionTerms[0]!
+        require (term.getKind! == .FORALL && term.getNumChildren == 2 &&
+          term[1]![0]! == declaration.term && term[1]![1]! == term[0]![0]!)
+          "weight changed quantifier binders or body"
+        require (query.assertionSources[0]!.names == #["weighted"] &&
+          query.commands[2]!.text.contains s!":weight {weight}")
+          "weight lost its original source or assertion label"
+  checkRejected "weighted-unsupported-body"
+    "(set-logic ALL)(assert (forall ((x Int)) (! (= (^ x 2) 0) :weight 5)))(check-sat)"
+    2 "POW"
   for (input, ordinal, reason) in #[
     ("(set-logic QF_LIA)\n(assert (forall ((x Int)) (! (> x 0) :qid q)))\n(check-sat)",
       2, "quantifiers require"),
@@ -577,7 +610,12 @@ private def checkAssumptions : IO Unit := do
       #["set-logic", "declare-fun"] fun query => do
         require (query.checkCommand == "check-sat-assuming" &&
           query.assumptionCount == query.assertionTerms.size) "lost assumptions"
-  for literal in #["true", "false", "(not true)", "(and p p)", "(not (not p))", "x", "f", "missing"] do
+  for term in #["true", "false", "(not true)", "(and p p)", "(not (not p))", "(f p)"] do
+    checkAccepted "compound assumption"
+      s!"(set-logic ALL)(declare-const p Bool)(declare-fun f (Bool) Bool)(check-sat-assuming ({term}))"
+      #["p", "f"] 1 #["set-logic", "declare-fun", "declare-fun"] fun query =>
+        require (query.assumptionCount == 1) "compound assumption was lost"
+  for literal in #["x", "f", "missing"] do
     let input := "(set-logic ALL)(declare-const p Bool)(declare-const x Int)" ++
       "(declare-fun f (Bool) Bool)(check-sat-assuming (" ++ literal ++ "))"
     match ← (parseAndInspectSession input (fun _ => pure ())).run with

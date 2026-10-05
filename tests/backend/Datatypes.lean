@@ -83,6 +83,34 @@ def checkDatatypes (env : Environment) : IO Unit := do
     (assert (=> ((_ is a) (b 7)) false))
     (check-sat)" fun problem =>
       checkProblem problem q(∃ r : Int → Prop, r 7 ∧ (False → False))
+  runQuery env "match-wildcards-and-hygiene" "
+    (set-logic ALL)
+    (declare-datatype D ((empty) (pair (left Int) (right Int))))
+    (declare-const |_| Int)
+    (declare-const |smt2lean.match.0.0| Int)
+    (assert (= (match (pair 7 8) (((pair _ _) 1) ((pair x y) 2) (_ 3))) 1))
+    (assert (= (match empty (((pair _ _) 1) (_ |_|))) |_|))
+    (assert (= (match empty ((_ |smt2lean.match.0.0|))) |smt2lean.match.0.0|))
+    (assert (forall ((x Int)) (= (match (pair x 2)
+      (((pair x _) (match empty ((_ x)))) (_ 0))) x)))
+    (assert (= (match empty ((_ ((_ extract 3 0) #x17)))) #x7))
+    (check-sat)" fun query => do
+      unless query.commands.any (·.text.contains "(pair _ _)") &&
+          !query.commands.any (·.text.contains "smt2lean.match.1.") do
+        throwError "wildcard adaptation changed the retained source commands"
+      checkRefutation query q(∀ quoted collision : Int,
+        (1 : Int) = 1 ∧ quoted = quoted ∧ collision = collision ∧
+          (∀ x : Int, x = x) ∧ (BitVec.extractLsb' 0 4 (23 : BitVec 8)) = (7 : BitVec 4) → False)
+  for input in #[
+    "(assert (= (match empty ((_ _))) empty))",
+    "(assert (= (match empty ((|_| |_|))) empty))",
+    "(assert (= (match empty (((pair _ _) 0))) 0))",
+    "(assert (= (match empty (((pair (pair _ _) _) 0) (_ 1))) 0))"] do
+    let source := "(set-logic ALL)(declare-datatype D ((empty) (pair (left Int) (right Int))))" ++
+      input ++ "(check-sat)"
+    match ← (parseAndInspectQuery source (fun _ => pure ())).run with
+    | .ok _ => throw (IO.userError "accepted an invalid wildcard match")
+    | .error _ => pure ()
   for file in ["constructors", "chc", "selectors", "selectors-chc", "matches", "matches-chc"] do
     let input ← IO.FS.readFile s!"tests/translation/datatypes/{file}.smt2"
     if file == "chc" || file.endsWith "-chc" then

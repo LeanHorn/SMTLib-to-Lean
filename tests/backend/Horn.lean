@@ -2,6 +2,52 @@ import Smt2Lean.Chc
 
 open Smt2Lean.Backend Smt2Lean.Chc
 
+-- Logical identities used by clause normalization; checked by Lean's kernel.
+example (p q : Prop) : (¬p ∨ q) ↔ (p → q) := by
+  classical
+  constructor
+  · intro h hp
+    exact h.elim (fun hn => False.elim (hn hp)) id
+  · intro h
+    by_cases hp : p
+    · exact Or.inr (h hp)
+    · exact Or.inl hp
+
+example (p g : Prop) : (p → g) ↔ (p → ¬g → False) := by
+  classical
+  constructor
+  · exact fun h hp hn => hn (h hp)
+  · intro h hp
+    exact Classical.byContradiction (h hp)
+
+example (p g q : Prop) : (¬(p ∧ g) ∨ q) ↔ (p → g → q) := by
+  classical
+  constructor
+  · intro h hp hg
+    exact h.elim (fun hn => False.elim (hn ⟨hp, hg⟩)) id
+  · intro h
+    by_cases hpg : p ∧ g
+    · exact Or.inr (h hpg.1 hpg.2)
+    · exact Or.inl hpg
+
+example (p g q : Prop) : (¬p ∨ g ∨ q) ↔ (p → ¬g → q) := by
+  classical
+  constructor
+  · intro h hp hg
+    exact h.elim (fun hn => False.elim (hn hp))
+      (fun h => h.elim (fun hg' => False.elim (hg hg')) id)
+  · intro h
+    by_cases hp : p
+    · by_cases hg : g
+      · exact Or.inr (Or.inl hg)
+      · exact Or.inr (Or.inr (h hp hg))
+    · exact Or.inl hp
+
+example {α : Type} (p q : α → Prop) :
+    (∀ x, p x ∧ q x) ↔ ((∀ x, p x) ∧ (∀ x, q x)) :=
+  ⟨fun h => ⟨fun x => (h x).1, fun x => (h x).2⟩,
+   fun h x => ⟨h.1 x, h.2 x⟩⟩
+
 private def require (condition : Bool) (message : String) : IO Unit := do
   unless condition do throw (IO.userError message)
 
@@ -192,9 +238,7 @@ private def checkRejectedClauses : IO Unit := do
     ("quantified-premise", "(=> (forall ((x Int)) (P x)) false)", "leading forall"),
     ("quantified-head", "(=> done (forall ((x Int)) (P x)))", "leading forall"),
     ("quantified-argument", "(R 0 (exists ((p Bool)) p) 1)", "leading forall"),
-    ("disjunctive-head", "(forall ((x Int)) (=> (P x) (or (P x) done)))", "as CHC head"),
-    ("theory-head", "(forall ((x Int)) (=> (P x) (> x 0)))", "as CHC head"),
-    ("true-head", "(=> done true)", "as CHC head")
+    ("disjunctive-head", "(forall ((x Int)) (=> (P x) (or (P x) done)))", "as CHC head")
   ] do
     let input := "(set-logic HORN)\n(declare-fun P (Int) Bool)\n" ++
       "(declare-fun R (Int Bool Int) Bool)\n(declare-const done Bool)\n" ++
@@ -299,7 +343,12 @@ private def checkRejectedProblems : IO Unit := do
     ("hinted-existential", "(! (exists ((y Int)) (! (P y) :pattern ((P y)))) :qid bad)", "leading forall"),
     ("hinted-unsupported", "(! (P (^ x 2)) :pattern ((P x)))", "unsupported operator"),
     ("existential", "(exists ((y Int)) (P y))", "leading forall"),
-    ("disjunctive-head", "(=> (P x) (or (P x) done))", "as CHC head")
+    ("disjunctive-head", "(=> (P x) (or (P x) done))", "as CHC head"),
+    ("nested-disjunctive-head", "(or (not (P x)) (or done (P x)))", "as CHC head"),
+    ("negative-disjunctive-body", "(or (not (or (P x) done)) (P x))", "inside a theory guard"),
+    ("positive-conjunctive-head", "(or (not (P x)) (and done (P x)))", "inside a CHC head"),
+    ("split-invalid-branch", "(and (P x) (or done (P x)))", "as CHC head"),
+    ("split-existential-branch", "(and (P x) (exists ((y Int)) (P y)))", "leading forall")
   ] do
     let path := s!"tests/{name}.smt2"
     -- A later bad assertion must reject the entire problem before its callback.
@@ -314,6 +363,34 @@ private def checkRejectedProblems : IO Unit := do
       require (message.contains s!"{path}:7:1: query 1: command 7:" && message.contains "clause 3:" &&
         message.contains reason) s!"{name}: wrong diagnostic: {message}"
     require (!(← inspected.get)) s!"{name}: returned a partial problem"
+
+private def checkSurfaceForms : IO Unit := do
+  let path := "tests/translation/chc/surface-forms.smt2"
+  (parseAndInspectProblem (← IO.FS.readFile path) (name := path) fun problem => do
+    require (problem.clauses.map (·.assertionNumber) == #[1, 2, 3, 4, 4, 4, 5, 5, 6, 7, 8, 9, 10])
+      "split clauses lost their source assertion numbers"
+    require (problem.clauses.map (·.binders.size) == #[1, 1, 1, 0, 1, 1, 2, 2, 1, 0, 0, 1, 1])
+      "split clauses lost their binder scopes"
+    require (problem.clauses.map (headName ∘ (·.head)) ==
+      #["Q", "Q", "Q", "P", "Q", "false", "Q", "false", "false", "false", "false", "false", "false"])
+      "wrong normalized clause heads"
+    require (problem.clauses.map (·.premises.size) == #[2, 2, 2, 0, 1, 2, 1, 2, 2, 2, 1, 2, 1])
+      "wrong normalized premise counts"
+    for group in #[#[3, 4, 5], #[6, 7]] do
+      let sources ← group.mapM fun i => do
+        let some clause := problem.clauses[i]? | throw (.error "missing split clause")
+        return clause.source.map (·.context true)
+      require (sources.all (· == sources[0]!)) "split clauses changed source locations"
+    let some shadowed := problem.clauses[6]? | throw (.error "missing shadowed clause")
+    let #[outer, inner] := shadowed.binders | throw (.error "missing shadowed binders")
+    let #[.relation premise] := shadowed.premises | throw (.error "expected P outer")
+    let .relation head := shadowed.head | throw (.error "expected Q inner")
+    require (outer.term != inner.term && premise.arguments == #[outer.term] && head.arguments == #[inner.term])
+      "normalization captured a shadowed variable"
+    let some trueHead := problem.clauses[9]? | throw (.error "missing true-headed clause")
+    require (trueHead.premises.map premiseText == #["relation done #[]", "guard (not true)"])
+      "a true head must remain a tautological constraint"
+  ).runIO
 
 private def checkLocalCorpus : IO Unit := do
   let mut total := 0
@@ -338,6 +415,7 @@ def main : IO Unit := do
   checkRejectedClauses
   checkNativeIdentity
   checkProblems
+  checkSurfaceForms
   checkLocalCorpus
   checkRejectedProblems
   IO.println "Horn validation passed: lh_sum_rec (3 clauses) and combined fixture (16 clauses)"

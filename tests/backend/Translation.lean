@@ -284,6 +284,22 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
   IO.println "CHC reconstruction passed: 19 clauses match handwritten Lean propositions"
 
 private def checkHornProblems (env : Environment) : IO Unit := do
+  let surface := "tests/translation/chc/surface-forms.smt2"
+  runProblem env surface (← IO.FS.readFile surface) fun problem =>
+    checkProblem problem q(∃ (p q : Int → Prop) (done : Prop),
+      (∀ x : Int, p x → x > 0 → q x) ∧
+      (∀ x : Int, p x → ¬(x < 0) → q x) ∧
+      (∀ x : Int, p x → x > 0 → q x) ∧
+      p 0 ∧
+      (∀ x : Int, p x → q x) ∧
+      (∀ x : Int, q x → ¬(x ≥ 0) → False) ∧
+      (∀ outer inner : Int, p outer → q inner) ∧
+      (∀ outer inner : Int, q inner → ¬(outer = inner) → False) ∧
+      (∀ x : Int, ¬(x < 0) → ¬(x ≥ 0) → False) ∧
+      (done → ¬True → False) ∧
+      (done → False) ∧
+      (∀ x : Int, p x → q x → False) ∧
+      (∀ x : Int, ¬(x = x) → False))
   let path := "tests/chc/lh_sum_rec.smt2"
   let input ← IO.FS.readFile path
   let expected := q(∃ k : Int → Prop,
@@ -392,30 +408,7 @@ private def checkUninterpretedSorts (env : Environment) : IO Unit := do
     fun problem => checkProblem problem q(∃ A : Type, Nonempty A ∧ (∀ _x : A, False))
   IO.println "Uninterpreted sorts passed: arbitrary nonempty carriers, SMT/CHC closure, aliases, and mixed functions"
 
-def main : IO Unit := do
-  initSearchPath (← findSysroot)
-  unsafe enableInitializersExecution
-  let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
-  checkSharing env
-  checkDatatypes env
-  checkSessions env
-  checkUninterpretedSorts env
-  checkAxiomRejection
-  checkOperatorSemantics env
-  checkDivision env
-  checkReals env
-  checkConversions env
-  checkBitvectors env
-  checkBitvectorWidths env
-  checkBitvectorShifts env
-  checkBitvectorDivision env
-  checkBitvectorConversions env
-  checkLetBindings env
-  checkDefinitions env
-  checkNamedAssertions env
-  checkQuantifierHints env
-  checkHornReconstruction env
-  checkHornProblems env
+private def checkCore (env : Environment) : IO Unit := do
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
   runQuery env "connectives" input fun query => do
     checkConnectives query
@@ -530,3 +523,46 @@ def main : IO Unit := do
     runQuery env s!"quantified ({status})" (metadata ++ quantified) fun query =>
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
   IO.println "Translation passed: 33 refutations and emitted definitions; types and axiom dependencies checked"
+
+/-- Bound the lifetime of imported/elaborated environments across the full suite. -/
+def main (args : List String) : IO Unit := do
+  let groups : Array (String × (Environment → IO Unit)) := #[
+    ("scopes", fun env => do
+      checkSharing env
+      checkDatatypes env
+      checkSessions env
+      checkUninterpretedSorts env),
+    ("arithmetic", fun env => do
+      checkAxiomRejection
+      checkOperatorSemantics env
+      checkDivision env
+      checkReals env
+      checkConversions env),
+    ("bitvectors", fun env => do
+      checkBitvectors env
+      checkBitvectorWidths env
+      checkBitvectorShifts env
+      checkBitvectorDivision env
+      checkBitvectorConversions env),
+    ("bindings", fun env => do
+      checkLetBindings env
+      checkDefinitions env
+      checkNamedAssertions env
+      checkQuantifierHints env),
+    ("horn", fun env => do
+      checkHornReconstruction env
+      checkHornProblems env),
+    ("core", checkCore)]
+  if args.isEmpty then
+    for (name, _) in groups do
+      let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args := #[name] }
+      let code ← child.wait
+      unless code == 0 do throw (IO.userError s!"translation group '{name}' failed ({code})")
+  else
+    let [name] := args | throw (IO.userError "expected one translation group name")
+    let some (_, run) := groups.find? (·.1 == name)
+      | throw (IO.userError s!"unknown translation group: {name}")
+    initSearchPath (← findSysroot)
+    unsafe enableInitializersExecution
+    let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
+    run env

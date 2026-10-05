@@ -217,7 +217,7 @@ private partial def lower (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
 def prepare (command : Source.Command) (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
     (query : ParsedQuery) : StateT State cvc5.Env (String × Requirements × Bindings) := do
   let tokens := command.tokens
-  unless #["assert", "define-fun", "get-value"].contains (tokens[1]?.getD "") do
+  unless #["assert", "define-fun", "define-const", "check-sat-assuming", "get-value"].contains (tokens[1]?.getD "") do
     return (command.text, #[], #[])
   let (expression, stop) ← match readExpr tokens 0 with
     | .ok result => pure result

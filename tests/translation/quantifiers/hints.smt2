@@ -4,7 +4,7 @@
 (declare-fun P (Int) Bool)
 (declare-fun R (Int Bool) Bool)
 (define-fun lifted ((n Int)) Bool
-  (forall ((b Bool)) (! (R n b) :pattern ((R n b)) :qid helper)))
+  (forall ((b Bool)) (! (R n b) :pattern ((R n b)) :qid helper :weight 5)))
 
 ; Multiple triggers and an excluded trigger. Unsupported exponentiation occurs only in a discarded hint.
 (assert (forall ((x Int))
@@ -31,6 +31,6 @@
 (assert (forall ((n Int)) (forall ((b Bool)) (R n b))))
 
 ; Empty patterns and a named, reusable quantified assertion.
-(assert (! (forall ((x Int)) (! (P x) :pattern () :qid empty)) :named allP))
+(assert (! (forall ((x Int)) (! (P x) :pattern () :qid empty :weight 0)) :named allP))
 (assert allP)
 (check-sat)

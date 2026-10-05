@@ -52,7 +52,7 @@ def main():
         assert "maximum recursion depth" in limited.stderr, limited
         assert not output.exists()
 
-        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7), ("sorts", "Refutation", 8)]:
+        for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7), ("sorts", "Refutation", 8), ("compatibility", "Refutation", 7)]:
             output = tmp / f"session-{fixture}"
             run(SESSIONS / f"{fixture}.smt2", "--out", output)
             generated = check_generated(lean, output, goal=goal, count=count)
@@ -214,6 +214,31 @@ def main():
         assert generated.count("(clause ") == 3
         assert all(f'(:named "{name}")' in generated for name in ["entry clause", "step", "safety"])
 
+        output = tmp / "surface-forms-chc"
+        run(CHC / "surface-forms.smt2", "--out", output)
+        surface = check_generated(lean, output, goal="Problem")
+        # Source comments identify the ten original assertions; these yield 13 clauses.
+        assert surface.count("(clause ") == 10
+        # This combined fixture is inconsistent: P 0, P -> Q, and P -> Q -> False.
+        query = output / "Query.lean"
+        query.write_text(surface.split("-- Proofs\n", 1)[0] +
+                         "theorem checked : ¬Problem := by\n"
+                         "  intro h\n"
+                         "  rcases h with ⟨p, q, done, _, _, _, hp, hpq, _, _, _, _, _, _, hbad, _⟩\n"
+                         "  exact hbad 0 hp (hpq 0 hp)\n")
+        check_lean(lean, query, complete=True)
+
+        source, output = tmp / "surface-model.smt2", tmp / "surface-model"
+        source.write_text("(set-logic HORN)(declare-fun P (Int) Bool)(assert (P 0))"
+                          "(assert (forall ((x Int)) (or (not (P x)) (= x 0))))(check-sat)")
+        run(source, "--out", output)
+        surface = check_generated(lean, output, goal="Problem")
+        query = output / "Query.lean"
+        query.write_text(surface.split("-- Proofs\n", 1)[0] +
+                         "theorem checked : Problem :=\n"
+                         "  ⟨fun x => x = 0, rfl, fun _ hx notZero => notZero hx⟩\n")
+        check_lean(lean, query, complete=True)
+
         source, output = tmp / "hinted-chc.smt2", tmp / "hinted-chc"
         text = (CHC / "definitions.smt2").read_text()
         text = text.replace("(=> |entry clause| (rule x b))",
@@ -336,8 +361,8 @@ def main():
 
         check_resets(lean, tmp)
 
-        for logic, literal in [("ALL", "true"), ("ALL", "(and p p)"), ("ALL", "missing"),
-                               ("HORN", "true")]:
+        for logic, literal in [("ALL", "1"), ("ALL", "(and p 1)"), ("ALL", "missing"),
+                               ("HORN", "(or p (not (not p)))")]:
             source, output = tmp / "bad-assumption.smt2", tmp / "bad-assumption"
             source.write_text(f"(set-logic {logic})(declare-const p Bool)(check-sat)(check-sat-assuming ({literal}))")
             run(source, "--out", output, code=1)
@@ -365,7 +390,7 @@ def main():
             "(set-logic QF_UF)\n(assert (let ((p true) (q p)) q))\n(check-sat)",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((half (^ x 2))) (let ((copy half)) (= copy 0))))\n(check-sat)",
             "(set-logic QF_LIA)\n(declare-const x Int)\n(assert (let ((next (+ x 1))) (= (^ next 2) 0)))\n(check-sat)",
-            "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :weight 5)))\n(check-sat)",
+            "(set-logic UFLIA)\n(declare-fun P (Int) Bool)\n(assert (forall ((x Int)) (! (P x) :weight -1)))\n(check-sat)",
         ]
         for index, text in enumerate(invalid):
             source, output = tmp / f"invalid-{index}.smt2", tmp / f"invalid-{index}"

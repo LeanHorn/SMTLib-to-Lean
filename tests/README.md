@@ -43,6 +43,21 @@ check that repeated store chains stay compact and complete two proofs without ad
 The recursion override applies inside reconstruction, printing and the translator's
 kernel check as well as in generated files; a limit of 1 must fail before output.
 
+`testTranslation` runs each feature group in a fresh process to bound retained
+elaboration state. Run one group with `lake exe testTranslation horn` (also
+`scopes`, `arithmetic`, `bitvectors`, `bindings`, or `core`); omitting the group
+runs them all.
+
+The combined `translation/chc/surface-forms.smt2` fixture covers disjunctive Horn
+clauses, assertion conjunctions, theory heads and preserved binder scopes. Tests
+compare its 13 clauses with handwritten Lean propositions and complete proofs
+of an inconsistent problem and a separate satisfying model.
+`translation/sessions/compatibility.smt2` covers `define-const`, match-pattern `_`
+wildcards and compound temporary assumptions across seven checks. Existing
+quantifier fixtures also exercise validated `:weight` annotations. Solver controls
+`:smt.mbqi`, `:auto-config`, and `:model` are accepted as Boolean configuration,
+without executing a solver.
+
 Statement checks reject admissions and query-specific axioms, including transitive
 dependencies. Classical conditionals may use `propext`, `Classical.choice`, and
 `Quot.sound`. Proof templates use `sorry`; the four completed README proofs must
@@ -119,6 +134,10 @@ The input follows [SMT-LIB 2.6, section 4.2.5](https://smt-lib.org/papers/smt-li
 assumptions are user-declared/defined Boolean constants or their negations.
 They apply to one check only. Neither check command invokes the solver.
 HORN negated literals become safety clauses and still undergo Horn validation.
+`compatibility.smt2` additionally exercises SMT-LIB 2.7's arbitrary Boolean
+assumptions. They may use the supported operators, definitions and binders;
+`:named` inside an assumption is rejected so temporary assumptions cannot add
+persistent aliases. Unsupported theories and non-Horn relation uses still fail.
 
 ## Reset and observation commands
 

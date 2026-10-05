@@ -111,7 +111,7 @@ def Command.scopeChange (command : Command) : Except String (Option (String × N
 /-- Reject unaudited attributes and recover labels before cvc5 erases or merges them. -/
 def Command.withNames (command : Command) : Except String Command := do
   let parts := command.tokens
-  unless #["assert", "define-fun", "define-const"].contains (parts[1]?.getD "") do
+  unless #["assert", "define-fun", "define-const", "check-sat-assuming"].contains (parts[1]?.getD "") do
     return command
   let mut names := #[]
   for i in [:parts.size] do
@@ -122,6 +122,11 @@ def Command.withNames (command : Command) : Except String Command := do
       -- Native parsing checks symbol syntax, freshness, and whether the body is closed.
       names := names.push (if symbol.startsWith "|" then
         ((symbol.drop 1).dropEnd 1).toString else symbol)
+    else if part == ":weight" then
+      let value := parts[i + 1]?.getD ""
+      unless !value.isEmpty && value.toList.all Char.isDigit &&
+          (value == "0" || !value.startsWith "0") do
+        throw "invalid value for :weight: expected an SMT-LIB numeral"
     else if part.startsWith ":" && !#[":pattern", ":no-pattern", ":qid"].contains part then
       throw s!"unsupported annotation: {part}"
   return { command with source := { command.source with names } }

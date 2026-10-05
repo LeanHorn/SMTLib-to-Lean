@@ -125,9 +125,9 @@ private def checkNoQuantifiers (root : cvc5.Term) : cvc5.Env Unit := do
     pending := pending ++ term.getChildren
 
 /--
-Extract leading binders, implication premises, and a relation/false head.
+Extract one clause, accepting implication or disjunction syntax.
+Negative disjuncts become premises; theory heads become negated guards leading to false.
 Input must already be parsed and scope-checked. Keep native terms in the callback.
-Conjunctions in premises stay intact here; `validateQuery` flattens and classifies them.
 -/
 def extractClause (relations : Array Relation) (assertionNumber : Nat)
     (assertion : cvc5.Term) (source : Option Source.Ref := none)
@@ -144,16 +144,48 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
     let children := body.getChildren
     premises := premises ++ children.pop
     body := children.back!
-  let falseHead ← if (← ofExcept body.getKind) == .CONST_BOOLEAN then
-    Bool.not <$> ofExcept body.getBooleanValue
-  else pure false
-  let head ← if falseHead then
-    pure ClauseHead.falsity
-  else do
-    let some atom ← relationAtom? relations body constructors
-      | throw (.unsupported s!"expected a relation or false as CHC head, got {body}")
-    pure (ClauseHead.relation atom)
+  let mut pending := [body]
+  let mut positiveHead : Option RelationAtom := none
+  while !pending.isEmpty do
+    let term := pending.head!
+    pending := pending.tail!
+    let kind ← ofExcept term.getKind
+    if kind == .OR then
+      pending := term.getChildren.toList ++ pending
+    else if kind == .NOT then
+      premises := premises.push term[0]!
+    else if kind == .CONST_BOOLEAN then
+      if ← ofExcept term.getBooleanValue then
+        premises := premises.push (← term.notTerm)
+    else if let some atom ← relationAtom? relations term constructors then
+      if positiveHead.isSome then
+        throw (.unsupported "multiple positive relations as CHC head")
+      positiveHead := some atom
+    else
+      checkRelationFree #[term] "a CHC head" constructors
+      premises := premises.push (← term.notTerm)
+  let head := positiveHead.map ClauseHead.relation |>.getD .falsity
   return { assertionNumber, source, binders, premises, head }
+
+/-- Split assertion conjunctions without distributing disjunctions or changing binder identity. -/
+def extractClauses (relations : Array Relation) (assertionNumber : Nat)
+    (assertion : cvc5.Term) (source : Option Source.Ref := none)
+    (constructors : Array ArrayConstructor := #[]) : cvc5.Env (Array Clause) := do
+  let mut pending : List (Array Binder × cvc5.Term) := [(#[], assertion)]
+  let mut clauses := #[]
+  while !pending.isEmpty do
+    let (binders, term) := pending.head!
+    pending := pending.tail!
+    match ← ofExcept term.getKind with
+    | .FORALL =>
+      let variables ← term[0]!.getChildren.mapM fun binder => do
+        return { term := binder, sort := ← ofExcept binder.getSort : Binder }
+      pending := (binders ++ variables, term[1]!) :: pending
+    | .AND => pending := term.getChildren.toList.map (binders, ·) ++ pending
+    | _ =>
+      let clause ← extractClause relations assertionNumber term source constructors
+      clauses := clauses.push { clause with binders := binders ++ clause.binders }
+  return clauses
 
 /-- Flatten only premise conjunctions, keeping source order and other formulas intact. -/
 private def validatePremises (relations : Array Relation) (terms : Array cvc5.Term)
@@ -175,19 +207,21 @@ private def validatePremises (relations : Array Relation) (terms : Array cvc5.Te
 /-- Validate every clause of an already parsed/scope-checked query before returning a problem. -/
 def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Problem := do
   let relations ← collectRelations query.declarations query.number query.valueSorts
-  let clauses : Array (Clause Premise) ← query.assertions.mapIdxM fun i assertion => do
+  let mut clauses : Array (Clause Premise) := #[]
+  for h : i in [:query.assertions.size] do
+    let assertion := query.assertions[i]
     let source := some assertion.source
     let context := source.map (·.context true query.number) |>.getD s!"{name}: query {query.number}"
     try
-      let clause ← extractClause relations (i + 1) assertion.term source query.arrayConstructors
-      let premises ← validatePremises relations clause.premises query.arrayConstructors
-      return {
-        assertionNumber := clause.assertionNumber
-        source
-        binders := clause.binders
-        premises
-        head := clause.head
-      }
+      for clause in ← extractClauses relations (i + 1) assertion.term source query.arrayConstructors do
+        let premises ← validatePremises relations clause.premises query.arrayConstructors
+        clauses := clauses.push {
+          assertionNumber := clause.assertionNumber
+          source
+          binders := clause.binders
+          premises
+          head := clause.head
+        }
     catch error => throw (errorWithContext s!"{context}: clause {i + 1}" error)
   return {
     number := query.number, source := query.source, sorts := query.sorts, datatypes := query.datatypes
