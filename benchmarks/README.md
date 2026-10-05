@@ -71,6 +71,70 @@ success or imply that an emitted theorem can be proved.
 This is a runner/translation pilot, not a competition-wide coverage estimate.
 The input manifests are tracked; raw corpora and run outputs stay local.
 
+## TriCera compatibility checkpoint
+
+`tricera-20.csv` adds twenty unchanged inputs from the locally available
+[`tricera-adt-arr/adt-arr` family](https://github.com/chc-comp/tricera-adt-arr/tree/0214c9fb4845013dc9ec5d1f8c4376efc6c6e365/adt-arr),
+pinned to revision `0214c9fb4845013dc9ec5d1f8c4376efc6c6e365`. This is an extra-family
+selection, not a verified CHC-COMP task selection. The CSV records each input's
+hash, property, original/preprocessed variant, size, assertion count and selection
+reason. The original corpus files remain unchanged.
+
+There are four files for each property: `unreach-call`, `valid-free`, `valid-deref`,
+`valid-memtrack`, and `valid-memcleanup`. For each property, select the nearest
+remaining file to 8, 24, 64 and 160 KiB, breaking ties by filename. The first two
+slots use originals; the last two use `-pp` variants, except `valid-memcleanup`,
+which has no preprocessed variants. Require at least one assertion, limit each
+file to 256 KiB, and exclude duplicate content. The previously discussed
+`sll-queue-2.i-valid-memcleanup.smt2` is fixed in its 24-KiB slot; it also satisfies
+that slot's nearest-size rule.
+
+The frozen selection has 12 originals and 8 preprocessed inputs, 920,877 bytes,
+and 1,779 assertions. Six inputs declare datatype constructors named `true` and
+`false`; all twenty use datatypes and arrays. The five empty check-only files in
+the source directory are excluded. These hashes are disjoint from `pilot-10.csv`.
+Selection was frozen before translation; failing files stay in the selection.
+
+Run these twenty together with the existing ten controls, using identical limits
+before and after the frontend binding fix:
+
+```sh
+lake env python3 benchmarks/run.py \
+  --list benchmarks/pilot-10.csv --list benchmarks/tricera-20.csv \
+  --root ../SMTLib-benchmarks/corpora \
+  --out benchmarks/results/tricera-30-before-f05 \
+  --translation-timeout 30 --lean-timeout 60 --max-rec-depth 4096
+```
+
+After rebuilding the changed translator, repeat with a new output directory,
+`benchmarks/results/tricera-30-after-f05-final`. Compare statuses, source hashes and
+diagnostics for all thirty inputs. This checkpoint measures compatibility of
+these selected inputs; it does not estimate coverage of all 635 TriCera files.
+
+The baseline at revision `ba68bdf` passed **24/30** inputs: all ten controls and
+14/20 TriCera cases. The remaining six stopped at the declaration of datatype
+constructor `true`, with cvc5 reporting `Cannot bind true to symbol of type Bool`.
+All six failures remain in the manifest. The local baseline report preserves
+their diagnostics and the exact translator/runner hashes.
+
+The final F05 run passed **30/30**: all ten controls and all twenty TriCera
+cases. All 24 previous successes remained successful; all six constructor-binding
+failures now translate and pass both Lean checks under the original limits.
+
+The local `tricera-30-after-f05-final/comparison.md`, `.csv`, and `.json` record every
+transition and verify matching input hashes, runner, Lean/dependency snapshots
+and limits. The artifact also saves the changed production modules and both manifests
+under `validation/source/`, since `working-tree.patch` omits untracked files.
+Summed per-case measurements were 126.55 seconds before and 137.07 seconds in
+the final run. These are descriptive records, not a performance comparison.
+Proof templates remain unproved.
+
+The intermediate `tricera-30-after-f05/` run is preserved unchanged: 29/30 passed,
+with `sll_to_dll_rev-1.i-valid-memcleanup.smt2` reaching the translation timeout.
+That input passes in the final run under the same limit. This does not establish
+the cause of the earlier timeout; the intermediate run also has a large
+unexplained gap in its calendar timestamps.
+
 ## Fifty-input expansion
 
 ```sh

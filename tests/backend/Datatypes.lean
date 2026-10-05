@@ -5,6 +5,49 @@ namespace Smt2Lean.Tests
 open Lean Meta Qq Backend Translate
 
 def checkDatatypes (env : Environment) : IO Unit := do
+  let collisions := "
+    (set-logic ALL)
+    (declare-datatype Flag ((true) (false)))
+    (define-sort F () Flag)(define-sort B () Bool)
+    (assert (= (as true B) true))
+    (assert (= (as false Bool) false))
+    (assert ((_ is true) (as true F)))
+    (assert (not ((_ is false) (as true Flag))))
+    (assert (= (match (as false F) ((true 0) (false 1))) 1))
+    (assert (= (match (as true Flag) ((|true| 7) (|false| 8))) 7))
+    (check-sat)"
+  runQuery env "datatype-builtin-collisions" collisions fun query => do
+    unless query.datatypes.size == 1 &&
+        query.datatypes[0]!.types[0]!.name == "Flag" &&
+        query.datatypes[0]!.types[0]!.constructors.map (·.name) == #["true", "false"] &&
+        query.commands[1]!.text == "(declare-datatype Flag ((true) (false)))" &&
+        query.commands.all (fun command => !command.text.contains "smt2lean.collision.") do
+      throwError "collision adaptation lost datatype names or changed original commands"
+    checkRefutation query q(True = True ∧ False = False ∧ True ∧ ¬False ∧
+      (1 : Int) = 1 ∧ (7 : Int) = 7 → False)
+  runQuery env "selectors-shadow-legacy-testers" "
+    (set-logic ALL)(declare-datatype D ((true (is-true Int) (is-false Bool)) (false)))
+    (assert (= (is-true ((as true D) 7 false)) 7))
+    (assert (not (is-false ((as true D) 7 false))))(check-sat)" fun query => do
+      let value ← defineRefutation query
+      let d : Q(Type) ← pure (mkConst `SMT.Datatypes.g0.T0_D)
+      checkEqual value q(∀ (_ : $d → Int) (_ : $d → Prop), (7 : Int) = 7 ∧ ¬False → False)
+      checkEmission value
+  for (body, reason) in #[
+    ("(assert (forall ((true Int) (|true| Int)) (= true true)))", "duplicate bound variable"),
+    ("(declare-datatype D ((true) (false)))(assert (is-true (as true D)))", ""),
+    ("(declare-datatype D ((true (is-true Int)) (false)))\
+      (assert (is-true ((as true D) 7)))", ""),
+    ("(declare-datatype D ((true) (false)))(declare-const d D)(assert (= d true))", ""),
+    ("(declare-datatype A ((true)))(declare-datatype B ((true)))\
+      (assert ((_ is true) (as true A)))", "ambiguous")
+  ] do
+    match ← (parseAndInspectQuery ("(set-logic ALL)" ++ body ++ "(check-sat)")
+        (fun _ => pure ())).run with
+    | .ok _ => throw (IO.userError "accepted an invalid or ambiguous collision query")
+    | .error error =>
+      unless (toString error).contains reason do
+        throw (IO.userError s!"wrong collision diagnostic: {error}")
   runQuery env "datatype-constructor-order" "
     (set-logic ALL)
     (declare-datatype Pair ((pair (left Int) (right Int))))

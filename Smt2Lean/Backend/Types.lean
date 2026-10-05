@@ -6,6 +6,8 @@ namespace Smt2Lean.Backend
 /-- A checked definition, with earlier definitions already expanded in its body. -/
 structure ParsedDefinition where
   symbol : cvc5.Term
+  /-- Original source name, even when the native parser needs a private spelling. -/
+  name : String := symbol.toString
   parameters : Array cvc5.Term
   body : cvc5.Term
   source : Source.Ref
@@ -41,6 +43,8 @@ structure DatatypeField where
 
 structure DatatypeConstructor where
   name : String
+  /-- Native spelling; distinct from `name` only for a renamed source binding. -/
+  parserName : String := name
   term : cvc5.Term
   tester : cvc5.Term
   fields : Array DatatypeField

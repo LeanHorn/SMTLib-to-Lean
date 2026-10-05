@@ -2,6 +2,7 @@ import Smt2Lean.Backend.Definitions
 import Smt2Lean.Backend.Session
 import Smt2Lean.Backend.Datatypes
 import Smt2Lean.Backend.MatchWildcards
+import Smt2Lean.Backend.Collisions
 
 /-!
 Parse SMT-LIB commands without solving. Track native symbol scopes and active
@@ -80,6 +81,7 @@ private def parseScript
   let inputTokens := Source.tokenize input
   let initialArrays := ConstantArrays.initial inputTokens
   let wildcardStem := MatchWildcards.nameStem inputTokens
+  let collisionStem := Collisions.nameStem inputTokens
   let mut session : Session := { arrays := initialArrays }
   let adaptArrays := inputTokens.any (fun token => token == "const" || token == "|const|")
   let mut allowQuantifiers := true
@@ -129,10 +131,13 @@ private def parseScript
           throw (.unsupported "observational requests and assumptions cannot introduce named terms")
       let mut arrayConstants := #[]
       let mut namedConstants := #[]
+      let mut renamedBindings := #[]
       let text ← match command? with
         | none => pure ""
         | some command => do
           let command ← ofExcept (MatchWildcards.prepare command wildcardStem |>.mapError cvc5.Error.error)
+          let (command, aliases) ← Collisions.prepare command session.query solver symbols collisionStem
+          renamedBindings := aliases
           let kind := command.tokens[1]?.getD ""
           if adaptArrays && #["declare-sort", "declare-fun", "declare-const", "define-sort",
               "define-fun", "define-const", "declare-datatype", "declare-datatypes", "assert", "push", "check-sat", "check-sat-assuming", "get-value"].contains kind then
@@ -209,6 +214,7 @@ private def parseScript
         invokeCommand cmd solver symbols
         let fresh ← datatypeSorts cmd solver symbols
         let group ← readDatatypes fresh session.query command.source
+        let group := Collisions.restoreDatatypes renamedBindings group
         if adaptArrays then
           for datatype in group.types do
             let (_, state) ← (ConstantArrays.rememberSort solver symbols datatype.sort
@@ -226,7 +232,7 @@ private def parseScript
         let sort ← ofExcept term.getSort
         unless isValueSort sort session.query.valueSorts || (← isSupportedFunction sort session.query.valueSorts) do
           throw (.unsupported s!"unsupported declaration sort: {sort}; expected a supported value sort or first-order function")
-        let symbol ← ofExcept term.getSymbol
+        let symbol := Collisions.originalName renamedBindings (← ofExcept term.getSymbol)
         if session.query.declarations.any (·.name == symbol) then
           throw (.unsupported s!"duplicate declaration: {symbol}")
         session := session.mapQuery fun query => { query with
@@ -240,7 +246,9 @@ private def parseScript
         unless assertions.size == session.nativeCount + 1 do
           throw (.error "expected one native defining equation")
         let definition ← readDefinition (← addedAssertion before assertions) command.source session.query tm allowQuantifiers
-        let definition := { definition with arrayConstants }
+        let definition := { definition with
+          arrayConstants := arrayConstants
+          name := Collisions.originalName renamedBindings definition.name }
         session := { session with nativeCount := assertions.size }
         session := session.mapQuery fun query => { query with
           definitions := query.definitions.push definition

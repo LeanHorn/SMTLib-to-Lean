@@ -13,6 +13,74 @@ local notation "smtMod" => (fun (zero : Int → Int) (x y : Int) => ite (y = 0) 
 local notation "exclusive" => (fun p q : Prop => (p ∧ ¬q) ∨ (¬p ∧ q))
 
 def checkSessions (env : Environment) : IO Unit := do
+  runQuery env "colliding-function-bindings" "
+    (set-logic ALL)
+    (declare-fun set.card (Int) Int)
+    (declare-const x Int)(declare-const |smt2lean.collision.0.0| Int)
+    (define-fun bump ((|set.card| Int)) Int (+ set.card 1))
+    (assert (= (set.card x) (- 1)))
+    (assert (= (|set.card| x) (set.card x)))
+    (assert (forall ((set.card Int)) (= (bump set.card) (+ set.card 1))))
+    (assert (let ((set.card 7) (y (set.card x))) (and (= set.card 7) (= y (- 1)))))
+    (assert (forall ((true Int)) (= true true)))
+    (assert (= |smt2lean.collision.0.0| |smt2lean.collision.0.0|))
+    (check-sat)" fun query => do
+      unless query.declarations.map (·.name) == #["set.card", "x", "smt2lean.collision.0.0"] &&
+          query.commands[1]!.text == "(declare-fun set.card (Int) Int)" do
+        throwError "collision adaptation lost original declaration names or commands"
+      checkRefutation query q(∀ (f : Int → Int) (x collision : Int),
+        f x = -1 ∧ f x = f x ∧ (∀ n : Int, n + 1 = n + 1) ∧
+          ((7 : Int) = 7 ∧ f x = -1) ∧ (∀ n : Int, n = n) ∧ collision = collision → False)
+  let collisionSession := "
+    (set-logic ALL)(declare-const set.card Int)(assert (= set.card 0))(check-sat)
+    (push 1)(define-fun f ((set.card Int)) Int (+ set.card 1))
+    (check-sat-assuming ((= (f 0) 1)))(pop 1)(check-sat)
+    (reset-assertions)(declare-const |set.card| Bool)(assert (not set.card))(check-sat)
+    (reset)(set-option :global-declarations true)(set-logic ALL)
+    (push 1)(declare-fun set.card (Int) Int)(assert (= (set.card 0) (- 1)))(pop 1)
+    (check-sat-assuming ((= (set.card 0) (- 1))))
+    (reset-assertions)(check-sat-assuming ((= (|set.card| 0) (- 1))))
+    (reset)(set-logic ALL)(declare-const set.card Int)(assert (= set.card 1))(check-sat)"
+  let collisionExpected := #[
+    q(∀ c : Int, c = 0 → False),
+    q(∀ c : Int, (c = 0 ∧ (0 : Int) + 1 = 1) → False),
+    q(∀ c : Int, c = 0 → False), q(∀ c : Prop, ¬c → False),
+    q(∀ f : Int → Int, f 0 = -1 → False), q(∀ f : Int → Int, f 0 = -1 → False),
+    q(∀ c : Int, c = 1 → False)]
+  let collisionIds ← IO.mkRef (#[] : Array Nat)
+  (parseAndInspectSession collisionSession (name := "collision-session") fun query => do
+    let #[declaration] := query.declarations | throw (.error "expected one colliding declaration")
+    unless declaration.name == "set.card" do throw (.error "lost original declaration name")
+    let index := (← collisionIds.get).size
+    let some expected := collisionExpected[index]? | throw (.error "unexpected collision snapshot")
+    collisionIds.modify (·.push declaration.term.getId!)
+    discard <| (checkRefutation query expected).toIO
+      { fileName := "collision-session", fileMap := default } { env }
+  ).runIO
+  let ids ← collisionIds.get
+  unless ids.size == 7 && ids[0]! == ids[2]! && ids[0]! != ids[3]! &&
+      ids[4]! == ids[5]! && ids[0]! != ids[6]! do
+    throw (IO.userError "colliding declaration identities did not follow session lifetimes")
+  let definitionTargets := #[q(∀ x : Int, x + (x + 1) = x + (x + 1) → False),
+    q((-1 : Int) = -1 → False)]
+  let definitionChecks ← IO.mkRef 0
+  (parseAndInspectSession "
+    (set-logic ALL)(declare-const x Int)
+    (define-fun set.card ((n Int)) Int (+ x n))(define-const c Int (set.card 1))
+    (assert (= (|set.card| c) (+ x (+ x 1))))(check-sat)
+    (reset-assertions)(define-const set.card Int (- 1))
+    (check-sat-assuming ((= |set.card| (- 1))))"
+      (name := "colliding-definitions") fun query => do
+    let index ← definitionChecks.get
+    let names := if index == 0 then #["set.card", "c"] else #["set.card"]
+    unless query.definitions.map (·.name) == names do
+      throw (.error "lost original definition names after expansion or reset")
+    let some expected := definitionTargets[index]? | throw (.error "unexpected definition snapshot")
+    discard <| (checkRefutation query expected).toIO
+      { fileName := "colliding-definitions", fileMap := default } { env }
+    definitionChecks.modify (· + 1)
+  ).runIO
+  unless (← definitionChecks.get) == 2 do throw (IO.userError "missing definition snapshot")
   let base := q(∀ p : Prop, p → False)
   let integer := q(∀ (p : Prop) (x : Int), (p ∧ x + 1 > 0) → False)
   let conditional := q(∀ (p : Prop) (x : Int), (p ∧ (if p then x else -x) = x) → False)

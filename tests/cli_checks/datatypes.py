@@ -3,7 +3,31 @@
 from .support import ROOT, run, check_generated, check_lean
 
 
+def check_collisions(lean, tmp):
+    output = tmp / "binding-collisions"
+    run(ROOT / "tests/translation/bindings/collisions.smt2", "--out", output)
+    generated = check_generated(lean, output, count=2)
+    assert "c0_true" in generated and "c1_false" in generated
+    # An arbitrary function may return negative values. Constructor names must
+    # remain distinct from Boolean literals in both the model and refutation.
+    checked = tmp / "BindingCollisions.lean"
+    checked.write_text(generated.split("-- Proofs\n", 1)[0] + r'''
+theorem first_has_model : ¬ Refutation_1 := by
+  intro h
+  apply h (fun i => -i - 1) SMT.Datatypes.g0.T0_flag.c1_false
+  exact ⟨rfl, rfl, rfl, rfl, rfl, True.intro, fun h => h, rfl, True.intro⟩
+
+theorem second_is_inconsistent : Refutation_2 := by
+  intro _ _ h
+  rcases h with ⟨_, _, _, _, _, _, _, _, _, bad⟩
+  cases bad
+''')
+    check_lean(lean, checked, complete=True)
+    print("Binding collisions passed: original constructor names, Boolean literals, and two completed proofs")
+
+
 def check_datatypes(lean, tmp):
+    check_collisions(lean, tmp)
     fixtures = ROOT / "tests/translation/datatypes"
     for fixture, goal, count in [("constructors", "Refutation", 1),
                                  ("chc", "Problem", 1), ("sessions", "Refutation", 10),
