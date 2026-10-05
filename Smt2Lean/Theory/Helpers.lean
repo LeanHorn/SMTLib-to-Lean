@@ -26,7 +26,8 @@ def define (name : Name) (levels : List Name) (value : Expr) : MetaM Name := do
       name, levelParams := levels, type := ← inferType value, value
       hints := .abbrev, safety := .safe
     }
-    let env ← ofExceptKernelException <| (← getEnv).addDeclCore 0 1000 declaration none
+    let env ← ofExceptKernelException <|
+      (← getEnv).addDeclCore 0 (Lean.maxRecDepth.get (← getOptions)).toUSize declaration none
     setEnv env
   return name
 

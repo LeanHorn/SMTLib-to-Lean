@@ -1,4 +1,5 @@
 import Smt2Lean.Chc
+import Smt2Lean.Sharing
 import Smt2Lean.Theory.Arithmetic
 import Smt2Lean.Theory.BitVec
 import Smt2Lean.Theory.Model
@@ -225,6 +226,7 @@ def checkStatementAxioms (name : Name) : CoreM Unit := do
 
 /-- Install a closed proposition after checking its type and axiom dependencies. -/
 private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
+  let value ← Sharing.introduce value
   if value.hasFVar || value.hasLooseBVars || value.hasMVar then
     throwError "{name} contains unresolved variables"
   let declaration : Declaration := .defnDecl {
@@ -237,7 +239,7 @@ private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   }
   -- Check synchronously so a kernel failure cannot be reported as success.
   let checkedEnv ← ofExceptKernelException <|
-    (← getEnv).addDeclCore 0 1000 declaration none
+    (← getEnv).addDeclCore 0 (Lean.maxRecDepth.get (← getOptions)).toUSize declaration none
   withEnv checkedEnv (checkStatementAxioms name)
   setEnv checkedEnv
   return value

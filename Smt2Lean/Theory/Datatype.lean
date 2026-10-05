@@ -49,7 +49,8 @@ def casesOn (input result : Expr) (branches : Array Expr) : MetaM Expr := do
   let name := mkCasesOnName typeName
   unless (← getEnv).contains name do
     let declaration ← ofExceptKernelException (mkCasesOnImp (← getEnv).toKernelEnv typeName)
-    let env ← ofExceptKernelException <| (← getEnv).addDeclCore 0 1000 declaration none
+    let env ← ofExceptKernelException <|
+      (← getEnv).addDeclCore 0 (Lean.maxRecDepth.get (← getOptions)).toUSize declaration none
     setEnv (markAuxRecursor env name)
   let motive ← withLocalDeclD `_ domain fun x => mkLambdaFVars #[x] result (usedOnly := false)
   return mkAppN (mkConst name [← getLevel result])
@@ -131,7 +132,8 @@ def compile (source : DatatypeGroup) : MetaM CompiledGroup := do
         return ({ name := ctorName, type := implicitParameters locals.size ctorType } : Lean.Constructor)
       return { name := names[i]!, type := ← mkForallFVars locals q(Type), ctors := ctors.toList : InductiveType }
     let declaration := Declaration.inductDecl [] locals.size types.toList false
-    let env ← ofExceptKernelException <| (← getEnv).addDeclCore 0 1000 declaration none
+    let env ← ofExceptKernelException <|
+      (← getEnv).addDeclCore 0 (Lean.maxRecDepth.get (← getOptions)).toUSize declaration none
     setEnv env
     checkNonempty group locals fieldType
   return group

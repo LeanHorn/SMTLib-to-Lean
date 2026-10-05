@@ -13,7 +13,7 @@ private def usage : String :=
   "HORN logic generates Problem (model existence); other supported logics generate Refutation.\n" ++
   "Permitted result requests are recorded as unexecuted comments; no solver is run.\n" ++
   "The output directory must be new, and its parent must exist.\n" ++
-  s!"--max-rec-depth sets the recursion limit in generated Lean (positive integer; default: {Emit.defaultMaxRecDepth}).\n" ++
+  s!"--max-rec-depth sets the recursion limit during translation and in generated Lean (positive integer; default: {Emit.defaultMaxRecDepth}).\n" ++
   "The proof template contains sorry and must be completed in Lean."
 
 private def parseArgs : List String → Option (String × String × Nat)

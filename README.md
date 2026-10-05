@@ -28,9 +28,8 @@ The output directory must be new, with an existing parent. Each `check-sat`
 becomes a statement in `Query.lean`, followed by a proof template containing `sorry`.
 Open that file in your Lean editor to complete the proof.
 
-Generated files set Lean's `maxRecDepth` to **4096**. Override it with
+Translation and generated files use Lean's `maxRecDepth` of **4096**. Override it with
 `lake exe smt2lean input.smt2 --out output --max-rec-depth 8192`.
-This adjusts the recursion limit for checking the generated statements and proofs.
 
 ## Demo
 

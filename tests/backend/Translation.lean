@@ -2,6 +2,7 @@ import tests.backend.Arithmetic
 import tests.backend.BitVec
 import tests.backend.Sessions
 import tests.backend.Datatypes
+import tests.backend.Sharing
 
 open Lean Meta Qq Classical
 open Smt2Lean.Tests
@@ -395,6 +396,7 @@ def main : IO Unit := do
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
+  checkSharing env
   checkDatatypes env
   checkSessions env
   checkUninterpretedSorts env

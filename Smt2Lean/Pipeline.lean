@@ -6,13 +6,16 @@ namespace Smt2Lean.Pipeline
 open Lean Meta Emit
 
 /-- Reconstruct at each check, but return output only after the entire session succeeds.
-`maxRecDepth` sets the recursion limit in the generated Lean file. -/
+`maxRecDepth` sets the recursion limit during translation and in the generated Lean file. -/
 def translateSession (input : String) (env : Environment) (name : String := "session")
     (maxRecDepth : Nat := Emit.defaultMaxRecDepth) : IO String := do
   let state ← IO.mkRef ({ env } : Core.State)
   let skipped ← IO.mkRef (#[] : Array Source.Command)
   let goals ← IO.mkRef (#[] : Array Goal)
-  let context : Core.Context := { fileName := name, fileMap := default }
+  let context : Core.Context := {
+    fileName := name, fileMap := default
+    options := Lean.maxRecDepth.set {} maxRecDepth
+    maxRecDepth }
   (Backend.parseAndInspectSession input (name := name) (mode := .auto)
       (onSkipped := fun command => skipped.modify (·.push command)) fun query => do
     let problem? ← if query.logic == some "HORN" then

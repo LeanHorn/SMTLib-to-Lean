@@ -1,5 +1,28 @@
 from .support import (ROOT, CHC, run, check_lean, check_generated)
 
+def check_array_sharing(lean, tmp):
+    """Repeated stores must stay compact and usable in an admission-free proof."""
+    sizes = []
+    for depth in [5, 15]:
+        term = f"(not (= (select a{depth} 0) (select a{depth} 0)))"
+        for i in range(depth, 0, -1):
+            term = f"(let ((a{i} (store a{i-1} {i} (select a{i-1} 0)))) {term})"
+        source, output = tmp / f"sharing-{depth}.smt2", tmp / f"sharing-{depth}"
+        source.write_text("(set-logic QF_AUFLIA)(declare-const a0 (Array Int Int))"
+                          f"(assert {term})(check-sat)")
+        run(source, "--out", output)
+        generated = check_generated(lean, output)
+        assert "let " in generated, generated
+        sizes.append(len(generated.encode()))
+        query = output / "Query.lean"
+        query.write_text(generated.split("-- Proofs\n", 1)[0] +
+                         "theorem checked : Refutation := by\n"
+                         "  intro A read write a laws impossible\n"
+                         "  exact impossible rfl\n")
+        check_lean(lean, query, complete=True)
+    assert sizes[1] < 25000 and sizes[1] < 4 * sizes[0], sizes
+    print("Array sharing passed: compact nested stores and two completed proofs")
+
 def check_arrays_basic(lean, tmp):
     """Check array laws through complete proofs and an explicit satisfying model."""
     source, output = tmp / "arrays-basic.smt2", tmp / "arrays-basic"
@@ -252,5 +275,4 @@ theorem checked : Problem := by
     assert "CHC relation inside" in run(source, "--out", output, code=1).stderr
     assert not output.exists()
     print("Extended array CLI passed: symbolic constants, completed proofs, scope snapshots, and rejected payloads")
-
 

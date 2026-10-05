@@ -10,7 +10,7 @@ from cli_checks.sessions import (check_resets, check_uninterpreted_sorts)
 from cli_checks.arithmetic import (check_integer_division, check_reals, check_conversions)
 from cli_checks.bitvec import (check_bitvectors, check_bitvector_widths, check_bitvector_shifts, check_bitvector_division, check_bitvector_conversions)
 from cli_checks.datatypes import check_datatypes
-from cli_checks.arrays import (check_arrays_basic, check_arrays_extended)
+from cli_checks.arrays import (check_arrays_basic, check_arrays_extended, check_array_sharing)
 
 
 def main():
@@ -46,12 +46,11 @@ def main():
             generated = check_generated(lean, output)
             assert generated == expected["contradiction"].replace("maxRecDepth 4096", "maxRecDepth 8192")
 
-        # Check that the emitted option actually controls Lean, not just the text.
+        # A small limit must also apply inside the translator, before output exists.
         output = tmp / "depth-too-low"
-        run(fixture, "--out", output, "--max-rec-depth", "1")
-        limited = subprocess.run([str(lean), "--json", str(output / "Query.lean")],
-                                 cwd=ROOT, capture_output=True, text=True)
-        assert limited.returncode != 0 and "runtime.maxRecDepth" in limited.stdout, limited
+        limited = run(fixture, "--out", output, "--max-rec-depth", "1", code=1)
+        assert "maximum recursion depth" in limited.stderr, limited
+        assert not output.exists()
 
         for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7), ("sorts", "Refutation", 8)]:
             output = tmp / f"session-{fixture}"
@@ -76,6 +75,7 @@ def main():
         check_bitvector_conversions(lean, tmp)
         check_arrays_basic(lean, tmp)
         check_arrays_extended(lean, tmp)
+        check_array_sharing(lean, tmp)
         check_datatypes(lean, tmp)
 
         for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:

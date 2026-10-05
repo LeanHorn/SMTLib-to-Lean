@@ -31,7 +31,7 @@ The output directory must be new. Existing runs are never overwritten.
 The runner passes `--max-rec-depth 4096` to `smt2lean` by default. Use
 `--max-rec-depth N` to override it; `N` must be positive. The value is recorded
 in `run.json` and each translation command, and emitted as `set_option maxRecDepth N`
-in `Query.lean`. Both statement and template checks use that setting.
+in `Query.lean`. Translation, statement checks, and template checks use that setting.
 
 ## The first ten inputs
 

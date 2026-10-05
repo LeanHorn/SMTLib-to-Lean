@@ -36,6 +36,13 @@ CLI checks cover the default `maxRecDepth 4096`, explicit overrides, invalid lim
 and Lean rejecting an emitted limit that is too low. Anchor checks also verify
 that overrides reach the translator and are recorded in run metadata.
 
+Sharing tests compare the original and compact expressions by definitional equality,
+including shadowed names, quantifiers, existing lets, CHC relations, and conditionals.
+An independent nested-let proposition also checks the emitted text. CLI array tests
+check that repeated store chains stay compact and complete two proofs without admissions.
+The recursion override applies inside reconstruction, printing and the translator's
+kernel check as well as in generated files; a limit of 1 must fail before output.
+
 Statement checks reject admissions and query-specific axioms, including transitive
 dependencies. Classical conditionals may use `propext`, `Classical.choice`, and
 `Quot.sound`. Proof templates use `sorry`; the four completed README proofs must
