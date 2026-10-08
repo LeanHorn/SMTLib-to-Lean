@@ -146,6 +146,15 @@ private def checkSourceBindings (env : Environment) : IO Unit := do
       let statement ← refutationStatement query
       unless statement.definitions.size == 5 do throwError "missing theory definitions"
       checkEmission statement.value (parts := statement.parts) (definitions := statement.definitions)
+  -- An inner conditional changes the outer condition's hidden Decidable type.
+  runProblem env "source-bindings-nested-conditionals" "
+    (set-logic HORN)(declare-fun R (Int) Bool)
+    (define-fun valid ((n Int)) Bool (and (>= n 0) (< n 10)))
+    (define-fun read ((n Int)) Int (ite (valid n) (+ n 1) 0))
+    (assert (forall ((n Int)) (=> (R n) (R (read (read n))))))
+    (check-sat)" fun problem => do
+      let step : Q(Int → Int) := q(fun n => if n ≥ 0 ∧ n < 10 then n + 1 else 0)
+      checkProblem problem (usesClassical := true) q(∃ r : Int → Prop, ∀ n : Int, r n → r ($step ($step n)))
   runProblem env "source-bindings-horn" "
     (set-logic HORN)(declare-fun R (Int) Bool)
     (define-fun inc ((n Int)) Int (+ n 1))

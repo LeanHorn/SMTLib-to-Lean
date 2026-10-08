@@ -372,7 +372,12 @@ private def closeProblem (sortCount : Nat) (parameters laws clauses : Array Expr
     mkAppM ``Exists #[← mkLambdaFVars #[carrier] body (usedOnly := false)]
 
 /-- The kernel checks that naming components preserves the original proposition. -/
-private def checkAssembly (name : Name) (original assembled : Expr) : MetaM Unit := do
+private def checkAssembly (name : Name) (original assembled : Expr) : MetaM Unit :=
+    withCurrHeartbeats <| withTheReader Core.Context (fun context =>
+      let limit := if context.maxHeartbeats == 0 then 0
+        else max context.maxHeartbeats (Core.getMaxHeartbeats (maxHeartbeats.set {} 1000000))
+      { context with maxHeartbeats := limit }) do
+  -- Large queries need room for the expanded reference's congruence proof.
   let declaration : Declaration := .thmDecl {
     name := name ++ `assembly_eq
     levelParams := []

@@ -63,7 +63,7 @@ private partial def printProposition (value : Expr) : MetaM String := do
       return s!"({← printProposition type}) →\n{← printProposition (body.instantiate1 qPlaceholder)}"
     else
       withLocalDecl (← binderName name body) info type fun x => do
-        return s!"∀ ({← printExpr x} : {← printExpr type}),\n{← printProposition (body.instantiate1 x)}"
+        printForallGroup type #[← printExpr x] (body.instantiate1 x)
   | _ =>
     if value.isAppOfArity ``Exists 2 then
       let predicate := value.appArg!
@@ -74,6 +74,14 @@ private partial def printProposition (value : Expr) : MetaM String := do
       return s!"({← printProposition value.appFn!.appArg!}) ∧\n{← printProposition value.appArg!}"
     printExpr value
 where
+  -- Equal types can share a binder group; dependent types and premises stop it.
+  printForallGroup (type : Expr) (names : Array String) (body : Expr) : MetaM String := do
+    if let .forallE name nextType nextBody info := body then
+      if nextType == type && !(body.isArrow && (← isProp nextType)) then
+        return ← withLocalDecl (← binderName name nextBody) info nextType fun x => do
+          printForallGroup type (names.push (← printExpr x)) (nextBody.instantiate1 x)
+    return s!"∀ ({String.intercalate " " names.toList} : {← printExpr type}),\n{← printProposition body}"
+
   -- An arrow's body does not refer to its proof binder.
   qPlaceholder := mkConst ``True.intro
 

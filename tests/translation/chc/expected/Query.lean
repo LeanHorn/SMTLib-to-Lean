@@ -20,9 +20,7 @@ def Problem_1.Clause002
     (r0 : Int → Prop) : Prop :=
   ∀ (n : Int),
   ∀ (cond : Prop),
-  ∀ (n1 : Int),
-  ∀ (t1 : Int),
-  ∀ (v : Int),
+  ∀ (n1 t1 v : Int),
   (cond = (n ≤ (0 : Int))) →
   (¬cond) →
   (n1 = n - (1 : Int)) →
@@ -34,8 +32,7 @@ def Problem_1.Clause002
 def Problem_1.Clause003
     (r0 : Int → Prop) : Prop :=
   ∀ (r : Int),
-  ∀ (ok1 : Prop),
-  ∀ (v : Prop),
+  ∀ (ok1 v : Prop),
   (r0 r) →
   (ok1 = ((0 : Int) ≤ r)) →
   (v = ((0 : Int) ≤ r)) →
