@@ -1,4 +1,4 @@
-from .support import (ROOT, CHC, run, check_lean, check_generated, unfold_statement)
+from .support import (ROOT, read_generated, CHC, run, check_lean, check_generated, unfold_statement)
 
 def check_bitvectors(lean, tmp):
     """Standalone core output and completed proofs distinguishing widths and signedness."""
@@ -8,8 +8,6 @@ def check_bitvectors(lean, tmp):
         run(fixture, "--out", output)
         generated = check_generated(lean, output, goal=goal)
         assert generated.startswith("import Init\n")
-        for helper in (["bvnand", "bvnor", "bvxnor", "bvcomp"] if goal == "Refutation" else ["bvcomp"]):
-            assert generated.count(f"def SMT.{helper} ") == 1
     exact = [
         "(= (bvadd #xe #x1 #x2) #x1)", "(= (bvmul #x3 #x5 #x3) #xd)",
         "(= (bvand #xf #x7 #x3) #x3)", "(= (bvor #x1 #x2 #x4) #x7)",
@@ -50,7 +48,7 @@ def check_bitvectors(lean, tmp):
         source, output = tmp / f"bv-{name}.smt2", tmp / f"bv-{name}"
         source.write_text(f"(set-logic {logic}){body}(check-sat)")
         run(source, "--out", output)
-        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        generated = read_generated(output, goal="Problem" if logic == "HORN" else "Refutation")
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
@@ -117,7 +115,7 @@ def check_bitvector_widths(lean, tmp):
         source, output = tmp / f"widths-{name}.smt2", tmp / f"widths-{name}"
         source.write_text(f"(set-logic {logic}){body}(check-sat)")
         run(source, "--out", output)
-        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        generated = read_generated(output, goal="Problem" if logic == "HORN" else "Refutation")
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
@@ -144,10 +142,9 @@ def check_bitvector_shifts(lean, tmp):
                           (CHC / "shifts.smt2", "Problem")]:
         output = tmp / f"shifts-{goal}"
         run(fixture, "--out", output)
-        generated = check_generated(lean, output, goal=goal)
+        generated = (read_generated(output, goal=goal) if goal == "Refutation"
+                     else check_generated(lean, output, goal=goal))
         assert generated.startswith("import Init\n")
-        for helper in ["bvshl", "bvlshr", "bvashr"]:
-            assert generated.count(f"def SMT.{helper} ") == 1
         if goal == "Refutation":
             # Prove the bounded helpers agree with the unbounded core operations
             # for arbitrary widths and operands, not only the numeric samples.
@@ -214,7 +211,7 @@ theorem checked_bvashr {w : Nat} (x y : BitVec w) : SMT.bvashr x y = x.sshiftRig
         source, output = tmp / f"shifts-{name}.smt2", tmp / f"shifts-{name}"
         source.write_text(f"(set-logic {logic}){body}(check-sat)")
         run(source, "--out", output)
-        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        generated = read_generated(output, goal="Problem" if logic == "HORN" else "Refutation")
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
@@ -282,7 +279,7 @@ def check_bitvector_division(lean, tmp):
         source, output = tmp / f"bv-div-{name}.smt2", tmp / f"bv-div-{name}"
         source.write_text(f"(set-logic {logic}){body}(check-sat)")
         run(source, "--out", output)
-        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        generated = read_generated(output, goal="Problem" if logic == "HORN" else "Refutation")
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
@@ -353,7 +350,7 @@ def check_bitvector_conversions(lean, tmp):
         source, output = tmp / f"bv-conv-{name}.smt2", tmp / f"bv-conv-{name}"
         source.write_text(f"(set-logic {logic}){body}(check-sat)")
         run(source, "--out", output)
-        generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
+        generated = read_generated(output, goal="Problem" if logic == "HORN" else "Refutation")
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]

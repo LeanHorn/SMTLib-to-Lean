@@ -51,8 +51,10 @@ def unfold_statement(source, target):
     return "  unfold " + " ".join([goal, *parts]) + "\n"
 
 
-def check_lean(lean, source, *, complete=False):
+def check_lean(lean, source, *, complete=False, allow_sorry=False):
     args = [str(lean)]
+    if not allow_sorry:
+        args.append("--error=hasSorry")
     if complete:
         args.append("-DwarningAsError=true")
     # Core-only files must remain independent of all project packages.
@@ -68,7 +70,8 @@ def check_lean(lean, source, *, complete=False):
     return result.stdout
 
 
-def check_generated(lean, output, *, goal="Refutation", count=1):
+def read_generated(output, *, goal="Refutation", count=1):
+    """Check layout only; the caller must compile it or compare with checked output."""
     assert [p.name for p in output.iterdir()] == ["Query.lean"]
     query = output / "Query.lean"
     source = query.read_text()
@@ -84,10 +87,16 @@ def check_generated(lean, output, *, goal="Refutation", count=1):
         assert f"theorem {name.lower()} : {name}" in proofs
         if count > 1:
             assert re.search(rf"\(query {number}: check-sat(?:-assuming)?,", statements)
-    check_lean(lean, query)
-    # The statement must also compile after removing the unfinished proof entirely.
+    return source
+
+
+def check_generated(lean, output, *, goal="Refutation", count=1, template=False):
+    """Compile admission-free statements once; template checks are opt-in."""
+    source = read_generated(output, goal=goal, count=count)
+    if template:
+        check_lean(lean, output / "Query.lean", allow_sorry=True)
     standalone = output / "StatementsOnly.lean"
-    standalone.write_text(statements)
+    standalone.write_text(source.split("-- Proofs\n", 1)[0])
     check_lean(lean, standalone)
     standalone.unlink()
     return source

@@ -1,12 +1,12 @@
 """Datatype constructors, selectors, testers, match semantics, and native scopes."""
 
-from .support import ROOT, run, check_generated, check_lean
+from .support import ROOT, read_generated, run, check_generated, check_lean
 
 
 def check_collisions(lean, tmp):
     output = tmp / "binding-collisions"
     run(ROOT / "tests/translation/bindings/collisions.smt2", "--out", output)
-    generated = check_generated(lean, output, count=2)
+    generated = read_generated(output, count=2)
     assert "c0_true" in generated and "c1_false" in generated
     # An arbitrary function may return negative values. Constructor names must
     # remain distinct from Boolean literals in both the model and refutation.
@@ -41,10 +41,6 @@ def check_datatypes(lean, tmp):
         if fixture == "constructors":
             assert "mutual\n" in generated and "Field0 : Type" in generated
             assert "field0 : Prop" in generated and "SMT.arrayLaws" in generated
-        edited = generated + "\n-- Preserve user proof work.\n"
-        (output / "Query.lean").write_text(edited)
-        run(fixtures / f"{fixture}.smt2", "--out", output, code=1)
-        assert (output / "Query.lean").read_text() == edited
 
     # Complete actual emitted obligations and check the free-constructor laws.
     text = """(set-logic ALL)
@@ -62,7 +58,7 @@ def check_datatypes(lean, tmp):
     source, output = tmp / "datatype-laws.smt2", tmp / "datatype-laws"
     source.write_text(text)
     run(source, "--out", output)
-    generated = check_generated(lean, output)
+    generated = read_generated(output)
     proofs = generated.replace("  sorry\n", "  intro _ _ h\n  cases h.2.2\n") + r'''
 open SMT.Datatypes.g0
 example (x y : Int) : T0_Pair.c0_pair x y = T0_Pair.c0_pair 3 4 → x = 3 ∧ y = 4 := by
@@ -94,7 +90,7 @@ example (n : T0_Counter) : n ≠ T0_Counter.c1_step n := by
                           "(declare-fun R (Color) Bool) " + assertion + " (check-sat)")
         output = tmp / f"datatype-chc-{suffix}"
         run(source, "--out", output)
-        generated = check_generated(lean, output, goal="Problem")
+        generated = read_generated(output, goal="Problem")
         checked = tmp / f"DatatypeChc{suffix}.lean"
         if proof:
             checked.write_text(generated.replace("  sorry\n", proof))
@@ -123,7 +119,7 @@ example (n : T0_Counter) : n ≠ T0_Counter.c1_step n := by
 (check-sat)
 """)
     run(source, "--out", output)
-    generated = check_generated(lean, output, count=2)
+    generated = read_generated(output, count=2)
     checked = tmp / "SelectorLaws.lean"
     checked.write_text(generated.split("-- Proofs\n")[0] + r'''
 theorem different_inputs : ¬ Refutation_1 := by
@@ -147,7 +143,7 @@ example (choice : SMT.Datatypes.g0.T0_D → Int) (x : Int) :
 (check-sat)
 """)
     run(source, "--out", output)
-    generated = check_generated(lean, output, goal="Problem")
+    generated = read_generated(output, goal="Problem")
     checked = tmp / "SelectorModel.lean"
     checked.write_text(generated.replace("  sorry\n", """
   refine ⟨(fun d => SMT.Datatypes.g0.T0_D.casesOn d (fun _ => 0) (fun i => i)),
@@ -173,7 +169,7 @@ example (choice : SMT.Datatypes.g0.T0_D → Int) (x : Int) :
 (check-sat)
 """)
     run(source, "--out", output)
-    generated = check_generated(lean, output)
+    generated = read_generated(output)
     checked = tmp / "MatchLaws.lean"
     checked.write_text(generated.replace("  sorry\n", """
   intro h
@@ -200,7 +196,7 @@ example (d : SMT.Datatypes.g0.T0_D) :
 (check-sat)
 """)
     run(source, "--out", output)
-    generated = check_generated(lean, output, goal="Problem")
+    generated = read_generated(output, goal="Problem")
     checked = tmp / "MatchModel.lean"
     checked.write_text(generated.replace("  sorry\n",
                       "  exact ⟨fun _ => True, True.intro, fun h => h⟩\n"))

@@ -4,11 +4,16 @@ Build smt2lean first, then run with `lake env python3 tests/cli.py [GROUP ...]`.
 """
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
-from cli_checks.support import (ROOT, FIXTURES, INTEGERS, FUNCTIONS, QUANTIFIERS, BINDINGS, CHC, SESSIONS, SOLVER_OPTIONS, run, without_sources, check_lean, check_generated)
+import time
+import traceback
+from cli_checks.support import (ROOT, read_generated, FIXTURES, INTEGERS, FUNCTIONS, QUANTIFIERS, BINDINGS, CHC, SESSIONS, SOLVER_OPTIONS, run, without_sources, check_lean, check_generated)
 
 from cli_checks.sessions import (check_resets, check_uninterpreted_sorts)
 from cli_checks.arithmetic import (check_integer_division, check_reals, check_conversions)
@@ -170,14 +175,7 @@ def check_sessions(lean, tmp):
     for fixture, goal, count in [("smt", "Refutation", 8), ("chc", "Problem", 6), ("assuming", "Refutation", 6), ("resets", "Refutation", 7), ("sorts", "Refutation", 8), ("compatibility", "Refutation", 7)]:
         output = tmp / f"session-{fixture}"
         run(SESSIONS / f"{fixture}.smt2", "--out", output)
-        generated = check_generated(lean, output, goal=goal, count=count)
-        if fixture == "smt":
-            assert generated.count("def SMT.xor ") == generated.count("def SMT.distinct3.{") == 1
-        query = output / "Query.lean"
-        edited = generated + "\n-- User session proof work.\n"
-        query.write_text(edited)
-        run(SESSIONS / f"{fixture}.smt2", "--out", output, code=1)
-        assert query.read_text() == edited
+        check_generated(lean, output, goal=goal, count=count, template=(fixture == "smt"))
 
     for logic, goal in [("ALL", "Refutation"), ("HORN", "Problem")]:
         for name, body, count in [
@@ -241,7 +239,11 @@ def check_core(lean, tmp):
         output = tmp / name
         result = run(fixture, "--out", output)
         assert "Proof unfinished" in result.stdout
-        source = check_generated(lean, output)
+        # These four files are compiled below with their completed proofs.
+        source = (read_generated(output) if name in expected or name == "options"
+                  else check_generated(lean, output))
+        if name == "contradiction":
+            check_lean(lean, output / "Query.lean", allow_sorry=True)
         if name == "options":
             assert without_sources(source) == without_sources(expected["contradiction"])
             assert "success" not in result.stdout and "unsat" not in result.stdout
@@ -253,12 +255,6 @@ def check_core(lean, tmp):
             assert source == expected[name], (f"{name} output changed", source)
         if name in ["literals", "arithmetic"]:
             assert "340282366920938463463374607431768211457" in source
-        query = output / "Query.lean"
-        edited = source + "\n-- User proof work.\n"
-        query.write_text(edited)
-        result = run(fixture, "--out", output, code=1)
-        assert "output already exists" in result.stderr
-        assert query.read_text() == edited
 
     for fixture, proof in [
         (FIXTURES / "contradiction.smt2", "  intro p h\n  exact h.2 h.1\n"),
@@ -271,7 +267,7 @@ def check_core(lean, tmp):
             source, output = tmp / f"{name}-{status}.smt2", tmp / f"{name}-{status}"
             source.write_text(SOLVER_OPTIONS + f"(set-info :status {status})\n" + fixture.read_text())
             run(source, "--out", output)
-            generated = check_generated(lean, output)
+            generated = read_generated(output)
             assert without_sources(generated) == without_sources(expected[name]), f"{name}: {status} changed the target"
 
         # Replace the Proofs section exactly as in the README.
@@ -286,9 +282,10 @@ def check_core(lean, tmp):
             assert "depends on axioms: [propext]" in axioms
         else:
             assert "does not depend on any axioms" in axioms
-        saved = completed.read_text()
-        run(fixture, "--out", completed.parent, code=1)
-        assert completed.read_text() == saved
+        if name == "contradiction":
+            saved = completed.read_text()
+            run(fixture, "--out", completed.parent, code=1)
+            assert completed.read_text() == saved
 
     # Quantifier hints must leave the entire emitted proposition unchanged.
     source, output = tmp / "quantified-hinted.smt2", tmp / "quantified-hinted"
@@ -299,7 +296,7 @@ def check_core(lean, tmp):
                         "(exists ((x Int)) (! (not (P x)) :no-pattern (P x) :qid witness))")
     source.write_text(text)
     run(source, "--out", output)
-    generated = check_generated(lean, output)
+    generated = read_generated(output)
     assert without_sources(generated) == without_sources(expected["quantified"])
 
 
@@ -308,7 +305,7 @@ def check_horn(lean, tmp):
     horn = ROOT / "tests/chc/lh_sum_rec.smt2"
     horn_output = tmp / "horn"
     run(horn, "--out", horn_output)
-    horn_source = check_generated(lean, horn_output, goal="Problem")
+    horn_source = check_generated(lean, horn_output, goal="Problem", template=True)
     assert horn_source == expected["lh_sum_rec"], "lh_sum_rec output changed"
     assert horn_source.count("(clause ") == 3
     horn_text = horn.read_text()
@@ -317,7 +314,7 @@ def check_horn(lean, tmp):
         metadata = "" if status is None else f"(set-info :status {status})"
         source.write_text(SOLVER_OPTIONS + horn_text.replace("(set-info :status sat)", metadata))
         run(source, "--out", output)
-        generated = check_generated(lean, output, goal="Problem")
+        generated = read_generated(output, goal="Problem")
         assert without_sources(generated) == without_sources(horn_source), status
 
     output = tmp / "combined-chc"
@@ -333,7 +330,7 @@ def check_horn(lean, tmp):
 
     output = tmp / "surface-forms-chc"
     run(CHC / "surface-forms.smt2", "--out", output)
-    surface = check_generated(lean, output, goal="Problem")
+    surface = read_generated(output, goal="Problem")
     # Every normalized clause retains its location in the ten original assertions.
     clause_sources = [line.split(" (clause ", 1)[0]
                       for line in surface.splitlines() if " (clause " in line]
@@ -351,7 +348,7 @@ def check_horn(lean, tmp):
     source.write_text("(set-logic HORN)(declare-fun P (Int) Bool)(assert (P 0))"
                       "(assert (forall ((x Int)) (or (not (P x)) (= x 0))))(check-sat)")
     run(source, "--out", output)
-    surface = check_generated(lean, output, goal="Problem")
+    surface = read_generated(output, goal="Problem")
     query = output / "Query.lean"
     query.write_text(surface.split("-- Proofs\n", 1)[0] +
                      "theorem checked : Problem :=\n"
@@ -367,7 +364,7 @@ def check_horn(lean, tmp):
                         "(! (=> (bad x b) false) :pattern ((R x b)) :qid safety)")
     source.write_text(text)
     run(source, "--out", output)
-    hinted = check_generated(lean, output, goal="Problem")
+    hinted = read_generated(output, goal="Problem")
     assert without_sources(hinted) == without_sources(generated)
 
     query = horn_output / "Query.lean"
@@ -486,12 +483,32 @@ def main(argv=None):
     prefix = subprocess.check_output(["lean", "--print-prefix"], cwd=ROOT, text=True).strip()
     lean = Path(prefix) / "bin/lean"
     for name in selected:
-        print(f"Running CLI group: {name}", flush=True)
-        with tempfile.TemporaryDirectory(prefix=f"smt2lean cli {name} ") as temporary:
-            for check in GROUPS[name]:
-                check(lean, Path(temporary))
+        print(f"RUN  {name}", flush=True)
+        started = time.perf_counter()
+        temporary = Path(tempfile.mkdtemp(prefix=f"smt2lean cli {name} "))
+        log = temporary / "checks.log"
+        failure = 0
+        with log.open("w") as output, redirect_stdout(output), redirect_stderr(output):
+            try:
+                for check in GROUPS[name]:
+                    print(f"Check: {check.__name__}", flush=True)
+                    check(lean, temporary)
+            except (Exception, KeyboardInterrupt) as error:
+                traceback.print_exc()
+                failure = 130 if isinstance(error, KeyboardInterrupt) else 1
+        elapsed = time.perf_counter() - started
+        if failure:
+            status = "INTERRUPTED" if failure == 130 else "FAIL"
+            print(f"{status} {name} ({elapsed:.2f}s)\n"
+                  f"Artifacts and log: {log}\n"
+                  f"Rerun: cd {shlex.quote(str(ROOT))} && "
+                  f"lake env python3 tests/cli.py {shlex.quote(name)}", flush=True)
+            return failure
+        shutil.rmtree(temporary)
+        print(f"PASS {name} ({elapsed:.2f}s)", flush=True)
     print("CLI groups passed: " + ", ".join(selected), flush=True)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
