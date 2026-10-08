@@ -14,6 +14,7 @@ structure StatementPart where
 structure Statement where
   value : Lean.Expr
   parts : Array StatementPart := #[]
+  definitions : Array StatementPart := #[]
   deriving Inhabited
 
 end Smt2Lean

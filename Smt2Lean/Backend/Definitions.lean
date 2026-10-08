@@ -1,5 +1,6 @@
 import Smt2Lean.Backend.Validate
 import Smt2Lean.Backend.Hints
+import Smt2Lean.Backend.SourceLets
 
 namespace Smt2Lean.Backend
 
@@ -51,6 +52,15 @@ def expandDefinitions (tm : cvc5.TermManager) (definitions : Array ParsedDefinit
   if definitions.isEmpty then return root
   return (← expand tm definitions root |>.run {}).1
 
+/-- Unfold only the outer call, retaining nested calls and source lets. -/
+def unfoldDefinition (tm : cvc5.TermManager) (definitions : Array ParsedDefinition)
+    (term : cvc5.Term) : cvc5.Env (Option cvc5.Term) := do
+  let head := if term.getKind! == .APPLY_UF then term[0]! else term
+  let some definition := definitions.find? (·.symbol == head) | return none
+  let arguments := if term.getKind! == .APPLY_UF then term.getChildren.extract 1 term.getNumChildren else #[]
+  return some (← (instantiate tm (definition.sourceBody.getD definition.body)
+    definition.parameters arguments).run {}).1
+
 /-- cvc5 stores each define-fun as `symbol = body`, using a lambda for parameters. -/
 def readDefinition (equation : cvc5.Term) (source : Source.Ref)
     (query : ParsedQuery) (tm : cvc5.TermManager) (allowQuantifiers : Bool)
@@ -71,8 +81,10 @@ def readDefinition (equation : cvc5.Term) (source : Source.Ref)
   let body ← withoutQuantifierHints tm body
   -- Check before expansion as well: even discarded arguments must be supported.
   validateTerm body (knownTerms query) allowQuantifiers parameters query.valueSorts query.arrayConstructors
+  let sourceBody := body
+  let body ← SourceLets.erase tm query.sourceLets body
   let body ← expandDefinitions tm query.definitions body
   validateTerm body query.declarations allowQuantifiers parameters query.valueSorts query.arrayConstructors
-  return { symbol, parameters, body, source }
+  return { symbol, parameters, body, sourceBody := some sourceBody, source }
 
 end Smt2Lean.Backend

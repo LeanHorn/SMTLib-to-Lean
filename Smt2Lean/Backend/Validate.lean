@@ -214,8 +214,10 @@ def validateAssertion (root : cvc5.Term)
   validateTerm root declarations allowQuantifiers (sorts := sorts) (constructors := constructors)
 
 def knownTerms (query : ParsedQuery) : Array ParsedDeclaration :=
-  query.declarations ++ query.definitions.map fun d =>
-    { name := d.symbol.toString, term := d.symbol, source := some d.source }
+  query.declarations ++ (query.definitions.map fun d =>
+    { name := d.symbol.toString, term := d.symbol, source := some d.source })
+  ++ query.sourceLets.flatMap fun l => (#[l.marker] ++ l.bindings.map (·.2)).map fun term =>
+    { name := term.toString, term }
 
 /-- All native roots needed to bind array models, including erased constant-array constructors. -/
 def arrayModelTerms (query : ParsedQuery) : Array cvc5.Term :=

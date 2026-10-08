@@ -32,7 +32,7 @@ private def invokeCommand (command : cvc5.Command) (solver : cvc5.Solver)
 They belong only to the current check's snapshot, as specified by SMT-LIB 2.7. -/
 private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
     (solver : cvc5.Solver) (symbols : cvc5.SymbolManager) (query : ParsedQuery)
-    (allowQuantifiers : Bool) : cvc5.Env (Array cvc5.Term) := do
+    (allowQuantifiers : Bool) : cvc5.Env (Array (cvc5.Term × cvc5.Term)) := do
   let parts := command.tokens
   unless parts.size ≥ 5 && parts[2]? == some "(" &&
       parts[parts.size - 2]? == some ")" && parts.back? == some ")" do
@@ -47,12 +47,16 @@ private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
       throw (.unsupported "check-sat-assuming: expected a Boolean term")
     let term ← withoutQuantifierHints tm term
     validateAssertion term (knownTerms query) allowQuantifiers query.valueSorts query.arrayConstructors
+    let surface := term
+    let term ← SourceLets.erase tm query.sourceLets term
     let term ← expandDefinitions tm query.definitions term
     validateAssertion term query.declarations allowQuantifiers query.valueSorts query.arrayConstructors
     -- Preserve the established Horn safety-clause representation for negated assumptions.
     let term ← if query.logic == some "HORN" && (← ofExcept term.getKind) == .NOT then
       tm.mkTerm .IMPLIES #[term[0]!, ← tm.mkFalse] else pure term
-    terms := terms.push term
+    let surface ← if query.logic == some "HORN" && surface.getKind! == .NOT then
+      tm.mkTerm .IMPLIES #[surface[0]!, ← tm.mkFalse] else pure surface
+    terms := terms.push (term, surface)
   return terms
 
 /-- Native global equations can move: find the added term by occurrence count. -/
@@ -81,8 +85,9 @@ private def parseScript
   let inputTokens := Source.tokenize input
   let initialArrays := ConstantArrays.initial inputTokens
   let wildcardStem := MatchWildcards.nameStem inputTokens
+  let letStem := SourceLets.nameStem inputTokens
   let collisionStem := Collisions.nameStem inputTokens
-  let mut session : Session := { arrays := initialArrays }
+  let mut session : Session := { arrays := initialArrays, query := { manager := some tm } }
   let adaptArrays := inputTokens.any (fun token => token == "const" || token == "|const|")
   let mut allowQuantifiers := true
   let mut checked := false
@@ -136,6 +141,8 @@ private def parseScript
         | none => pure ""
         | some command => do
           let command ← ofExcept (MatchWildcards.prepare command wildcardStem |>.mapError cvc5.Error.error)
+          let (command, lets) ← SourceLets.prepare command solver symbols letStem
+          session := session.mapQuery fun query => { query with sourceLets := query.sourceLets ++ lets }
           let (command, aliases) ← Collisions.prepare command session.query solver symbols collisionStem
           renamedBindings := aliases
           let kind := command.tokens[1]?.getD ""
@@ -225,7 +232,7 @@ private def parseScript
           invoked := query.invoked.push commandName }
       | "declare-const" | "declare-fun" =>
         invokeCommand cmd solver symbols
-        let terms := ConstantArrays.sourceDeclarations session.arrays (← symbols.getDeclaredTerms)
+        let terms := SourceLets.sourceDeclarations session.query.sourceLets (ConstantArrays.sourceDeclarations session.arrays (← symbols.getDeclaredTerms))
         unless terms.size == session.query.declarations.size + 1 do
           throw (.error "expected one new declaration")
         let term := terms.back!
@@ -269,11 +276,13 @@ private def parseScript
           let term ← addedAssertion before assertions
           let term ← withoutQuantifierHints tm term
           validateAssertion term (knownTerms session.query) allowQuantifiers session.query.valueSorts session.query.arrayConstructors
+          let surface := term
+          let term ← SourceLets.erase tm session.query.sourceLets term
           let term ← expandDefinitions tm session.query.definitions term
           validateAssertion term session.query.declarations allowQuantifiers session.query.valueSorts session.query.arrayConstructors
           session := { session with nativeCount := assertions.size }
           session := session.mapQuery fun query => { query with
-            assertions := query.assertions.push { term, source := command.source, arrayConstants } }
+            assertions := query.assertions.push { term, surface := some surface, source := command.source, arrayConstants } }
         catch error =>
           throw (if isChc then errorWithContext s!"clause {assertionNumber}" error else error)
         session := session.mapQuery fun query => { query with
@@ -333,7 +342,7 @@ private def parseScript
         let snapshot := { session.query with
           source := some command.source, checkCommand := commandName
           assumptionCount := assumptions.size
-          assertions := session.query.assertions ++ assumptions.map (fun term => { term, source := command.source, arrayConstants }) }
+          assertions := session.query.assertions ++ assumptions.map (fun (term, surface) => { term, surface := some surface, source := command.source, arrayConstants }) }
         if singleQuery then session := { session with query := snapshot }
         checked := true
         resultAvailable := true

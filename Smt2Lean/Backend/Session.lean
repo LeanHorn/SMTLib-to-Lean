@@ -1,4 +1,5 @@
 import Smt2Lean.Backend.ConstantArrays
+import Smt2Lean.Backend.SourceLets
 
 namespace Smt2Lean.Backend
 
@@ -68,13 +69,13 @@ def Session.clearAssertions (session : Session) : Session := Id.run do
 
 /-- A full reset retains source history and query numbering, but no native interpretations. -/
 def Session.reset (session : Session) (arrays : ConstantArrays.State) (number : Nat) : Session :=
-  { arrays, query := { number, commands := session.query.commands, invoked := session.query.invoked } }
+  { arrays, query := { number, manager := session.query.manager, commands := session.query.commands, invoked := session.query.invoked } }
 
 /-- Check the native state after scope changes before inspecting another query. -/
 def Session.checkNative (session : Session) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) (label : String) : cvc5.Env Unit := do
   unless (← solver.getAssertions).size == session.nativeCount &&
-      ConstantArrays.sourceDeclarations session.arrays (← symbols.getDeclaredTerms) ==
+      SourceLets.sourceDeclarations session.query.sourceLets (ConstantArrays.sourceDeclarations session.arrays (← symbols.getDeclaredTerms)) ==
         session.query.declarations.map (·.term) &&
       (← symbols.getDeclaredSorts) == session.query.sorts.map (·.sort) do
     throw (.error s!"native and translator {label} disagree")

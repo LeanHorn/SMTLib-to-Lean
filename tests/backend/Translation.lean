@@ -109,6 +109,58 @@ private def checkDefinitions (env : Environment) : IO Unit := do
     fun query => checkRefutation query q(True → False)
   IO.println "Definitions passed: Bool/Int bodies, aliases, chains, shadowing, and capture-free substitution"
 
+/-- Check source structure as well as the kernel-checked expanded reference. -/
+private def checkSourceBindings (env : Environment) : IO Unit := do
+  let path := "tests/translation/bindings/preserved.smt2"
+  runQuery env path (← IO.FS.readFile path) fun query => do
+    let statement ← refutationStatement query
+    unless statement.definitions.map (·.name) == #[`Refutation.Definitions.inc, `Refutation.Definitions.twice] do
+      throwError "lost source definitions or dependency order"
+    let text ← render statement.value (parts := statement.parts) (definitions := statement.definitions)
+    for fragment in #["Refutation.Definitions.inc (Refutation.Definitions.inc n)",
+        "let next := Refutation.Definitions.twice", "let old :=", "let next := Refutation.Definitions.inc"] do
+      unless text.contains fragment do throwError "source structure missing: {fragment}"
+    checkEmission statement.value (parts := statement.parts) (definitions := statement.definitions)
+    let rejected ← try
+      discard <| Smt2Lean.Equivalence.prove q(True) q(False) (fun _ => false)
+      pure false
+    catch _ => pure true
+    unless rejected do throwError "equivalence check accepted different propositions"
+  runQuery env "source-bindings-theories" "
+    (set-logic ALL)
+    (declare-datatype D ((zero) (pair (left Int) (right Int))))
+    (declare-const |smt2lean.let.0.0| Int)
+    (define-fun choose ((b Bool) (n Int)) Int (ite b n 0))
+    (define-fun get ((d D) (n Int)) Int
+      (let ((saved n)) (match d ((zero saved) ((pair n y) (+ saved n y))))))
+    (define-fun bump ((b (_ BitVec 8))) (_ BitVec 8) (bvadd b #x01))
+    (define-fun shift ((r Real)) Real (+ r 0.5))
+    (define-fun lookup ((a (Array Int Int)) (i Int)) Int (select a i))
+    (assert (= (get (pair 1 2) 3) 6))
+    (assert (= (choose false 7) 0))
+    (assert (= (let ((b (bump #x02))) b) #x03))
+    (assert (= (let ((r (shift 1.5))) r) 2.0))
+    (assert (= (let ((a ((as const (Array Int Int)) 5))) (lookup a 0)) 5))
+    (check-sat)" fun query => do
+      unless query.declarations.size == 1 do throwError "private let markers escaped into parameters"
+      let statement ← refutationStatement query
+      unless statement.definitions.size == 5 do throwError "missing theory definitions"
+      checkEmission statement.value (parts := statement.parts) (definitions := statement.definitions)
+  runProblem env "source-bindings-horn" "
+    (set-logic HORN)(declare-fun R (Int) Bool)
+    (define-fun inc ((n Int)) Int (+ n 1))
+    (define-fun positive ((n Int)) Bool (> n 0))
+    (assert (R 0))
+    (assert (forall ((x Int)) (let ((next (inc x)))
+      (=> (and (R x) (positive next)) (R next)))))
+    (check-sat)" fun problem => do
+      let statement ← problemStatement problem
+      let text ← render statement.value .problem (parts := statement.parts) (definitions := statement.definitions)
+      for fragment in #["let next := Problem.Definitions.inc", "Problem.Definitions.positive next", "r0 next"] do
+        unless text.contains fragment do throwError "Horn source structure missing: {fragment}"
+      checkEmission statement.value .problem (parts := statement.parts) (definitions := statement.definitions)
+  IO.println "Source preservation passed: named calls, lets, match scopes, mixed theories, and Horn clauses"
+
 private def checkNamedAssertions (env : Environment) : IO Unit := do
   let path := "tests/translation/bindings/named.smt2"
   runQuery env path (← IO.FS.readFile path) fun query => do
@@ -539,7 +591,7 @@ private def checkNamedClauses (env : Environment) : IO Unit := do
         unless parameters.size == 2 do
           throwError "a clause must bind its carrier and relation, but not the unused relation"
     checkEmission statement.value .problem problem.source
-      (problem.clauses.filterMap (·.source)) statement.parts
+      (problem.clauses.filterMap (·.source)) statement.parts statement.definitions
     let source ← render statement.value .problem (parts := statement.parts)
     for line in source.splitOn "\n" do
       if (line.toList.takeWhile (· == ' ')).length > 12 then
@@ -557,7 +609,7 @@ def main (args : List String) : IO Unit := do
       let action : MetaM Unit := do
         let statement ← problemStatement problem
         checkEmission statement.value .problem problem.source
-          (problem.clauses.filterMap (·.source)) statement.parts
+          (problem.clauses.filterMap (·.source)) statement.parts statement.definitions
       discard <| action.toIO
         { fileName := path, fileMap := default, maxRecDepth := 4096,
           options := Lean.maxRecDepth.set {} 4096 } { env }
@@ -585,6 +637,7 @@ def main (args : List String) : IO Unit := do
     ("bindings", fun env => do
       checkLetBindings env
       checkDefinitions env
+      checkSourceBindings env
       checkNamedAssertions env
       checkQuantifierHints env),
     ("horn", fun env => do

@@ -21,6 +21,7 @@ inductive GoalKind where
 structure Goal where
   value : Expr
   parts : Array StatementPart := #[]
+  definitions : Array StatementPart := #[]
   checkCommand : String := "check-sat"
   assumptionCount : Nat := 0
   kind : GoalKind := .refutation
@@ -97,11 +98,11 @@ private def renderPart (part : StatementPart) : MetaM String :=
     let binders ← parameters.mapM fun x =>
       return s!"({← printExpr x} : {← printExpr (← inferType x)})"
     let provenance := part.source.map (sourceComment part.label) |>.getD ""
-    let keyword := if (body.find? (·.isConstOf ``Classical.propDecidable)).isSome then
+    let keyword := if part.label == "definition" || (body.find? (·.isConstOf ``Classical.propDecidable)).isSome then
       "noncomputable def" else "def"
     return provenance ++ s!"{keyword} {part.name}" ++
       String.join (binders.toList.map ("\n    " ++ ·)) ++
-      s!" : Prop :={← definitionBody body}\n\n"
+      s!" : {← printExpr (← inferType body)} :={← definitionBody body}\n\n"
 
 /-- Print the checked helper itself, so its meaning is not duplicated in a template. -/
 private def renderHelper (name : Name) : MetaM String := do
@@ -144,7 +145,7 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
     s!"noncomputable def {definitionName} : Prop := by\n  classical\n  exact\n    " ++
       body.replace "\n" "\n    " ++ "\n"
     else s!"def {definitionName} : Prop :=\n  " ++ body.replace "\n" "\n  " ++ "\n"
-  let parts := String.join (← goal.parts.toList.mapM renderPart)
+  let parts := String.join (← (goal.definitions ++ goal.parts).toList.mapM renderPart)
   let statement := parts ++ provenance ++ s!"/-- {description} -/\n" ++ definition
   let proof := s!"-- Unfinished proof: replace sorry to establish {proofTarget}.\n" ++
     s!"theorem {theoremName} : {definitionName} := by\n  sorry\n"
@@ -155,7 +156,7 @@ Single-query files retain their original goal names. -/
 def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
     (maxRecDepth : Nat := defaultMaxRecDepth) : MetaM String := do
   if goals.isEmpty then throwError "expected at least one translated query"
-  let values := goals.flatMap fun goal => #[goal.value] ++ goal.parts.map (·.value)
+  let values := goals.flatMap fun goal => #[goal.value] ++ (goal.definitions ++ goal.parts).map (·.value)
   let datatypeGroups ← Datatypes.groups values
   let datatypeDeclarations ← Datatypes.render datatypeGroups printExpr
   let mut helpers : Array Name := #[]
@@ -179,8 +180,9 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
 /-- Render one file with statements first, followed by unfinished proofs. -/
 def render (value : Expr) (kind : GoalKind := .refutation)
     (source : Option Source.Ref := none) (assertions : Array Source.Ref := #[])
-    (maxRecDepth : Nat := defaultMaxRecDepth) (parts : Array StatementPart := #[]) : MetaM String :=
-  renderSession #[{ value, parts, kind, source, assertions }] (maxRecDepth := maxRecDepth)
+    (maxRecDepth : Nat := defaultMaxRecDepth) (parts : Array StatementPart := #[])
+    (definitions : Array StatementPart := #[]) : MetaM String :=
+  renderSession #[{ value, parts, definitions, kind, source, assertions }] (maxRecDepth := maxRecDepth)
 
 /-- Write Query.lean in a new directory. Existing destinations are refused. -/
 def writeFile (output : System.FilePath) (source : String) : IO Unit := do

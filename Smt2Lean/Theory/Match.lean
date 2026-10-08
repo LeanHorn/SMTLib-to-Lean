@@ -30,8 +30,8 @@ def reconstructTester : Smt.TermReconstructor := fun term => do
 /-- Pattern variables shadow only their own branch; cached compounds cannot cross branches. -/
 private def withBindings (binders : Array cvc5.Term) (values : Array Expr)
     (body : Smt.ReconstructM Expr) : Smt.ReconstructM Expr := do
-  let bindings := (← get).termCache.filter fun term _ =>
-    term.getKind! == .VARIABLE || term.getKind! == .CONSTANT
+  let bindings := (← get).termCache.filter fun term value =>
+    term.getKind! == .VARIABLE || term.getKind! == .CONSTANT || value.isFVar
   Smt.Reconstruct.withNewTermCache do
     let mut cache := bindings
     for binder in binders, value in values do cache := cache.insert binder value

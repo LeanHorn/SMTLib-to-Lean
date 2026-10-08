@@ -3,13 +3,14 @@ import Smt2Lean.Source
 
 namespace Smt2Lean.Backend
 
-/-- A checked definition, with earlier definitions already expanded in its body. -/
+/-- Keep both the checked expansion and the original calls for emission. -/
 structure ParsedDefinition where
   symbol : cvc5.Term
   /-- Original source name, even when the native parser needs a private spelling. -/
   name : String := symbol.toString
   parameters : Array cvc5.Term
   body : cvc5.Term
+  sourceBody : Option cvc5.Term := none
   source : Source.Ref
   /-- Native roots retaining constant-array requirements, including discarded subterms. -/
   arrayConstants : Array cvc5.Term := #[]
@@ -70,15 +71,22 @@ def ArrayConstructor.matches (constructor : ArrayConstructor) (term : cvc5.Term)
   term.getKind! == .STORE && term.getNumChildren == 3 &&
     term[0]! == constructor.base && term[1]! == constructor.index
 
+/-- Private identity wrappers preserve a source let through native parsing. -/
+structure SourceLet where
+  marker : cvc5.Term
+  bindings : Array (String × cvc5.Term)
+
 /-- An assertion and the metadata that must follow its scope. -/
 structure ParsedAssertion where
   term : cvc5.Term
+  surface : Option cvc5.Term := none
   source : Source.Ref
   arrayConstants : Array cvc5.Term := #[]
   deriving Inhabited
 
 /-- One validated query. Use native terms only inside `inspect`. -/
 structure ParsedQuery where
+  manager : Option cvc5.TermManager := none
   number : Nat := 1
   logic : Option String := none
   checkCommand : String := "check-sat"
@@ -89,6 +97,7 @@ structure ParsedQuery where
   datatypes : Array DatatypeGroup := #[]
   declarations : Array ParsedDeclaration := #[]
   definitions : Array ParsedDefinition := #[]
+  sourceLets : Array SourceLet := #[]
   assertions : Array ParsedAssertion := #[]
   /-- Private parser carriers, recognized by native identity rather than spelling. -/
   arrayConstructors : Array ArrayConstructor := #[]

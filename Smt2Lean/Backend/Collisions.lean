@@ -5,7 +5,7 @@ The adapter only tracks binding positions; cvc5 still checks all terms and sorts
 
 namespace Smt2Lean.Backend.Collisions
 
-private inductive SExpr where
+inductive SExpr where
   | atom (text : String)
   | list (items : Array SExpr)
   deriving Inhabited
@@ -13,15 +13,15 @@ private inductive SExpr where
 def sourceName (text : String) : String :=
   if text.startsWith "|" then ((text.drop 1).dropEnd 1).toString else text
 
-private def SExpr.name : SExpr → String
+def SExpr.name : SExpr → String
   | .atom text => sourceName text
   | _ => ""
 
-private partial def render : SExpr → String
+partial def render : SExpr → String
   | .atom text => text
   | .list items => "(" ++ String.intercalate " " (items.toList.map render) ++ ")"
 
-private partial def read (tokens : Array String) (start : Nat) : Except String (SExpr × Nat) := do
+partial def read (tokens : Array String) (start : Nat) : Except String (SExpr × Nat) := do
   let some token := tokens[start]? | throw "expected an expression"
   if token == ")" then throw "unexpected ')'"
   if token != "(" then return (.atom token, start + 1)
