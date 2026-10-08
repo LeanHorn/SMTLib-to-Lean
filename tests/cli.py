@@ -217,8 +217,10 @@ def main():
         output = tmp / "surface-forms-chc"
         run(CHC / "surface-forms.smt2", "--out", output)
         surface = check_generated(lean, output, goal="Problem")
-        # Source comments identify the ten original assertions; these yield 13 clauses.
-        assert surface.count("(clause ") == 10
+        # Every normalized clause retains its location in the ten original assertions.
+        clause_sources = [line.split(" (clause ", 1)[0]
+                          for line in surface.splitlines() if " (clause " in line]
+        assert len(clause_sources) == 13 and len(set(clause_sources)) == 10
         # This combined fixture is inconsistent: P 0, P -> Q, and P -> Q -> False.
         query = output / "Query.lean"
         query.write_text(surface.split("-- Proofs\n", 1)[0] +

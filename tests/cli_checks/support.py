@@ -44,6 +44,13 @@ def without_sources(text):
                    if not line.startswith("-- Source: "))
 
 
+def unfold_statement(source, target):
+    """Expose named assertions/clauses before simp, norm_num, or decide."""
+    goal = "Problem" if "Problem" in target else "Refutation"
+    parts = re.findall(r"^(?:noncomputable )?def ((?:Problem|Refutation)_\d+\.\w+)", source, re.M)
+    return "  unfold " + " ".join([goal, *parts]) + "\n"
+
+
 def check_lean(lean, source, *, complete=False):
     args = [str(lean)]
     if complete:
@@ -70,7 +77,7 @@ def check_generated(lean, output, *, goal="Refutation", count=1):
     assert "-- Source: " in statements
     assert "sorry" not in statements and "by\n  sorry" in proofs
     assert proofs.count("theorem ") == count and "def " not in proofs
-    assert statements.count(f"def {goal}") == count
+    assert len(re.findall(rf"^\s*(?:noncomputable )?def {goal}(?:_\d+)? : Prop", statements, re.M)) == count
     for number in range(1, count + 1):
         name = goal if count == 1 else f"{goal}_{number}"
         assert f"def {name} : Prop" in statements
@@ -84,4 +91,3 @@ def check_generated(lean, output, *, goal="Refutation", count=1):
     check_lean(lean, standalone)
     standalone.unlink()
     return source
-

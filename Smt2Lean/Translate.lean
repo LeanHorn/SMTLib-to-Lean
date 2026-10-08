@@ -1,5 +1,6 @@
 import Smt2Lean.Chc
 import Smt2Lean.Sharing
+import Smt2Lean.Statement
 import Smt2Lean.Theory.Arithmetic
 import Smt2Lean.Theory.BitVec
 import Smt2Lean.Theory.Model
@@ -224,15 +225,14 @@ def checkStatementAxioms (name : Name) : CoreM Unit := do
   unless unexpected.isEmpty do
     throwError "{name} depends on unsupported axioms: {unexpected}"
 
-/-- Install a closed proposition after checking its type and axiom dependencies. -/
-private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
-  let value ← Sharing.introduce value
+/-- Install a closed definition after checking its type and axiom dependencies. -/
+private def defineChecked (name : Name) (value : Expr) : MetaM Expr := do
   if value.hasFVar || value.hasLooseBVars || value.hasMVar then
     throwError "{name} contains unresolved variables"
   let declaration : Declaration := .defnDecl {
     name
     levelParams := []
-    type := q(Prop)
+    type := ← inferType value
     value
     hints := .abbrev
     safety := .safe
@@ -244,19 +244,64 @@ private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   setEnv checkedEnv
   return value
 
+private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
+  defineChecked name (← Sharing.introduce value)
+
+/-- Name each component, closing over just its used parameters and their dependencies. -/
+private def nameParts (parameters values : Array Expr) (sources : Array (Option Source.Ref))
+    (namespaceName : Name) (label : String) : MetaM (Array Expr × Array StatementPart) := do
+  let mut applications := #[]
+  let mut parts := #[]
+  for original in values, i in [:values.size] do
+    let mut value ← Sharing.introduce original
+    let mut arguments := #[]
+    for parameter in parameters.reverse do
+      if value.containsFVar parameter.fvarId! then
+        value ← mkLambdaFVars #[parameter] value (usedOnly := false)
+        arguments := arguments.push parameter
+    let digits := toString (i + 1)
+    let padded := String.ofList (List.replicate (3 - digits.length) '0') ++ digits
+    let name := namespaceName ++ Name.mkSimple (label ++ padded)
+    discard <| defineChecked name value
+    applications := applications.push (mkAppN (mkConst name) arguments.reverse)
+    parts := parts.push { name, value, source := sources[i]?.getD none, label := s!"{label.toLower} {i + 1}" }
+  return (applications, parts)
+
+private def closeRefutation (sortCount : Nat) (parameters laws assertions : Array Expr) : MetaM Expr := do
+  let body ← mkArrow (mkAndN assertions.toList) q(False)
+  let body ← if laws.isEmpty then pure body else mkArrow (mkAndN laws.toList) body
+  let carriers := parameters.extract 0 sortCount
+  let body ← mkForallFVars (parameters.extract sortCount parameters.size) body (usedOnly := false)
+  let body ← carriers.foldrM (init := body) fun carrier body => do
+    mkArrow (← mkAppM ``Nonempty #[carrier]) body
+  mkForallFVars carriers body (usedOnly := false)
+
+private def closeProblem (sortCount : Nat) (parameters laws clauses : Array Expr) : MetaM Expr := do
+  let carriers := parameters.extract 0 sortCount
+  let interpretations := parameters.extract sortCount parameters.size
+  let body ← interpretations.foldrM (init := mkAndN (laws.toList ++ clauses.toList)) fun parameter body => do
+    mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
+  carriers.foldrM (init := body) fun carrier body => do
+    let body := mkApp2 (mkConst ``And) (← mkAppM ``Nonempty #[carrier]) body
+    mkAppM ``Exists #[← mkLambdaFVars #[carrier] body (usedOnly := false)]
+
+/-- The kernel checks that naming components preserves the original proposition. -/
+private def checkAssembly (name : Name) (original assembled : Expr) : MetaM Unit := do
+  let declaration : Declaration := .thmDecl {
+    name := name ++ `assembly_eq
+    levelParams := []
+    type := mkApp2 (mkConst ``Iff) original assembled
+    value := mkApp (mkConst ``Iff.rfl) original }
+  discard <| ofExceptKernelException <|
+    (← getEnv).addDeclCore 0 (Lean.maxRecDepth.get (← getOptions)).toUSize declaration none
+
 /--
 Define the refutation over admissible models and declared terms.
 An empty assertion conjunction is `True`. Check the statement without proving it.
 -/
 def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM Expr := do
   let value ← withAssertionModel query fun parameters laws assertions => do
-    let body ← mkArrow (mkAndN assertions.toList) q(False)
-    let body ← if laws.isEmpty then pure body else mkArrow (mkAndN laws.toList) body
-    let carriers := parameters.extract 0 query.sorts.size
-    let body ← mkForallFVars (parameters.extract query.sorts.size parameters.size) body (usedOnly := false)
-    let body ← carriers.foldrM (init := body) fun carrier body => do
-      mkArrow (← mkAppM ``Nonempty #[carrier]) body
-    mkForallFVars carriers body (usedOnly := false)
+    closeRefutation query.sorts.size parameters laws assertions
   atSource query.source "Refutation" (defineProposition name value) (queryNumber := query.number)
 
 /--
@@ -265,13 +310,30 @@ Retain unused declarations; an empty clause conjunction is `True`. Check without
 -/
 def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr := do
   let value ← withClauseModel problem fun parameters laws clauses => do
-    let carriers := parameters.extract 0 problem.sorts.size
-    let interpretations := parameters.extract problem.sorts.size parameters.size
-    let body ← interpretations.foldrM (init := mkAndN (laws.toList ++ clauses.toList)) fun parameter body => do
-      mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
-    carriers.foldrM (init := body) fun carrier body => do
-      let body := mkApp2 (mkConst ``And) (← mkAppM ``Nonempty #[carrier]) body
-      mkAppM ``Exists #[← mkLambdaFVars #[carrier] body (usedOnly := false)]
+    closeProblem problem.sorts.size parameters laws clauses
   atSource problem.source "Problem" (defineProposition name value) (chc := true) (queryNumber := problem.number)
+
+/-- Keep assertion boundaries through emission; the original model quantifiers are unchanged. -/
+def refutationStatement (query : ParsedQuery) (name : Name := `Refutation) : MetaM Statement :=
+  atSource query.source "Refutation" (queryNumber := query.number) <|
+    withAssertionModel query fun parameters laws assertions => do
+      let original ← closeRefutation query.sorts.size parameters laws assertions
+      let (calls, parts) ← nameParts parameters assertions (query.assertionSources.map some) name "Assertion"
+      let parts := parts.mapIdx fun i part =>
+        if i < assertions.size - query.assumptionCount then part else
+          { part with label := s!"assumption {i + 1 - (assertions.size - query.assumptionCount)}" }
+      let value ← defineProposition name (← closeRefutation query.sorts.size parameters laws calls)
+      checkAssembly name original value
+      return { value, parts }
+
+/-- Keep each Horn clause as a separate definition rather than expanding the whole problem. -/
+def problemStatement (problem : Chc.Problem) (name : Name := `Problem) : MetaM Statement :=
+  atSource problem.source "Problem" (chc := true) (queryNumber := problem.number) <|
+    withClauseModel problem fun parameters laws clauses => do
+      let original ← closeProblem problem.sorts.size parameters laws clauses
+      let (calls, parts) ← nameParts parameters clauses (problem.clauses.map (·.source)) name "Clause"
+      let value ← defineProposition name (← closeProblem problem.sorts.size parameters laws calls)
+      checkAssembly name original value
+      return { value, parts }
 
 end Smt2Lean.Translate

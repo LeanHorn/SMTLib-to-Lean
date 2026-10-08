@@ -135,6 +135,43 @@ That input passes in the final run under the same limit. This does not establish
 the cause of the earlier timeout; the intermediate run also has a large
 unexplained gap in its calendar timestamps.
 
+## Full TriCera adt-arr run
+
+`tricera-635.csv` pins every SMT-LIB file in the same `adt-arr/` snapshot:
+635 paths, 630 nonempty assertion sets and five check-only controls. All five
+controls share one content hash; one pair of nonempty inputs is also identical.
+Thus there are 629 unique nonempty inputs. Keep duplicates and controls in the
+run, and report the controls separately from substantive translation coverage.
+
+The manifest records 390 originals and 245 preprocessed inputs, 29,191,605 source
+bytes and 56,906 assertions. It includes all twenty checkpoint inputs unchanged.
+The separate `adt-arr-heap/` encoding is outside this run.
+
+```sh
+lake env python3 benchmarks/run.py \
+  --list benchmarks/tricera-635.csv \
+  --root ../SMTLib-benchmarks/corpora \
+  --out benchmarks/results/tricera-635-f05 \
+  --translation-timeout 30 --lean-timeout 60 --max-rec-depth 4096
+```
+
+This uses the same translator binary, runner, dependencies and sequential protocol
+as the final 30-input checkpoint. Other limits remain 10 MiB per input, 16 MiB per
+output/log file, and 2048 MiB per Lean checker. Generated proof templates remain
+unproved. Choose a new output directory for a rerun; existing runs are preserved.
+
+The completed run at `8b654be` passed **609/635** files: **604/630 substantive
+inputs (95.9%)**, plus all five check-only controls. Of the remaining substantive
+inputs, 24 reached the 16 MiB output-file cap and two reached the 30-second
+translation timeout. Every completed translation passed both Lean checks; there
+were no unsupported-feature rejections or Lean-check failures. All twenty
+checkpoint inputs passed again. Elapsed time was approximately 56 minutes.
+
+The local `results/tricera-635-f05/overview.md`, `results.csv` and per-case artifacts
+preserve the breakdown and failures. A capped output inspected during the run was
+95.4% leading whitespace, identifying excessive printer indentation as a concrete
+follow-up. The run used unchanged limits and did not retry failures.
+
 ## Fifty-input expansion
 
 ```sh

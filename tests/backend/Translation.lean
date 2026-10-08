@@ -524,8 +524,46 @@ private def checkCore (env : Environment) : IO Unit := do
       checkRefutation query q(∀ P : Int → Prop, ((∀ x : Int, P x) ∧ (∃ x : Int, ¬P x)) → False)
   IO.println "Translation passed: 33 refutations and emitted definitions; types and axiom dependencies checked"
 
+private def checkNamedClauses (env : Environment) : IO Unit := do
+  let premises := String.intercalate " " (List.replicate 100 "(R x)")
+  let input := "(set-logic HORN)(declare-sort S 0)(declare-fun R (S) Bool)" ++
+    "(declare-fun unused (Int) Bool)(assert (forall ((x S)) (R x)))" ++
+    s!"(assert (forall ((x S)) (=> (and {premises}) (R x))))(check-sat)"
+  runProblem env "long clause" input fun problem => do
+    let original ← defineProblem problem `Original
+    let statement ← problemStatement problem
+    checkEqual statement.value original
+    unless statement.parts.size == 2 do throwError "lost clause boundaries"
+    for part in statement.parts do
+      lambdaTelescope part.value fun parameters _ => do
+        unless parameters.size == 2 do
+          throwError "a clause must bind its carrier and relation, but not the unused relation"
+    checkEmission statement.value .problem problem.source
+      (problem.clauses.filterMap (·.source)) statement.parts
+    let source ← render statement.value .problem (parts := statement.parts)
+    for line in source.splitOn "\n" do
+      if (line.toList.takeWhile (· == ' ')).length > 12 then
+        throwError "logical-chain indentation grew with the number of premises"
+  IO.println "Named clauses passed: dependent parameters, unused relations, 100 premises, and emitted equivalence"
+
 /-- Bound the lifetime of imported/elaborated environments across the full suite. -/
 def main (args : List String) : IO Unit := do
+  if let ["--emission", path] := args then
+    initSearchPath (← findSysroot)
+    unsafe enableInitializersExecution
+    let env ← importModules #[{ module := `Smt2Lean.Translate }] {} (loadExts := true)
+    let input ← IO.FS.readFile path
+    (Smt2Lean.Chc.parseAndInspectProblem input (name := path) fun problem => do
+      let action : MetaM Unit := do
+        let statement ← problemStatement problem
+        checkEmission statement.value .problem problem.source
+          (problem.clauses.filterMap (·.source)) statement.parts
+      discard <| action.toIO
+        { fileName := path, fileMap := default, maxRecDepth := 4096,
+          options := Lean.maxRecDepth.set {} 4096 } { env }
+    ).runIO
+    IO.println "Emission equivalence passed: named clauses, printed definitions, and assembled Problem"
+    return
   let groups : Array (String × (Environment → IO Unit)) := #[
     ("scopes", fun env => do
       checkSharing env
@@ -550,6 +588,7 @@ def main (args : List String) : IO Unit := do
       checkNamedAssertions env
       checkQuantifierHints env),
     ("horn", fun env => do
+      checkNamedClauses env
       checkHornReconstruction env
       checkHornProblems env),
     ("core", checkCore)]

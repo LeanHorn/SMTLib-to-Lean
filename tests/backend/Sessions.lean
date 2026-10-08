@@ -131,7 +131,7 @@ def checkSessions (env : Environment) : IO Unit := do
     let [statements, proofs] := source.splitOn "-- Proofs\n"
       | throw (IO.userError "wrong session layout")
     unless !statements.contains "sorry" && !proofs.contains "def " &&
-        (statements.splitOn s!"def {baseName}_").length == expected.size + 1 &&
+        (List.range expected.size).all (fun i => statements.contains s!"def {baseName}_{i + 1} : Prop") &&
         (proofs.splitOn "theorem ").length == expected.size + 1 do
       throw (IO.userError "wrong session statement/proof count")
     if fixture == "smt" then

@@ -1,4 +1,5 @@
-from .support import (ROOT, INTEGERS, CHC, run, check_lean, check_generated)
+from .support import (ROOT, INTEGERS, CHC, run, check_lean, check_generated, unfold_statement)
+
 
 def check_integer_division(lean, tmp):
     """Check model choices at zero and translate the complete original CHC corpus."""
@@ -43,7 +44,8 @@ def check_integer_division(lean, tmp):
         run(source, "--out", output)
         generated = check_generated(lean, output, goal="Problem" if logic == "HORN" else "Refutation")
         completed = output / "Query.lean"
-        completed.write_text(generated.split("-- Proofs\n", 1)[0] + f"theorem checked : {target} := by\n" + proof)
+        completed.write_text(generated.split("-- Proofs\n", 1)[0] + f"theorem checked : {target} := by\n"
+                             + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     print("Integer division passed: six completed semantic proofs; all four original CHCs elaborate with 28 clauses")
 
@@ -114,7 +116,7 @@ def check_reals(lean, tmp):
             assert "realDivZero" not in generated
         completed = output / "Query.lean"
         completed.write_text("import Mathlib.Tactic.NormNum\n" + generated.split("-- Proofs\n", 1)[0]
-                             + f"theorem checked : {target} := by\n" + proof)
+                             + f"theorem checked : {target} := by\n" + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     # Unused live declarations still affect the quantified domain and import profile.
     for label, body, profile in [
@@ -193,7 +195,7 @@ def check_conversions(lean, tmp):
             assert generated.startswith("import Mathlib.Data.Real.Basic\n")
         completed = output / "Query.lean"
         completed.write_text("import Mathlib.Tactic.NormNum\n" + generated.split("-- Proofs\n", 1)[0]
-                             + f"theorem checked : {target} := by\n" + proof)
+                             + f"theorem checked : {target} := by\n" + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     # A failed command after a valid conversion snapshot must leave no partial file.
     for name, tail, reason in [
@@ -205,5 +207,4 @@ def check_conversions(lean, tmp):
         assert reason in run(source, "--out", output, code=1).stderr
         assert not output.exists()
     print("Mixed arithmetic passed: 12 exact boundary cases, eight completed proofs, and SMT/CHC fixtures")
-
 

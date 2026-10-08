@@ -18,12 +18,13 @@ def runQuery (env : Environment) (name input : String)
 
 def checkEmission (value : Expr) (kind : GoalKind := .refutation)
     (origin : Option Smt2Lean.Source.Ref := none)
-    (assertions : Array Smt2Lean.Source.Ref := #[]) : MetaM Unit := do
+    (assertions : Array Smt2Lean.Source.Ref := #[])
+    (parts : Array Smt2Lean.StatementPart := #[]) : MetaM Unit := do
   let (definitionName, theoremName) := match kind with
     | .refutation => (`Refutation, `refutation)
     | .problem => (`Problem, `problem)
   let expectedAxioms ← collectAxioms definitionName
-  let source ← render value kind origin assertions
+  let source ← render value kind origin assertions (parts := parts)
   for ref in assertions do
     unless ref.names.isEmpty || source.contains ref.namedContext do
       throwError "generated output lost assertion labels"
@@ -39,9 +40,10 @@ def checkEmission (value : Expr) (kind : GoalKind := .refutation)
     | throwError "generated file did not elaborate"
   let some (.defnInfo definition) := env.find? definitionName
     | throwError "generated statement has no {definitionName} definition"
-  let helpers := value.getUsedConstants.filter Smt2Lean.Helpers.isHelper
+  let values := #[value] ++ parts.map (·.value)
+  let helpers := (values.foldl (fun names value => names ++ value.getUsedConstants) #[]).toList.eraseDups.toArray.filter Smt2Lean.Helpers.isHelper
   -- Generated datatype names alone cannot establish preservation of their meaning.
-  for group in (← Smt2Lean.Emit.Datatypes.groups #[value]) do
+  for group in (← Smt2Lean.Emit.Datatypes.groups values) do
     for name in group do
       let original ← getConstInfoInduct name
       let emitted ← withEnv env (getConstInfoInduct name)
@@ -63,10 +65,17 @@ def checkEmission (value : Expr) (kind : GoalKind := .refutation)
       throwError "helper universe parameters changed"
     checkEqual emitted.type original.type
     checkEqual emitted.value original.value
+  for part in parts do
+    let some (.defnInfo emitted) := env.find? part.name
+      | throwError "missing emitted component {part.name}"
+    checkEqual emitted.type (← inferType part.value)
+    let emittedValue ← withEnv env (deltaExpand emitted.value Smt2Lean.Helpers.isHelper)
+    checkEqual emittedValue (← deltaExpand part.value Smt2Lean.Helpers.isHelper)
   checkEqual definition.type q(Prop)
   -- Unfold in each environment separately: matching names alone cannot establish meaning.
-  let emitted ← withEnv env (deltaExpand definition.value Smt2Lean.Helpers.isHelper)
-  let original ← deltaExpand value Smt2Lean.Helpers.isHelper
+  let expand := fun name => Smt2Lean.Helpers.isHelper name || parts.any (·.name == name)
+  let emitted ← withEnv env (deltaExpand definition.value expand)
+  let original ← deltaExpand value expand
   checkEqual emitted original
   let statementAxioms ← withEnv env (collectAxioms definitionName)
   unless statementAxioms.size == expectedAxioms.size &&
@@ -90,14 +99,15 @@ def checkAxioms (name : Name) (usesClassical : Bool)
 
 def checkRefutation (query : ParsedQuery) (expected : Expr)
     (usesClassical : Bool := false) : MetaM Unit := do
-  let value ← defineRefutation query
+  let statement ← refutationStatement query
+  let value := statement.value
   checkEqual value expected
   let .defnInfo definition ← getConstInfo `Refutation
     | throwError "expected a definition named Refutation"
   checkEqual definition.type q(Prop)
   checkEqual definition.value value
   checkAxioms `Refutation usesClassical
-  checkEmission value (origin := query.source) (assertions := query.assertionSources)
+  checkEmission value (origin := query.source) (assertions := query.assertionSources) (parts := statement.parts)
 
 def checkClauseValues (parameters actual expected : Array Expr) : MetaM Unit := do
   unless actual.size == expected.size do throwError "wrong reconstructed clause count"
@@ -116,7 +126,8 @@ def runProblem (env : Environment) (name input : String)
 
 def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr)
     (usesClassical : Bool := false) (extraAxioms : Array Name := #[]) : MetaM Unit := do
-  let value ← defineProblem problem
+  let statement ← problemStatement problem
+  let value := statement.value
   if value.hasFVar || value.hasMVar || value.hasLooseBVars then
     throwError "Problem contains unresolved variables"
   checkEqual value expected
@@ -126,7 +137,7 @@ def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr)
   checkEqual definition.value value
   checkAxioms `Problem usesClassical extraAxioms
   checkEmission value (kind := .problem) (origin := problem.source)
-    (assertions := problem.clauses.filterMap (·.source))
+    (assertions := problem.clauses.filterMap (·.source)) (parts := statement.parts)
 
 /-- Even nested reconstructions must not reuse the enclosing query's parameters. -/
 def checkFunctionIsolation (query : ParsedQuery) : MetaM Unit :=

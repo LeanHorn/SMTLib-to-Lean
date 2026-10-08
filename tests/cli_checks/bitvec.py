@@ -1,4 +1,4 @@
-from .support import (ROOT, CHC, run, check_lean, check_generated)
+from .support import (ROOT, CHC, run, check_lean, check_generated, unfold_statement)
 
 def check_bitvectors(lean, tmp):
     """Standalone core output and completed proofs distinguishing widths and signedness."""
@@ -54,7 +54,7 @@ def check_bitvectors(lean, tmp):
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
-                             + f"theorem checked : {target} := by\n" + proof)
+                             + f"theorem checked : {target} := by\n" + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     # Reject the entire session on a later unsupported operator or stale width alias.
     for name, tail, reason in [
@@ -121,7 +121,7 @@ def check_bitvector_widths(lean, tmp):
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
-                             + f"theorem checked : {target} := by\n" + proof)
+                             + f"theorem checked : {target} := by\n" + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     for name, tail, reason in [
         ("slice", "(assert (= ((_ extract 4 0) #xf) #b01111))", "high extract index"),
@@ -218,7 +218,7 @@ theorem checked_bvashr {w : Nat} (x y : BitVec w) : SMT.bvashr x y = x.sshiftRig
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
-                             + f"theorem checked : {target} := by\n" + proof)
+                             + f"theorem checked : {target} := by\n" + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     for name, tail, reason in [
         ("width", "(assert (= (bvshl #x1 #b1) #x2))", "comparable bit-vector"),
@@ -286,7 +286,7 @@ def check_bitvector_division(lean, tmp):
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
-                             + f"theorem checked : {target} := by\n" + proof)
+                             + f"theorem checked : {target} := by\n" + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     for name, tail, reason in [
         ("width", "(assert (= (bvsdiv #x1 #b1) #x1))", "comparable bit-vector"),
@@ -357,7 +357,7 @@ def check_bitvector_conversions(lean, tmp):
         assert generated.startswith("import Init\n")
         completed = output / "Query.lean"
         completed.write_text(generated.split("-- Proofs\n", 1)[0]
-                             + f"theorem checked : {target} := by\n" + proof)
+                             + f"theorem checked : {target} := by\n" + unfold_statement(generated, target) + proof)
         check_lean(lean, completed, complete=True)
     for name, tail, reason in [
         ("width", "(assert (= ((_ int_to_bv 0) 1) #b1))", "expecting bit-width > 0"),

@@ -21,13 +21,20 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
     let problem? ← if query.logic == some "HORN" then
       some <$> Chc.validateQuery query name else pure none
     let action : MetaM Goal := do
-      let (value, kind) ← match problem? with
+      let (statement, kind) ← match problem? with
         | some problem => do
-          pure (← Translate.defineProblem problem (.mkSimple s!"Problem_{query.number}"), .problem)
+          let statement ← Translate.problemStatement problem (.mkSimple s!"Problem_{query.number}")
+          let assertionCount := query.assertions.size - query.assumptionCount
+          let parts := (statement.parts.zip problem.clauses).map fun (part, clause) =>
+            if clause.assertionNumber > assertionCount then
+              { part with label := s!"assumption {clause.assertionNumber - assertionCount}" }
+            else part
+          pure ({ statement with parts }, .problem)
         | none => do
-          pure (← Translate.defineRefutation query (.mkSimple s!"Refutation_{query.number}"), .refutation)
+          pure (← Translate.refutationStatement query (.mkSimple s!"Refutation_{query.number}"), .refutation)
       return {
-        value, kind, source := query.source, assertions := query.assertionSources
+        value := statement.value, parts := statement.parts
+        kind, source := query.source, assertions := query.assertionSources
         checkCommand := query.checkCommand, assumptionCount := query.assumptionCount }
     let (goal, checkedState, _) ← action.toIO context (← state.get)
     state.set checkedState
