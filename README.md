@@ -1,14 +1,18 @@
 # SMTLib-to-Lean
 
-Translate SMT-LIB queries into Lean 4 propositions, and
-do an interactive proof
-when SMT gets stuck, or
-you want higher trust.
+Translate SMT-LIB queries into Lean 4 propositions for interactive proof when an
+SMT solver cannot settle a query. Generated statements are kernel-checked; proof
+templates contain `sorry` until you complete them.
 
-## Setup and usage
+Support includes Bool, Int, Real and bitvector expressions, functions,
+quantifiers, nonrecursive definitions, let bindings, arrays, monomorphic
+datatypes, incremental sessions, and a restricted Horn-clause fragment.
+Full SMT-LIB support is in progress.
+
+## Install
 
 Install [elan](https://github.com/leanprover/elan), Git, and a C++ toolchain
-(Xcode Command Line Tools on macOS). Elan selects the pinned Lean version.
+(Xcode Command Line Tools on macOS), then run:
 
 ```sh
 git clone https://github.com/LeanHorn/SMTLib-to-Lean.git
@@ -16,82 +20,39 @@ cd SMTLib-to-Lean
 lake build
 ```
 
-The first build downloads dependencies and cvc5's native libraries.
-To translate a file and typecheck the result:
+The project pins Lean and its dependencies. The first build downloads dependencies
+and cvc5's native libraries.
 
-```sh
-lake exe smt2lean input.smt2 --out output
-lake env lean output/Query.lean
-```
-
-The output directory must be new, with an existing parent. Each `check-sat`
-becomes a statement in `Query.lean`, followed by a proof template containing `sorry`.
-Open that file in your Lean editor to complete the proof.
-
-Translation and generated files use Lean's `maxRecDepth` of **4096**. Override it with
-`lake exe smt2lean input.smt2 --out output --max-rec-depth 8192`.
-
-## Demo
-
-[tests/translation/bool/contradiction.smt2](tests/translation/bool/contradiction.smt2)
-asserts both `p` and its negation:
-
-```smt2
-(set-logic QF_UF)
-(declare-const p Bool)
-(assert p)
-(assert (not p))
-(check-sat)
-(exit)
-```
-
-Run:
+## Try it
 
 ```sh
 lake exe smt2lean tests/translation/bool/contradiction.smt2 --out boolean-demo
 lake env lean boolean-demo/Query.lean
 ```
 
-Generated `Query.lean` (source comments omitted):
+The output directory must be new, with an existing parent. Each query produces
+named assertions or clauses, a statement, and a proof template in `Query.lean`.
+SMT queries produce a `Refutation` goal; Horn queries produce a `Problem` goal
+asserting the existence of satisfying relations.
 
-```lean
-import Init
-
-set_option maxRecDepth 4096
-
--- Statements
-
-def Refutation : Prop :=
-  ∀ (p0 : Prop), p0 ∧ ¬p0 → False
-
--- Proofs
-
-theorem refutation : Refutation := by
-  sorry
-```
-
-The `sorry` warning means the proof is unfinished. Replace `sorry` with:
+For this example, replace `sorry` with:
 
 ```lean
   intro p h
   exact h.2 h.1
 ```
 
-Run the Lean command again; the proof now checks without `sorry`.
-For broader examples, try [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.smt2).
+Run the Lean command again to check the completed proof. For broader examples,
+see [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.smt2).
+Use `--max-rec-depth N` to override the default recursion limit of 4096.
 
 ## Tests
 
-Run the complete translator regression suite:
-
 ```sh
-tests/run.sh
+bash tests/run.sh
 ```
 
-To measure translation and Lean checking on your own inputs, see the
-[benchmark runner](benchmarks/README.md).
+For focused CLI checks, list groups with `python3 tests/cli.py --list`, then run
+`lake env python3 tests/cli.py horn` (build `smt2lean` first).
 
-## Research prototype in progress
-
-This prototype is part of ongoing research and active development. 
-We anticipate things will break and improve :)!
+For benchmark-runner options: `lake env python3 benchmarks/run.py --help`.
