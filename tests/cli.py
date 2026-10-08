@@ -52,7 +52,7 @@ def check_cli(lean, tmp):
     ]):
         run(fixture, *options)
         output = tmp / ("depth-after" if index == 0 else "depth-before")
-        generated = check_generated(lean, output)
+        generated = check_generated(lean, output) if index == 0 else read_generated(output)
         assert generated == expected["contradiction"].replace("maxRecDepth 4096", "maxRecDepth 8192")
 
     # A small limit must also apply inside the translator, before output exists.
@@ -65,17 +65,14 @@ def check_cli(lean, tmp):
     run(tmp / "missing.smt2", "--out", missing_output, code=1)
     assert not missing_output.exists()
 
-    # Bad configuration rejects the whole query, with locations, in either mode.
+    # The parser owns the full option-value matrix. Keep each CLI diagnostic category
+    # and verify that both SMT and Horn failures leave no output.
     for logic in ["ALL", "HORN"]:
         for number, (command, reason) in enumerate([
             ('(set-option :produce-models "true")', "invalid value for :produce-models"),
-            ("(set-option :random-seed -1)", "invalid value for :random-seed"),
-            ("(set-option :global-declarations true)", "must be set before"),
             ("(set-option :unknown false)", "unsupported solver option"),
             ("(set-info :unknown true)", "unsupported metadata"),
-            ("(get-proof)", "requires a preceding check"),
             ("(get-model)", "requires a preceding check"),
-            ("(get-unsat-core)", "requires a preceding check"),
         ]):
             source, output = tmp / f"config-{logic}-{number}.smt2", tmp / f"config-{logic}-{number}"
             source.write_text(f"(set-logic {logic})\n(assert false)\n{command}\n(check-sat)")
@@ -129,7 +126,7 @@ def check_cli(lean, tmp):
     shifted, shifted_output = tmp / "shifted.smt2", tmp / "shifted"
     shifted.write_bytes(('\n\n' + text).encode())
     run(shifted, "--out", shifted_output)
-    shifted_code = check_generated(lean, shifted_output)
+    shifted_code = read_generated(shifted_output)
     assert '":7:1-8:11 (assertion 1, command 4)' in shifted_code
     assert without_sources(shifted_code) == without_sources(generated)
     for name, text, location, reason in [

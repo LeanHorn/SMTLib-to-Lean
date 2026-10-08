@@ -52,6 +52,8 @@ Use `--max-rec-depth N` to override the default recursion limit of 4096.
 bash tests/run.sh
 ```
 
+Runs independent test groups with four workers; use `--jobs 1` for a serial run.
+
 For focused CLI checks, list groups with `python3 tests/cli.py --list`, then run
 `lake env python3 tests/cli.py horn` (build `smt2lean` first).
 

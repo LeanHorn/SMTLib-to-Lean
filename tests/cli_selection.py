@@ -7,10 +7,12 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 import cli
+import run as suite
 from cli_checks import support
 
 
@@ -108,6 +110,64 @@ class SelectionTests(unittest.TestCase):
                                  ["cd", "/repo with spaces", "&&", "lake", "env",
                                   "python3", "tests/cli.py", "horn"])
                 self.assertNotIn("CLI groups passed", report)
+
+
+class SuiteTests(unittest.TestCase):
+    def test_workers_overlap_and_success_cleans_logs(self):
+        calls = []
+        barrier = threading.Barrier(2, timeout=5)
+
+        def check(item, directory):
+            calls.append(item[0])
+            self.assertTrue(directory.is_dir())
+            barrier.wait()  # Fails if the runner serializes the two workers.
+            return 0
+
+        with tempfile.TemporaryDirectory() as parent:
+            logs = Path(parent) / "logs"
+            logs.mkdir()
+            with patch.object(suite, "checks", return_value={name: [] for name in "abcd"}), \
+                    patch.object(suite, "run_check", side_effect=check), \
+                    patch.object(suite.tempfile, "mkdtemp", return_value=str(logs)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(suite.main(["--jobs", "2"]), 0)
+            self.assertCountEqual(calls, list("abcd"))
+            self.assertFalse(logs.exists())
+
+    def test_failure_keeps_diagnostics_and_returns_nonzero(self):
+        with tempfile.TemporaryDirectory() as parent:
+            logs = Path(parent) / "logs"
+            logs.mkdir()
+            checks = {
+                "bad": [sys.executable, "-c", "import sys; sys.stderr.write('sentinel'); sys.exit(3)"],
+                "missing": [str(Path(parent) / "missing-executable")],
+            }
+            output = io.StringIO()
+            with patch.object(suite, "checks", return_value=checks), \
+                    patch.object(suite.tempfile, "mkdtemp", return_value=str(logs)), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(suite.main(["--jobs", "2"]), 1)
+            self.assertEqual((logs / "bad.log").read_text(), "sentinel")
+            self.assertIn("missing-executable", (logs / "missing.log").read_text())
+            self.assertIn("FAIL bad", output.getvalue())
+            self.assertIn("Rerun:", output.getvalue())
+            self.assertNotIn("All 2 groups passed", output.getvalue())
+
+    def test_selection_and_argument_validation(self):
+        with patch.object(suite, "run_check", return_value=0) as check, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(suite.main(["cli-sorts", "cli-sorts"]), 0)
+            check.assert_called_once()
+            self.assertEqual(check.call_args.args[0][0], "cli-sorts")
+        with patch.object(suite, "run_check") as check, \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(suite.main(["--list"]), 0)
+            for args in [["--jobs", "0"], ["--jobs", "-1"], ["typo"]]:
+                with self.assertRaises(SystemExit) as error:
+                    suite.main(args)
+                self.assertEqual(error.exception.code, 2)
+            check.assert_not_called()
 
 
 class CompilationTests(unittest.TestCase):
