@@ -187,8 +187,10 @@ def check_sessions(lean, tmp):
             assert "success" not in result.stdout and "unsat" not in result.stdout
             generated = check_generated(lean, output, goal=goal, count=count)
             if name == "single":
-                expected_body = "True → False" if logic == "ALL" else "True"
+                expected_body = "True → False" if logic == "ALL" else "Problem_1.Clauses"
                 assert f"def {goal} : Prop :=\n  {expected_body}\n" in generated
+                if logic == "HORN":
+                    assert "def Problem_1.Clauses : Prop :=\n  True\n" in generated
 
     # A later failure must leave no output, even after reconstructing query 1.
     for name, text, reason in [
@@ -199,8 +201,8 @@ def check_sessions(lean, tmp):
         ("clause", "(set-logic HORN)\n(declare-fun P (Int) Bool)\n(assert (P 0))\n"
          "(check-sat)\n(assert (=> (not (P 0)) false))\n(check-sat)",
          "CHC relation inside a theory guard"),
-        ("declaration", "(set-logic HORN)\n(check-sat)\n(declare-const x Int)\n(check-sat)",
-         "unsupported CHC declaration"),
+        ("declaration", "(set-logic HORN)\n(check-sat)\n(declare-const x String)\n(check-sat)",
+         "unsupported declaration sort"),
     ]:
         source, output = tmp / f"session-bad-{name}.smt2", tmp / f"session-bad-{name}"
         source.write_text(text)
@@ -375,7 +377,8 @@ def check_horn(lean, tmp):
     source.write_text("(set-logic ; parsed as HORN\n HORN)\n(check-sat)")
     run(source, "--out", output)
     empty_horn = check_generated(lean, output, goal="Problem")
-    assert "def Problem : Prop :=\n  True\n" in empty_horn
+    assert "def Problem_1.Clauses : Prop :=\n  True\n" in empty_horn
+    assert "def Problem : Prop :=\n  Problem_1.Clauses\n" in empty_horn
 
     # The same assertions follow the SMT path without an explicit HORN logic.
     smt_source = None
@@ -433,8 +436,8 @@ def check_horn(lean, tmp):
         ("hinted-clause", horn_prefix +
          '(assert (forall ((x Int)) (! (=> (not (P x)) false) :pattern ((P x)) :qid bad)))\n(check-sat)',
          "4:1: query 1: command 4: clause 2:", "CHC relation inside a theory guard"),
-        ("global-int", "(set-logic HORN)\n(declare-const x Int)\n(check-sat)",
-         "2:1: query 1: command 2:", "unsupported CHC declaration"),
+        ("global-string", "(set-logic HORN)\n(declare-const x String)\n(check-sat)",
+         "2:1: query 1: command 2:", "unsupported declaration sort"),
         ("malformed-tail", horn_prefix + "(check-sat)\n(assert",
          "5:8: query 2: command 5:", "unterminated command"),
         ("missing-check", horn_prefix, "4:1: query 1: command 4:", "expected at least one check-sat"),

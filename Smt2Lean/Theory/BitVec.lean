@@ -54,6 +54,7 @@ def reconstruct : Smt.TermReconstructor := fun term => do
       .BITVECTOR_UDIV, .BITVECTOR_UREM, .BITVECTOR_SDIV, .BITVECTOR_SREM, .BITVECTOR_SMOD,
       .BITVECTOR_UBV_TO_INT, .BITVECTOR_SBV_TO_INT, .BITVECTOR_NEGO,
       .BITVECTOR_UADDO, .BITVECTOR_SADDO, .BITVECTOR_UMULO, .BITVECTOR_SMULO,
+      .BITVECTOR_USUBO, .BITVECTOR_SSUBO, .BITVECTOR_SDIVO,
       .BITVECTOR_ROTATE_LEFT, .BITVECTOR_ROTATE_RIGHT].contains kind do return none
   let width : Q(Nat) ← pure <| toExpr term[0]!.getSort!.getBitVectorSize!.toNat
   let x : Q(BitVec $width) ← Smt.Reconstruct.reconstructTerm term[0]!
@@ -91,6 +92,9 @@ def reconstruct : Smt.TermReconstructor := fun term => do
   | .BITVECTOR_SADDO => return q(BitVec.saddOverflow $x $y = true)
   | .BITVECTOR_UMULO => return q(BitVec.umulOverflow $x $y = true)
   | .BITVECTOR_SMULO => return q(BitVec.smulOverflow $x $y = true)
+  | .BITVECTOR_USUBO => return q(BitVec.usubOverflow $x $y = true)
+  | .BITVECTOR_SSUBO => return q(BitVec.ssubOverflow $x $y = true)
+  | .BITVECTOR_SDIVO => return q(BitVec.sdivOverflow $x $y = true)
   | .BITVECTOR_NAND | .BITVECTOR_NOR | .BITVECTOR_XNOR | .BITVECTOR_COMP
   | .BITVECTOR_SHL | .BITVECTOR_LSHR | .BITVECTOR_ASHR =>
     return mkApp3 (mkConst (← Helpers.bitvec kind)) width x y

@@ -308,7 +308,8 @@ def check_bitvector_conversions(lean, tmp):
         generated = check_generated(lean, output, goal=goal)
         assert generated.startswith("import Init\n")
         for operation in ["ofInt", "toNat", "toInt", "negOverflow", "uaddOverflow",
-                          "saddOverflow", "umulOverflow", "smulOverflow"]:
+                          "saddOverflow", "umulOverflow", "smulOverflow",
+                          "usubOverflow", "ssubOverflow", "sdivOverflow"]:
             assert operation in generated
     exact = [
         "(= ((_ int_to_bv 8) (- 1)) #xff)", "(= ((_ int2bv 8) 257) #x01)",
@@ -321,6 +322,8 @@ def check_bitvector_conversions(lean, tmp):
         "(bvsaddo #x7f #x01)", "(not (bvuaddo #x7f #x01))",
         "(bvumulo #x80 #x02)", "(bvsmulo #x80 #xff)",
         "(not (bvumulo #x0f #x02))", "(not (bvsmulo #x0f #x02))",
+        "(bvusubo #x00 #x01)", "(bvssubo #x80 #x01)",
+        "(bvsdivo #x80 #xff)", "(not (bvsdivo #x7f #xff))", "(not (bvsdivo #x80 #x00))",
         "(= ((_ int_to_bv 129) 680564733841876926926749214863536422913) (_ bv1 129))",
         "(= ((_ int_to_bv 129) (- 680564733841876926926749214863536422913))"
         " (_ bv680564733841876926926749214863536422911 129))",
@@ -373,5 +376,4 @@ def check_bitvector_conversions(lean, tmp):
         assert reason in run(source, "--out", output, code=1).stderr
         assert not output.exists()
     print("BV conversion CLI passed: six completed proofs, standalone SMT/CHC output, and later-error protection")
-
 

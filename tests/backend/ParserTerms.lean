@@ -112,7 +112,7 @@ def checkBitvectors : IO Unit := do
     ("(declare-fun f ((_ BitVec 4)) Bool)(assert (f #x00))", 3, "type"),
     ("(assert (bvcomp #x0 #x0))", 2, "Bool"),
     ("(assert (= (bvsub #x5 #x3 #x1) #x1))", 2, "invalid kind"),
-    ("(assert (bvsdivo #x8 #xf))", 2, "BITVECTOR_SDIVO")
+    ("(assert (bvsdivo #b1 #b11))", 2, "comparable bit-vector")
   ] do
     checkRejected "invalid-bv" s!"(set-logic ALL){body}(check-sat)" ordinal reason
   checkRejected "qf-bv-quantifier"

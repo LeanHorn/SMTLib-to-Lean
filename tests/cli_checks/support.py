@@ -48,7 +48,8 @@ def unfold_statement(source, target):
     """Expose named assertions/clauses before simp, norm_num, or decide."""
     goal = "Problem" if "Problem" in target else "Refutation"
     parts = re.findall(r"^(?:noncomputable )?def ((?:Problem|Refutation)_\d+\.\w+)", source, re.M)
-    return "  unfold " + " ".join([goal, *parts]) + "\n"
+    # Expand the aggregate before the clauses it contains.
+    return "  unfold " + " ".join([goal, *reversed(parts)]) + "\n"
 
 
 def check_lean(lean, source, *, complete=False, allow_sorry=False):

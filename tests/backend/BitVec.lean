@@ -384,7 +384,7 @@ def checkBitvectorDivision (env : Environment) : IO Unit := do
 /-- Compare conversions and overflow flags with unbounded integer arithmetic. -/
 private def checkBitvectorConversionValues (env : Environment) : IO Unit := do
   let mut total := 0
-  for width in #[1, 2, 3, 4, 32, 64, 129] do
+  for width in #[1, 2, 3, 4, 8, 32, 64, 129] do
     let modulus := 2 ^ width
     let half := modulus / 2
     let values := if width ≤ 4 then (List.range modulus).toArray
@@ -415,10 +415,17 @@ private def checkBitvectorConversionValues (env : Environment) : IO Unit := do
         test s!"(bvnego {a})" (overflow (-signed x))]
       for y in values do
         let b := literal y
-        rows := rows.push #[test s!"(bvuaddo {a} {b})" (x + y ≥ modulus),
+        let mut checks := #[test s!"(bvuaddo {a} {b})" (x + y ≥ modulus),
           test s!"(bvsaddo {a} {b})" (overflow (signed x + signed y)),
           test s!"(bvumulo {a} {b})" (x * y ≥ modulus),
           test s!"(bvsmulo {a} {b})" (overflow (signed x * signed y))]
+        -- Bound new coverage to tiny exhaustive widths and six 8-bit boundary values.
+        if width ≤ 2 || width == 8 then
+          checks := checks ++ #[
+            test s!"(bvusubo {a} {b})" ((x : Int) - (y : Int) < 0),
+            test s!"(bvssubo {a} {b})" (overflow (signed x - signed y)),
+            test s!"(bvsdivo {a} {b})" (signed x == -(half : Int) && signed y == -1)]
+        rows := rows.push checks
     let input := "(set-logic ALL)" ++ String.join (rows.toList.map fun checks =>
       "(assert (and " ++ String.intercalate " " checks.toList ++ "))") ++ "(check-sat)"
     total := total + rows.foldl (fun n checks => n + checks.size) 0
@@ -427,7 +434,7 @@ private def checkBitvectorConversionValues (env : Environment) : IO Unit := do
         unless parameters.isEmpty && assertions.size == rows.size do
           throwError "BV conversions introduced parameters or lost assertions"
         for value in assertions do checkWithKernel (← mkDecideProof value)
-  IO.println s!"BV conversions passed: {total} kernel-checked cases; exhaustive widths 1–4 and 32/64/129-bit boundaries"
+  IO.println s!"BV conversions passed: {total} kernel-checked cases; new overflow flags at widths 1–2 and 8-bit boundaries"
 
 def checkBitvectorConversions (env : Environment) : IO Unit := do
   checkBitvectorConversionValues env
@@ -439,7 +446,8 @@ def checkBitvectorConversions (env : Environment) : IO Unit := do
       (BitVec.ofInt 8 n = BitVec.ofInt 8 n ∧ (x.toNat : Int) = (x.toNat : Int) ∧
         x.toInt = (x.toNat : Int) - 256 ∧
         (x.negOverflow = true ∧ x.uaddOverflow y = true ∧ ¬x.saddOverflow y = true ∧
-          x.umulOverflow y = true ∧ x.smulOverflow y = true) ∧
+          x.umulOverflow y = true ∧ x.smulOverflow y = true ∧
+          x.usubOverflow y = true ∧ ¬x.ssubOverflow y = true ∧ x.sdivOverflow y = true) ∧
         f (if p then BitVec.ofInt 8 n else x) y.toInt (x.uaddOverflow y = true) = named n ∧
         BitVec.ofInt 8 x.toInt = BitVec.ofInt 8 n ∧
         (∀ n : Int, ∃ x : BitVec 8, x.toInt = (BitVec.ofInt 8 n).toInt)) → False)
@@ -452,7 +460,8 @@ def checkBitvectorConversions (env : Environment) : IO Unit := do
         r (x.toNat : Int) y.toInt (x.negOverflow = true)) ∧
       (∀ (n m : Int) (b : Prop), r n m b → (BitVec.ofInt 8 n).umulOverflow (BitVec.ofInt 8 m) = true →
         p (BitVec.ofInt 8 (n + m))) ∧
-      (∀ x y : BitVec 8, p x → x.smulOverflow y = true → False))
+      (∀ x y : BitVec 8, p x → x.smulOverflow y = true → x.usubOverflow y = true →
+        (¬x.ssubOverflow y = true) → x.sdivOverflow y = true → False))
   runQuery env "BV conversions with Real and arbitrary Int division"
     "(set-logic ALL)(declare-const n Int)(declare-const r Real)(declare-const x (_ BitVec 8))\
      (assert (= ((_ int_to_bv 8) (div n 0)) x))\

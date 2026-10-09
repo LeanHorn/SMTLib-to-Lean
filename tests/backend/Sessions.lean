@@ -86,6 +86,15 @@ def checkSessions (env : Environment) : IO Unit := do
   let conditional := q(∀ (p : Prop) (x : Int), (p ∧ (if p then x else -x) = x) → False)
   let fact := q(∃ p : Int → Prop, p 0)
   let cases : Array (String × String × Array Expr × Array Nat) := #[
+    ("chc-background", "Problem", #[
+      q(∃ (c : Int) (f : Int → Int) (p : Int → Prop), p (f c)),
+      q(∃ (c k : Int) (f : Int → Int) (p : Int → Prop),
+        p (f c) ∧ (∀ x : Int, (∃ y : Int, f (y + c) = x) → p (f (x + c))) ∧ p k),
+      q(∃ (c : Int) (f : Int → Int) (p : Int → Prop), p (f c)),
+      q(∃ (c : BitVec 8) (f : BitVec 8 → BitVec 8) (p : BitVec 8 → Prop),
+        ∀ x : BitVec 8, (f x).sdivOverflow 255 = true → p c),
+      q(∃ (c : Int) (f : Int → Int) (p : Int → Prop), p (f (c + c))),
+      q(∃ (_c : Int) (_f : Int → Int) (_p : Int → Prop), True), q(True)], #[]),
     ("smt", "Refutation", #[base, integer,
       q(∀ (p : Prop) (x : Int) (q : Prop),
         (p ∧ x + 1 > 0 ∧ (q ∧ exclusive p q ∧ (x ≠ 0 ∧ x ≠ x + 1 ∧ 0 ≠ x + 1))) → False),

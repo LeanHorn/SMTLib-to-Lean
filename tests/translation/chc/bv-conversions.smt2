@@ -11,5 +11,5 @@
 (assert (forall ((n Int) (m Int) (b Bool))
   (=> (and (R n m b) (bvumulo (pack n) (pack m))) (P (pack (+ n m))))))
 (assert (forall ((x Word) (y Word))
-  (=> (and (P x) (bvsmulo x y)) false)))
+  (=> (and (P x) (bvsmulo x y) (bvusubo x y) (not (bvssubo x y)) (bvsdivo x y)) false)))
 (check-sat)
