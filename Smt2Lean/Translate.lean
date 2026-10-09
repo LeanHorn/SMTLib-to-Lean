@@ -423,6 +423,16 @@ def refutationStatement (query : ParsedQuery) (name : Name := `Refutation) : Met
       checkAssembly name original value
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 
+/-- General model existence: preserve assertions directly, without Horn normalization. -/
+def modelStatement (query : ParsedQuery) (name : Name := `Model) : MetaM Statement :=
+  atSource query.source "Model" (queryNumber := query.number) <|
+    withAssertionModel query (namespaceName := some name) fun parameters laws assertions originals definitions => do
+      let original ← closeProblem query.sorts.size parameters laws originals
+      let (calls, parts) ← nameParts parameters assertions (query.assertionSources.map some) name "Assertion"
+      let value ← defineProposition name (← closeProblem query.sorts.size parameters laws calls)
+      checkAssembly name original value
+      return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
+
 /-- Expose parameterized clauses, then existentially close their shared interpretation. -/
 def problemStatement (problem : Chc.Problem) (name : Name := `Problem) : MetaM Statement :=
   atSource problem.source "Problem" (chc := true) (queryNumber := problem.number) <|

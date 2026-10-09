@@ -35,6 +35,10 @@ named assertions or clauses, a statement, and a proof template in `Query.lean`.
 SMT queries produce a `Refutation` goal; Horn queries produce a `Problem` goal
 asserting the existence of satisfying relations.
 
+Use `--mode model` for general model-existence goals, including non-Horn formulas.
+Use `--mode fixedpoint` for positive Z3 `rule`/`query` inputs over Bool, Int, Real,
+and bitvectors: `Safe` means query `unsat`; `Reachable` means query `sat`.
+
 For this example, replace `sorry` with:
 
 ```lean

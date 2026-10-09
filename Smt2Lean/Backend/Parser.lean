@@ -76,7 +76,8 @@ private def parseScript
     (input : String)
     (inspect : ParsedQuery → cvc5.Env Unit)
     (name : String) (mode : ParseMode) (singleQuery : Bool)
-    (onSkipped : Source.Command → cvc5.Env Unit := fun _ => pure ()) : cvc5.Env Unit := do
+    (onSkipped : Source.Command → cvc5.Env Unit := fun _ => pure ())
+    (sources : Array Source.Ref := #[]) : cvc5.Env Unit := do
   let tm      ← cvc5.TermManager.new
   let mut solver ← cvc5.Solver.new tm
   if !singleQuery then solver.setOption "incremental" "true"
@@ -107,6 +108,8 @@ private def parseScript
           span := { start := error.position, stop := error.position } }
         throw (errorWithContext (source.context isChc session.query.number) (.error error.message))
     reader := rest
+    let command? := command?.map fun command =>
+      { command with source := sources[command.source.number - 1]?.getD command.source }
     let eof : Source.Ref := {
       file := name, number := reader.number
       span := { start := reader.position, stop := reader.position } }
@@ -378,7 +381,8 @@ inside the callback; publish results only after this function succeeds, since a
 later command can still fail. At least one check is required. -/
 def parseAndInspectSession (input : String) (inspect : ParsedQuery → cvc5.Env Unit)
     (name : String := "session") (mode : ParseMode := .smt)
-    (onSkipped : Source.Command → cvc5.Env Unit := fun _ => pure ()) : cvc5.Env Unit :=
-  parseScript input inspect name mode false onSkipped
+    (onSkipped : Source.Command → cvc5.Env Unit := fun _ => pure ())
+    (sources : Array Source.Ref := #[]) : cvc5.Env Unit :=
+  parseScript input inspect name mode false onSkipped sources
 
 end Smt2Lean.Backend

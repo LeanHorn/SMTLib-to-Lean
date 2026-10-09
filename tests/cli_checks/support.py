@@ -87,7 +87,8 @@ def read_generated(output, *, goal="Refutation", count=1):
         assert f"def {name} : Prop" in statements
         assert f"theorem {name.lower()} : {name}" in proofs
         if count > 1:
-            assert re.search(rf"\(query {number}: check-sat(?:-assuming)?,", statements)
+            command = "query" if goal == "Safe" else "check-sat(?:-assuming)?"
+            assert re.search(rf"\(query {number}: {command},", statements)
     return source
 
 

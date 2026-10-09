@@ -16,6 +16,9 @@ def defaultMaxRecDepth : Nat := 4096
 inductive GoalKind where
   | refutation
   | problem
+  | model
+  | safety
+  deriving BEq
 
 /-- A closed, checked proposition and its source locations. Contains no native terms. -/
 structure Goal where
@@ -134,6 +137,12 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
     | .problem => ("Problem", "problem",
         "There are interpretations of the declared symbols satisfying every Horn clause.",
         "the existence of a satisfying interpretation")
+    | .model => ("Model", "model",
+        "General model existence: all assertions hold. Outside the Flex Horn adapter.",
+        "a satisfying interpretation (use ¬Model to prove unsatisfiability)")
+    | .safety => ("Safe", "safe",
+        "There is a rule-closed interpretation excluding the queried relation. Z3 query verdict: unsat.",
+        "unreachability; change the target to Reachable to prove reachability")
   let suffix := number.map (fun n => s!"_{n}") |>.getD ""
   let definitionName := baseName ++ suffix
   let theoremName := baseProof ++ suffix
@@ -142,8 +151,8 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
   let needsClassical := (value.find? (·.isConstOf ``Classical.propDecidable)).isSome
   let body ← if goal.parts.isEmpty then printExpr value else printProposition value
   let label := match goal.kind with
-    | .refutation => "assertion"
-    | .problem => "clause"
+    | .refutation | .model => "assertion"
+    | .problem | .safety => "clause"
   let queryLabel := number.map (fun n => s!"query {n}: ") |>.getD ""
   let provenance := goal.source.map (sourceComment (queryLabel ++ goal.checkCommand)) |>.getD ""
   let provenance := provenance ++ (if !goal.parts.isEmpty then "" else String.join
@@ -154,7 +163,10 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
       body.replace "\n" "\n    " ++ "\n"
     else s!"def {definitionName} : Prop :=\n  " ++ body.replace "\n" "\n  " ++ "\n"
   let parts := String.join (← (goal.definitions ++ goal.parts).toList.mapM renderPart)
-  let statement := parts ++ provenance ++ s!"/-- {description} -/\n" ++ definition
+  let dual := if goal.kind == .safety then
+      s!"\n/-- The queried relation is reachable. Z3 query verdict: sat. -/\ndef Reachable{suffix} : Prop := ¬{definitionName}\n"
+    else ""
+  let statement := parts ++ provenance ++ s!"/-- {description} -/\n" ++ definition ++ dual
   let proof := s!"-- Unfinished proof: replace sorry to establish {proofTarget}.\n" ++
     s!"theorem {theoremName} : {definitionName} := by\n  sorry\n"
   return (statement, proof)

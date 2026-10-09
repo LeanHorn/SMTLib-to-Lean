@@ -24,6 +24,8 @@ def checkEmission (value : Expr) (kind : GoalKind := .refutation)
   let (definitionName, theoremName) := match kind with
     | .refutation => (`Refutation, `refutation)
     | .problem => (`Problem, `problem)
+    | .model => (`Model, `model)
+    | .safety => (`Safe, `safe)
   let expectedAxioms ← collectAxioms definitionName
   let source ← render value kind origin assertions (parts := parts) (definitions := definitions)
   for ref in assertions do

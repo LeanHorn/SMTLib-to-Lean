@@ -1,0 +1,13 @@
+; Query unsat means safe; query sat means reachable.
+(set-logic HORN)
+(set-option :fp.engine spacer)
+(declare-rel Reach (Int))
+(declare-var x Int)
+(rule (Reach 0) seed)
+(rule (=> (Reach x) (Reach (+ x 1))) step)
+(declare-rel Bad ())
+(rule (=> (and (Reach x) (< x 0)) Bad))
+(query Bad)
+(query Reach)
+(rule Bad)
+(query Bad)

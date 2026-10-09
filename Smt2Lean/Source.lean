@@ -20,11 +20,14 @@ structure Ref where
   span : Span
   /-- Names introduced by :named annotations in this command. -/
   names : Array String := #[]
+  /-- A fixedpoint rule label is provenance, not an SMT :named term alias. -/
+  ruleName : Option String := none
   deriving BEq, Inhabited, Repr
 
 def Ref.namedContext (ref : Ref) : String :=
-  if ref.names.isEmpty then "" else
-    " (:named " ++ String.intercalate ", " (ref.names.toList.map reprStr) ++ ")"
+  (if ref.names.isEmpty then "" else
+    " (:named " ++ String.intercalate ", " (ref.names.toList.map reprStr) ++ ")") ++
+  (ref.ruleName.map (fun name => " (rule " ++ reprStr name ++ ")") |>.getD "")
 
 def Ref.context (ref : Ref) (chc : Bool := false) (queryNumber : Nat := 1) : String :=
   s!"{ref.file}:{ref.span.start.line}:{ref.span.start.column}: " ++
