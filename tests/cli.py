@@ -423,7 +423,7 @@ def check_horn(lean, tmp):
         ("defined-quantifier", horn_prefix +
          "(define-fun someP () Bool (exists ((x Int)) (P x)))\n"
          "(assert (=> someP false))\n(check-sat)",
-         "5:1: query 1: command 5: clause 2:", "quantifier"),
+         "5:1: query 1: command 5: clause 2:", "inside a quantified theory guard"),
         ("unused-definition", horn_prefix +
          "(define-fun bad () Int (^ 1 0))\n(check-sat)",
          "4:1: query 1: command 4:", "POW"),

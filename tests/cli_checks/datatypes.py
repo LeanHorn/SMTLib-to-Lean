@@ -230,9 +230,10 @@ example (d : SMT.Datatypes.g0.T0_D) :
         ("match-horn-relation", "(set-logic HORN) (declare-datatype D ((a) (b))) "
          "(declare-fun R (D) Bool) (check-sat) "
          "(assert (=> (match a ((a false) (rest (R rest)))) false)) (check-sat)", "CHC relation inside"),
-        ("match-horn-quantifier", "(set-logic HORN) (declare-datatype D ((a) (b))) (check-sat) "
-         "(assert (=> (match a ((a false) (rest (forall ((x Int)) (= x x))))) false)) (check-sat)",
-         "leading forall"),
+        ("match-horn-quantified-relation", "(set-logic HORN) (declare-datatype D ((a) (b))) "
+         "(declare-fun R (Int) Bool) (check-sat) "
+         "(assert (=> (match a ((a false) (rest (forall ((x Int)) (R x))))) false)) (check-sat)",
+         "inside a quantified theory guard"),
         ("parametric", "(set-logic ALL) (declare-datatypes ((List 1)) "
          "((par (T) ((nil) (cons (head T) (tail (List T)))))))", "parametric"),
         ("nested", "(set-logic ALL) (declare-datatype D ((a) (b (field (Array Int D)))))",

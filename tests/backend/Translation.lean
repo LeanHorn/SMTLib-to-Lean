@@ -345,6 +345,20 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
   IO.println "CHC reconstruction passed: 19 clauses match handwritten Lean propositions"
 
 private def checkHornProblems (env : Environment) : IO Unit := do
+  runProblem env "quantified-theory-guards" "
+    (set-logic HORN)(declare-const c Int)(declare-fun f (Int) Int)(declare-fun P (Int) Bool)
+    (define-fun witness ((n Int)) Bool (exists ((y Int)) (and (= (f y) n) (>= y c))))
+    (assert (forall ((x Int)) (=> (witness x) (P x))))
+    (assert (forall ((x Int)) (let ((saved x))
+      (=> (forall ((x Int) (P Bool)) (exists ((y Int))
+        (and (= y x) (>= (f y) saved) (or P (not P))))) (P x)))))
+    (assert (forall ((x Int)) (=> (and (P x) (not (witness x))) false)))
+    (check-sat)" fun problem =>
+      checkProblem problem q(∃ (c : Int) (f : Int → Int) (p : Int → Prop),
+        (∀ x : Int, (∃ y : Int, f y = x ∧ y ≥ c) → p x) ∧
+        (∀ outer : Int, (∀ (inner : Int) (flag : Prop),
+          ∃ y : Int, y = inner ∧ f y ≥ outer ∧ (flag ∨ ¬flag)) → p outer) ∧
+        (∀ x : Int, p x → ¬(∃ y : Int, f y = x ∧ y ≥ c) → False))
   runProblem env "background-symbol-witnesses" "
     (set-logic HORN)(declare-const c Int)(declare-fun f (Int) Int)(declare-fun P (Int) Bool)
     (assert (= (f c) c))

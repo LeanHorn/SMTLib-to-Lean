@@ -106,7 +106,7 @@ def collectRelations (declarations : Array ParsedDeclaration) (queryNumber : Nat
   return (← collectDeclarations declarations queryNumber sorts).2.2
 
 /-- Permit theory terms and background symbols, but reject relations anywhere inside them. -/
-private def checkRelationFree (terms : Array cvc5.Term) (context : String)
+private def checkRelationFree (relations : Array Relation) (terms : Array cvc5.Term) (context : String)
     (constructors : Array ArrayConstructor := #[])
     (background : Array ParsedDeclaration := #[]) : cvc5.Env Unit := do
   let mut pending := terms
@@ -120,17 +120,37 @@ private def checkRelationFree (terms : Array cvc5.Term) (context : String)
       pending := pending.push term[2]!
       continue
     let kind ← ofExcept term.getKind
-    if kind == .CONSTANT && background.any (·.term == term) &&
-        !(← ofExcept term.getSort).isFunction then continue
-    if kind == .APPLY_UF then
-      let children := term.getChildren
-      if let some head := children[0]? then
-        if background.any (·.term == head) then
-          -- The function is permitted, but its arguments must also be relation-free.
-          pending := pending ++ children.extract 1 children.size
-          continue
     if kind == .CONSTANT || kind == .APPLY_UF then
-      throw (.unsupported s!"CHC relation inside {context}: {term}")
+      let children := term.getChildren
+      let head ← if kind == .CONSTANT then pure term else
+        match children[0]? with
+        | some head => pure head
+        | none => throw (.unsupported "CHC function application has no head")
+      if relations.any (·.term == head) then
+        throw (.unsupported s!"CHC relation inside {context}: {term}")
+      unless background.any (·.term == head) do
+        throw (.unsupported s!"undeclared CHC symbol inside {context}: {head}")
+      if kind == .CONSTANT then
+        if (← ofExcept head.getSort).isFunction then
+          throw (.unsupported s!"bare CHC function inside {context}: {head}")
+      else
+        -- Only skip the declared function head; inspect every argument recursively.
+        pending := pending ++ children.extract 1 children.size
+      continue
+    pending := pending ++ term.getChildren
+
+/-- Quantifiers remain unsupported in relation arguments and residual clause heads. -/
+private def checkNoQuantifiers (root : cvc5.Term) : cvc5.Env Unit := do
+  let mut pending := #[root]
+  let mut visited : Std.HashSet cvc5.Term := {}
+  while !pending.isEmpty do
+    let term := pending.back!
+    pending := pending.pop
+    if visited.contains term then continue
+    visited := visited.insert term
+    let kind ← ofExcept term.getKind
+    if kind == .FORALL || kind == .EXISTS then
+      throw (.unsupported "CHC quantifiers require leading forall binders or relation-free theory guards")
     pending := pending ++ term.getChildren
 
 /-- Recognize an atom in an already parsed/scope-checked term, using native identity. -/
@@ -149,13 +169,15 @@ def relationAtom? (relations : Array Relation) (term : cvc5.Term)
   if definitions.any (·.symbol == head) then return none
   if background.any (·.term == head) then return none
   let some relation := relations.find? (·.term == head)
-    | throw (.unsupported s!"undeclared CHC relation: {head}")
+    | throw (.unsupported s!"undeclared CHC symbol: {head}")
   unless arguments.size == relation.argumentSorts.size do
     throw (.unsupported s!"wrong argument count for CHC relation '{relation.name}'")
   for argument in arguments, expected in relation.argumentSorts do
     unless (← ofExcept argument.getSort) == expected do
       throw (.unsupported s!"wrong argument sort for CHC relation '{relation.name}': expected {expected}")
-  unless alreadyValidated do checkRelationFree arguments "a relation argument" constructors background
+  unless alreadyValidated do
+    for argument in arguments do checkNoQuantifiers argument
+    checkRelationFree relations arguments "a relation argument" constructors background
   return some { relation, arguments }
 
 /-- Recognize a bare relation assertion; use extractClause for quantified clauses. -/
@@ -165,9 +187,10 @@ def recognizeFact (relations : Array Relation) (assertion : cvc5.Term)
     | throw (.unsupported s!"expected a relation fact, got {assertion}")
   return atom
 
-/-- After leading forall binders, every premise and head must be quantifier-free. -/
-private def checkNoQuantifiers (root : cvc5.Term) : cvc5.Env Unit := do
-  let mut pending := #[root]
+/-- Nested guard quantifiers may bind theory variables, but cannot enclose relations. -/
+private def checkGuardQuantifiers (relations : Array Relation) (terms : Array cvc5.Term)
+    (constructors : Array ArrayConstructor) (background : Array ParsedDeclaration) : cvc5.Env Unit := do
+  let mut pending := terms
   let mut visited : Std.HashSet cvc5.Term := {}
   while !pending.isEmpty do
     let term := pending.back!
@@ -176,16 +199,17 @@ private def checkNoQuantifiers (root : cvc5.Term) : cvc5.Env Unit := do
     visited := visited.insert term
     let kind ← ofExcept term.getKind
     if kind == .FORALL || kind == .EXISTS then
-      throw (.unsupported "CHC quantifiers must be leading forall binders")
-    pending := pending ++ term.getChildren
+      checkRelationFree relations #[term] "a quantified theory guard" constructors background
+    else
+      pending := pending ++ term.getChildren
 
 /-- Expose only clause structure; keep atomic theory calls available for emission. -/
-private partial def expose (query : Option ParsedQuery) (term : cvc5.Term)
+private partial def expose (relations : Array Relation) (query : Option ParsedQuery) (term : cvc5.Term)
     (background : Array ParsedDeclaration)
     : cvc5.Env (cvc5.Term × Array cvc5.Term) := do
   let some query := query | return (term, #[])
   if (SourceLets.root? query.sourceLets term).isSome then
-    let (body, lets) ← expose (some query) term[1]! background
+    let (body, lets) ← expose relations (some query) term[1]! background
     return (body, #[term] ++ lets)
   let some tm := query.manager | return (term, #[])
   let body? ← if term.getKind! == .ITE && term[1]! == term[2]! &&
@@ -196,10 +220,10 @@ private partial def expose (query : Option ParsedQuery) (term : cvc5.Term)
     let expanded ← SourceLets.erase tm query.sourceLets term >>= expandDefinitions tm query.definitions
     unless #[cvc5.Kind.AND, .OR, .NOT, .IMPLIES, .FORALL, .EXISTS, .CONST_BOOLEAN].contains expanded.getKind! do
       try
-        checkRelationFree #[expanded] "a theory guard" query.arrayConstructors background
+        checkRelationFree relations #[expanded] "a theory guard" query.arrayConstructors background
         return (term, #[])
       catch _ => pure ()
-    return ← expose (some query) body background
+    return ← expose relations (some query) body background
   return (term, #[])
 
 /--
@@ -216,17 +240,16 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
   let mut body := assertion
   let mut lets := #[]
   while true do
-    let (exposed, added) ← expose presentation body background
+    let (exposed, added) ← expose relations presentation body background
     body := exposed
     lets := lets ++ added
     unless body.getKind! == .FORALL do break
     for term in body[0]!.getChildren do
       binders := binders.push { term, sort := ← ofExcept term.getSort : Binder }
     body := body[1]!
-  if presentation.isNone then checkNoQuantifiers body
   let mut premises := #[]
   while true do
-    let (exposed, added) ← expose presentation body background
+    let (exposed, added) ← expose relations presentation body background
     body := exposed
     lets := lets ++ added
     unless body.getKind! == .IMPLIES do break
@@ -236,7 +259,7 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
   let mut pending := [body]
   let mut positiveHead : Option RelationAtom := none
   while !pending.isEmpty do
-    let (term, added) ← expose presentation pending.head! background
+    let (term, added) ← expose relations presentation pending.head! background
     lets := lets ++ added
     pending := pending.tail!
     let kind ← ofExcept term.getKind
@@ -253,8 +276,11 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
         throw (.unsupported "multiple positive relations as CHC head")
       positiveHead := some atom
     else
-      if presentation.isNone then checkRelationFree #[term] "a CHC head" constructors background
+      if presentation.isNone then
+        checkNoQuantifiers term
+        checkRelationFree relations #[term] "a CHC head" constructors background
       premises := premises.push (← term.notTerm)
+  if presentation.isNone then checkGuardQuantifiers relations premises constructors background
   let head := positiveHead.map ClauseHead.relation |>.getD .falsity
   return { assertionNumber, source, binders, lets, premises, head }
 
@@ -268,7 +294,7 @@ def extractClauses (relations : Array Relation) (assertionNumber : Nat)
   let mut clauses := #[]
   while !pending.isEmpty do
     let (binders, lets, raw) := pending.head!
-    let (term, added) ← expose presentation raw background
+    let (term, added) ← expose relations presentation raw background
     let lets := lets ++ added
     pending := pending.tail!
     match ← ofExcept term.getKind with
@@ -290,7 +316,7 @@ private def validatePremises (relations : Array Relation) (terms : Array cvc5.Te
   let mut premises := #[]
   let mut lets := #[]
   while !pending.isEmpty do
-    let (term, added) ← expose presentation pending.head! background
+    let (term, added) ← expose relations presentation pending.head! background
     lets := lets ++ added
     pending := pending.tail!
     if (← ofExcept term.getKind) == .AND then
@@ -299,7 +325,7 @@ private def validatePremises (relations : Array Relation) (terms : Array cvc5.Te
         (presentation.map (·.definitions) |>.getD #[]) presentation.isSome background then
       premises := premises.push (.relation atom)
     else
-      if presentation.isNone then checkRelationFree #[term] "a theory guard" constructors background
+      if presentation.isNone then checkRelationFree relations #[term] "a theory guard" constructors background
       premises := premises.push (.guard term)
   return (premises, lets)
 

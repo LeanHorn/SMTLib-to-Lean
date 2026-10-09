@@ -190,8 +190,9 @@ private def expectError (name reason : String) (action : cvc5.Env Unit) : IO Uni
 
 private def checkRejectedFacts : IO Unit := do
   for (name, body, reason) in #[
-    ("function-hidden-relation", "(declare-fun f (Bool) Int)\n(declare-const p Bool)\n" ++
-      "(declare-fun R (Int) Bool)\n(assert (R (f p)))", "relation inside a relation argument"),
+    ("function-hidden-relation", "(declare-fun f (Bool) Int)\n(declare-fun g (Int) Int)\n" ++
+      "(declare-const p Bool)\n(declare-fun R (Int) Bool)\n(assert (R (g (f p))))",
+      "relation inside a relation argument"),
     ("string-domain", "(declare-fun P (String) Bool)", "unsupported declaration sort"),
     ("nested-relation", "(declare-fun P (Int) Bool)\n(declare-fun R (Bool) Bool)\n(assert (R (P 0)))",
       "relation inside a relation argument"),
@@ -225,8 +226,12 @@ private def checkBoundData : IO Unit := do
         "background symbols lost their native identities"
   ).runIO
   let input := "(set-logic HORN)\n(declare-const p Bool)\n(declare-fun R (Bool) Bool)\n" ++
+    "(declare-fun f (Bool) Int)\n" ++
     "(assert (forall ((p Bool)) (R p)))\n" ++
-    "(assert (forall ((p Bool)) (=> (not p) (R p))))\n(check-sat)"
+    "(assert (forall ((p Bool)) (=> (not p) (R p))))\n" ++
+    "(assert (forall ((p Bool)) (=> (> (f p) 0) (R p))))\n" ++
+    "(assert (forall ((p Bool)) (let ((guard (exists ((q Bool)) (= q p))))\n" ++
+    "  (=> guard (R p)))))\n(check-sat)"
   (parseAndInspectQuery input (mode := .chc) fun query => do
     let relations ← collectRelations query.declarations
     let quantified := query.assertionTerms[0]!
@@ -250,7 +255,7 @@ private def checkRejectedClauses : IO Unit := do
   for (name, assertion, reason) in #[
     ("existential", "(exists ((x Int)) (P x))", "leading forall"),
     ("forall-exists", "(forall ((x Int)) (exists ((y Int)) (P y)))", "leading forall"),
-    ("quantified-premise", "(=> (forall ((x Int)) (P x)) false)", "leading forall"),
+    ("quantified-premise", "(=> (forall ((x Int)) (P x)) false)", "inside a quantified theory guard"),
     ("quantified-head", "(=> done (forall ((x Int)) (P x)))", "leading forall"),
     ("quantified-argument", "(R 0 (exists ((p Bool)) p) 1)", "leading forall"),
     ("disjunctive-head", "(forall ((x Int)) (=> (P x) (or (P x) done)))", "as CHC head")
@@ -264,8 +269,8 @@ private def checkRejectedClauses : IO Unit := do
         for h : i in [:query.assertionTerms.size] do
           discard <| extractClause relations (i + 1) query.assertionTerms[i]
 
-private def checkNativeIdentity : IO Unit :=
-  expectError "native identity" "undeclared CHC relation" do
+private def checkNativeIdentity : IO Unit := do
+  expectError "native identity" "undeclared CHC symbol" do
     let tm ← cvc5.TermManager.new
     let bool ← tm.getBooleanSort
     let declared ← tm.mkConst bool "P"
@@ -273,6 +278,16 @@ private def checkNativeIdentity : IO Unit :=
     let relations ← collectRelations #[{ name := "P", term := declared }]
     require (declared != other) "expected distinct native symbols"
     discard <| recognizeFact relations other
+  expectError "background identity" "undeclared CHC symbol inside a relation argument" do
+    let tm ← cvc5.TermManager.new
+    let int ← tm.getIntegerSort
+    let declared ← tm.mkConst int "c"
+    let other ← tm.mkConst int "c"
+    let predicate ← tm.mkConst (← tm.mkFunctionSort #[int] (← tm.getBooleanSort)) "P"
+    let relations ← collectRelations #[{ name := "P", term := predicate }]
+    require (declared != other) "expected distinct native constants"
+    let fact ← tm.mkTerm .APPLY_UF #[predicate, other]
+    discard <| recognizeFact relations fact #[{ name := "c", term := declared }]
 
 private def relationCount (clause : Clause Premise) : Nat :=
   clause.premises.foldl (fun n premise => match premise with
@@ -332,6 +347,8 @@ private def checkProblems : IO Unit := do
 
 private def checkRejectedProblems : IO Unit := do
   for (name, assertion, reason) in #[
+    ("function-guard-relation", "(=> (> (f (P x)) 0) done)", "inside a theory guard"),
+    ("function-head-relation", "(= (f (P x)) x)", "inside a CHC head"),
     ("negated-relation", "(=> (not (P x)) done)", "inside a theory guard"),
     ("negated-nullary", "(=> (not done) (P x))", "inside a theory guard"),
     ("relation-equality", "(=> (= (P x) cond) done)", "inside a theory guard"),
@@ -353,7 +370,8 @@ private def checkRejectedProblems : IO Unit := do
     ("let-unsupported-head", "(let ((rest (^ x 2))) (P rest))", "unsupported operator"),
     ("let-hidden-relation", "(let ((guard (not (P x)))) (=> guard done))", "inside a theory guard"),
     ("let-hidden-argument", "(let ((arg (P x))) (R x arg x))", "inside a relation argument"),
-    ("let-hidden-quantifier", "(let ((guard (exists ((y Int)) (= x y)))) (=> guard (P x)))", "leading forall"),
+    ("let-quantified-relation", "(let ((guard (exists ((y Int)) (P y)))) (=> guard (P x)))",
+      "inside a quantified theory guard"),
     ("hinted-negative", "(! (=> (not (P x)) done) :pattern ((P x)) :qid bad)", "inside a theory guard"),
     ("hinted-existential", "(! (exists ((y Int)) (! (P y) :pattern ((P y)))) :qid bad)", "leading forall"),
     ("hinted-unsupported", "(! (P (^ x 2)) :pattern ((P x)))", "unsupported operator"),
@@ -369,13 +387,14 @@ private def checkRejectedProblems : IO Unit := do
     -- A later bad assertion must reject the entire problem before its callback.
     let input := "(set-logic HORN)\n(declare-fun P (Int) Bool)\n" ++
       "(declare-fun R (Int Bool Int) Bool)\n(declare-const done Bool)\n" ++
+      "(declare-fun f (Bool) Int)\n" ++
       s!"(assert (P 0))\n(assert done)\n(assert (forall ((x Int) (cond Bool)) {assertion}))\n(check-sat)"
     let inspected ← IO.mkRef false
     match ← (parseAndInspectProblem input (fun _ => inspected.set true) (name := path)).run with
     | .ok _ => throw (IO.userError s!"{name}: unexpectedly accepted")
     | .error error =>
       let message := toString error
-      require (message.contains s!"{path}:7:1: query 1: command 7:" && message.contains "clause 3:" &&
+      require (message.contains s!"{path}:8:1: query 1: command 8:" && message.contains "clause 3:" &&
         message.contains reason) s!"{name}: wrong diagnostic: {message}"
     require (!(← inspected.get)) s!"{name}: returned a partial problem"
 
