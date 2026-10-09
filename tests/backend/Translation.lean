@@ -345,17 +345,18 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
   IO.println "CHC reconstruction passed: 19 clauses match handwritten Lean propositions"
 
 private def checkHornProblems (env : Environment) : IO Unit := do
-  runProblem env "global-constant-witness" "
-    (set-logic HORN)(declare-const c Int)(declare-fun P (Int) Bool)
-    (assert (P c))
-    (assert (forall ((x Int)) (=> (and (P x) (< x c)) false)))
+  runProblem env "background-symbol-witnesses" "
+    (set-logic HORN)(declare-const c Int)(declare-fun f (Int) Int)(declare-fun P (Int) Bool)
+    (assert (= (f c) c))
+    (assert (P (f c)))
+    (assert (forall ((x Int)) (=> (and (P x) (< x (f c))) false)))
     (check-sat)" fun problem => do
-      checkProblem problem q(∃ (c : Int) (p : Int → Prop),
-        p c ∧ (∀ x : Int, p x → x < c → False))
+      checkProblem problem q(∃ (c : Int) (f : Int → Int) (p : Int → Prop),
+        (¬(f c = c) → False) ∧ p (f c) ∧ (∀ x : Int, p x → x < f c → False))
       let clauses := mkConst `Problem.Clauses
-      checkEqual (← inferType clauses) q(Int → (Int → Prop) → Prop)
-      checkEqual (mkAppN clauses #[q((0 : Int)), q(fun x : Int => x = 0)])
-        q((0 : Int) = 0 ∧ (∀ x : Int, x = 0 → x < 0 → False))
+      checkEqual (← inferType clauses) q(Int → (Int → Int) → (Int → Prop) → Prop)
+      checkEqual (mkAppN clauses #[q((0 : Int)), q(fun x : Int => x), q(fun x : Int => x = 0)])
+        q((¬((0 : Int) = 0) → False) ∧ (0 : Int) = 0 ∧ (∀ x : Int, x = 0 → x < 0 → False))
   let surface := "tests/translation/chc/surface-forms.smt2"
   runProblem env surface (← IO.FS.readFile surface) fun problem =>
     checkProblem problem q(∃ (p q : Int → Prop) (done : Prop),

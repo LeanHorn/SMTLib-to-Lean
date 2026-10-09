@@ -274,7 +274,7 @@ private def reconstructClause (context : Smt.Reconstruct.Context) (sortCache : S
     return value
 
 /--
-Reconstruct CHC clauses with carriers, array models, arithmetic choices, constants, and relations.
+Reconstruct CHC clauses with carriers, theory models, and shared symbol interpretations.
 Each clause is `∀ variables, premise₁ → … → head`. Inspect the parameters and
 model laws, and clauses inside the callback, while their context and native terms are alive.
 -/
@@ -296,7 +296,8 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
         (fun d => #[d.body, d.sourceBody.getD d.body]) else #[])
     Arithmetic.withZeroCases terms fun zeroCases context => do
       let context := SourceBindings.context context query.sourceLets
-      let symbols := problem.constants ++ problem.relations.map (·.toParsedDeclaration)
+      let background := problem.constants ++ problem.functions
+      let symbols := background ++ problem.relations.map (·.toParsedDeclaration)
       let modelTerms := problem.arrayTerms ++ symbols.map (·.term) ++ terms ++
         problem.clauses.flatMap (fun c => c.binders.map (·.term))
       Models.withModels problem.datatypes modelTerms sortCache context (constructors := problem.arrayConstructors) fun arrayParameters laws sortCache context => do
@@ -304,7 +305,9 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
           atSource symbol.source s!"declaration '{symbol.name}'" (chc := true) (queryNumber := problem.number) do
             let sort ← ofExcept symbol.term.getSort
             let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
-            let name := if i < problem.constants.size then s!"c{i}" else s!"r{i - problem.constants.size}"
+            let name := if i < problem.constants.size then s!"c{i}"
+              else if i < background.size then s!"f{i - problem.constants.size}"
+              else s!"r{i - background.size}"
             return (← mkFreshUserName (Name.mkSimple name), type)
         withLocalDeclsDND declarations fun parameters => do
           -- Every clause and source definition uses the same global interpretation.
@@ -399,7 +402,7 @@ def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM 
   atSource query.source "Refutation" (defineProposition name value) (queryNumber := query.number)
 
 /--
-Define CHC model existence over admissible models, global constants, and relations.
+Define CHC model existence over admissible models and shared symbol interpretations.
 Retain unused declarations; an empty clause conjunction is `True`. Check without proving it.
 -/
 def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr := do

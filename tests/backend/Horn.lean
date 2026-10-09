@@ -190,7 +190,8 @@ private def expectError (name reason : String) (action : cvc5.Env Unit) : IO Uni
 
 private def checkRejectedFacts : IO Unit := do
   for (name, body, reason) in #[
-    ("integer-function", "(declare-fun f (Int) Int)", "unsupported CHC declaration 'f'"),
+    ("function-hidden-relation", "(declare-fun f (Bool) Int)\n(declare-const p Bool)\n" ++
+      "(declare-fun R (Int) Bool)\n(assert (R (f p)))", "relation inside a relation argument"),
     ("string-domain", "(declare-fun P (String) Bool)", "unsupported declaration sort"),
     ("nested-relation", "(declare-fun P (Int) Bool)\n(declare-fun R (Bool) Bool)\n(assert (R (P 0)))",
       "relation inside a relation argument"),
@@ -204,20 +205,24 @@ private def checkRejectedFacts : IO Unit := do
     expectError name reason <| parseAndInspectQuery
       ("(set-logic HORN)\n" ++ body ++ "\n(check-sat)") (name := name) (mode := .chc)
       fun query => do
-        let relations ← collectRelations query.declarations
-        for assertion in query.assertionTerms do discard <| recognizeFact relations assertion
+        let (constants, functions, relations) ← collectDeclarations query.declarations
+        for assertion in query.assertionTerms do
+          discard <| recognizeFact relations assertion (constants ++ functions)
 
 private def checkBoundData : IO Unit := do
   (parseAndInspectProblem
-    "(set-logic HORN) (declare-const c Int) (declare-fun P (Int) Bool)\n\
-     (assert (P c)) (assert (forall ((x Int)) (=> (= x c) (P x)))) (check-sat)"
+    "(set-logic HORN) (declare-const c Int) (declare-fun f (Int) Int) (declare-fun P (Int) Bool)\n\
+     (assert (P (f c))) (assert (forall ((x Int)) (=> (= x (f c)) (P x)))) (check-sat)"
     fun problem => do
       let #[constant] := problem.constants | throw (.error "expected one global constant")
-      require (constant.name == "c" && problem.relations.size == 1)
-        "data constant was mistaken for a relation"
+      let #[function] := problem.functions | throw (.error "expected one background function")
+      require (constant.name == "c" && function.name == "f" && problem.relations.size == 1)
+        "background symbol was mistaken for a relation"
       let some clause := problem.clauses[0]? | throw (.error "expected a clause")
-      let .relation atom := clause.head | throw (.error "expected P c")
-      require (atom.arguments == #[constant.term]) "global constant lost its native identity"
+      let .relation atom := clause.head | throw (.error "expected P (f c)")
+      let #[argument] := atom.arguments | throw (.error "expected one relation argument")
+      require (argument.getChildren == #[function.term, constant.term])
+        "background symbols lost their native identities"
   ).runIO
   let input := "(set-logic HORN)\n(declare-const p Bool)\n(declare-fun R (Bool) Bool)\n" ++
     "(assert (forall ((p Bool)) (R p)))\n" ++

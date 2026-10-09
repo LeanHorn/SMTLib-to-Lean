@@ -67,14 +67,16 @@ structure Problem where
   arrayTerms : Array cvc5.Term := #[]
   arrayConstructors : Array ArrayConstructor := #[]
   constants : Array ParsedDeclaration := #[]
+  functions : Array ParsedDeclaration := #[]
   relations : Array Relation
   clauses : Array (Clause Premise)
 
 /-- Validate and partition declarations, retaining unused symbols and native identities. -/
 def collectDeclarations (declarations : Array ParsedDeclaration) (queryNumber : Nat := 1)
     (sorts : Array ParsedSort := #[])
-    : cvc5.Env (Array ParsedDeclaration × Array Relation) := do
+    : cvc5.Env (Array ParsedDeclaration × Array ParsedDeclaration × Array Relation) := do
   let mut constants := #[]
+  let mut functions := #[]
   let mut relations := #[]
   for declaration in declarations do
     try
@@ -87,23 +89,26 @@ def collectDeclarations (declarations : Array ParsedDeclaration) (queryNumber : 
         if isValueSort sort sorts then
           constants := constants.push constant
           continue
-      | .backgroundFunction .. => pure ()
+      | .backgroundFunction function arguments result =>
+        if !arguments.isEmpty && arguments.all (isValueSort · sorts) && isValueSort result sorts then
+          functions := functions.push function
+          continue
       let sort ← ofExcept declaration.term.getSort
-      throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation or a data constant over supported value sorts, got {sort}")
+      throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a relation, data constant, or first-order background function over supported value sorts, got {sort}")
     catch error =>
       throw (declaration.source.map (fun source => errorWithContext (source.context true queryNumber) error)
         |>.getD error)
-  return (constants, relations)
+  return (constants, functions, relations)
 
 /-- Collect relations after validating all declarations. -/
 def collectRelations (declarations : Array ParsedDeclaration) (queryNumber : Nat := 1)
     (sorts : Array ParsedSort := #[]) : cvc5.Env (Array Relation) := do
-  return (← collectDeclarations declarations queryNumber sorts).2
+  return (← collectDeclarations declarations queryNumber sorts).2.2
 
-/-- Arguments and guards may use clause variables, data constants, and theory terms, but no relations. -/
+/-- Permit theory terms and background symbols, but reject relations anywhere inside them. -/
 private def checkRelationFree (terms : Array cvc5.Term) (context : String)
     (constructors : Array ArrayConstructor := #[])
-    (constants : Array ParsedDeclaration := #[]) : cvc5.Env Unit := do
+    (background : Array ParsedDeclaration := #[]) : cvc5.Env Unit := do
   let mut pending := terms
   let mut visited : Std.HashSet cvc5.Term := {}
   while !pending.isEmpty do
@@ -115,7 +120,15 @@ private def checkRelationFree (terms : Array cvc5.Term) (context : String)
       pending := pending.push term[2]!
       continue
     let kind ← ofExcept term.getKind
-    if kind == .CONSTANT && constants.any (·.term == term) then continue
+    if kind == .CONSTANT && background.any (·.term == term) &&
+        !(← ofExcept term.getSort).isFunction then continue
+    if kind == .APPLY_UF then
+      let children := term.getChildren
+      if let some head := children[0]? then
+        if background.any (·.term == head) then
+          -- The function is permitted, but its arguments must also be relation-free.
+          pending := pending ++ children.extract 1 children.size
+          continue
     if kind == .CONSTANT || kind == .APPLY_UF then
       throw (.unsupported s!"CHC relation inside {context}: {term}")
     pending := pending ++ term.getChildren
@@ -124,7 +137,7 @@ private def checkRelationFree (terms : Array cvc5.Term) (context : String)
 def relationAtom? (relations : Array Relation) (term : cvc5.Term)
     (constructors : Array ArrayConstructor := #[])
     (definitions : Array ParsedDefinition := #[]) (alreadyValidated : Bool := false)
-    (constants : Array ParsedDeclaration := #[]) : cvc5.Env (Option RelationAtom) := do
+    (background : Array ParsedDeclaration := #[]) : cvc5.Env (Option RelationAtom) := do
   let kind ← ofExcept term.getKind
   let (head, arguments) ← match kind with
     | .CONSTANT => pure (term, #[])
@@ -134,6 +147,7 @@ def relationAtom? (relations : Array Relation) (term : cvc5.Term)
       pure (head, children.extract 1 children.size)
     | _ => return none
   if definitions.any (·.symbol == head) then return none
+  if background.any (·.term == head) then return none
   let some relation := relations.find? (·.term == head)
     | throw (.unsupported s!"undeclared CHC relation: {head}")
   unless arguments.size == relation.argumentSorts.size do
@@ -141,13 +155,13 @@ def relationAtom? (relations : Array Relation) (term : cvc5.Term)
   for argument in arguments, expected in relation.argumentSorts do
     unless (← ofExcept argument.getSort) == expected do
       throw (.unsupported s!"wrong argument sort for CHC relation '{relation.name}': expected {expected}")
-  unless alreadyValidated do checkRelationFree arguments "a relation argument" constructors constants
+  unless alreadyValidated do checkRelationFree arguments "a relation argument" constructors background
   return some { relation, arguments }
 
 /-- Recognize a bare relation assertion; use extractClause for quantified clauses. -/
 def recognizeFact (relations : Array Relation) (assertion : cvc5.Term)
-    (constants : Array ParsedDeclaration := #[]) : cvc5.Env RelationAtom := do
-  let some atom ← relationAtom? relations assertion (constants := constants)
+    (background : Array ParsedDeclaration := #[]) : cvc5.Env RelationAtom := do
+  let some atom ← relationAtom? relations assertion (background := background)
     | throw (.unsupported s!"expected a relation fact, got {assertion}")
   return atom
 
@@ -167,11 +181,11 @@ private def checkNoQuantifiers (root : cvc5.Term) : cvc5.Env Unit := do
 
 /-- Expose only clause structure; keep atomic theory calls available for emission. -/
 private partial def expose (query : Option ParsedQuery) (term : cvc5.Term)
-    (constants : Array ParsedDeclaration)
+    (background : Array ParsedDeclaration)
     : cvc5.Env (cvc5.Term × Array cvc5.Term) := do
   let some query := query | return (term, #[])
   if (SourceLets.root? query.sourceLets term).isSome then
-    let (body, lets) ← expose (some query) term[1]! constants
+    let (body, lets) ← expose (some query) term[1]! background
     return (body, #[term] ++ lets)
   let some tm := query.manager | return (term, #[])
   let body? ← if term.getKind! == .ITE && term[1]! == term[2]! &&
@@ -182,10 +196,10 @@ private partial def expose (query : Option ParsedQuery) (term : cvc5.Term)
     let expanded ← SourceLets.erase tm query.sourceLets term >>= expandDefinitions tm query.definitions
     unless #[cvc5.Kind.AND, .OR, .NOT, .IMPLIES, .FORALL, .EXISTS, .CONST_BOOLEAN].contains expanded.getKind! do
       try
-        checkRelationFree #[expanded] "a theory guard" query.arrayConstructors constants
+        checkRelationFree #[expanded] "a theory guard" query.arrayConstructors background
         return (term, #[])
       catch _ => pure ()
-    return ← expose (some query) body constants
+    return ← expose (some query) body background
   return (term, #[])
 
 /--
@@ -197,12 +211,12 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
     (assertion : cvc5.Term) (source : Option Source.Ref := none)
     (constructors : Array ArrayConstructor := #[])
     (presentation : Option ParsedQuery := none)
-    (constants : Array ParsedDeclaration := #[]) : cvc5.Env Clause := do
+    (background : Array ParsedDeclaration := #[]) : cvc5.Env Clause := do
   let mut binders := #[]
   let mut body := assertion
   let mut lets := #[]
   while true do
-    let (exposed, added) ← expose presentation body constants
+    let (exposed, added) ← expose presentation body background
     body := exposed
     lets := lets ++ added
     unless body.getKind! == .FORALL do break
@@ -212,7 +226,7 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
   if presentation.isNone then checkNoQuantifiers body
   let mut premises := #[]
   while true do
-    let (exposed, added) ← expose presentation body constants
+    let (exposed, added) ← expose presentation body background
     body := exposed
     lets := lets ++ added
     unless body.getKind! == .IMPLIES do break
@@ -222,7 +236,7 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
   let mut pending := [body]
   let mut positiveHead : Option RelationAtom := none
   while !pending.isEmpty do
-    let (term, added) ← expose presentation pending.head! constants
+    let (term, added) ← expose presentation pending.head! background
     lets := lets ++ added
     pending := pending.tail!
     let kind ← ofExcept term.getKind
@@ -234,12 +248,12 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
       if ← ofExcept term.getBooleanValue then
         premises := premises.push (← term.notTerm)
     else if let some atom ← relationAtom? relations term constructors
-        (presentation.map (·.definitions) |>.getD #[]) presentation.isSome constants then
+        (presentation.map (·.definitions) |>.getD #[]) presentation.isSome background then
       if positiveHead.isSome then
         throw (.unsupported "multiple positive relations as CHC head")
       positiveHead := some atom
     else
-      if presentation.isNone then checkRelationFree #[term] "a CHC head" constructors constants
+      if presentation.isNone then checkRelationFree #[term] "a CHC head" constructors background
       premises := premises.push (← term.notTerm)
   let head := positiveHead.map ClauseHead.relation |>.getD .falsity
   return { assertionNumber, source, binders, lets, premises, head }
@@ -249,12 +263,12 @@ def extractClauses (relations : Array Relation) (assertionNumber : Nat)
     (assertion : cvc5.Term) (source : Option Source.Ref := none)
     (constructors : Array ArrayConstructor := #[])
     (presentation : Option ParsedQuery := none)
-    (constants : Array ParsedDeclaration := #[]) : cvc5.Env (Array Clause) := do
+    (background : Array ParsedDeclaration := #[]) : cvc5.Env (Array Clause) := do
   let mut pending : List (Array Binder × Array cvc5.Term × cvc5.Term) := [(#[], #[], assertion)]
   let mut clauses := #[]
   while !pending.isEmpty do
     let (binders, lets, raw) := pending.head!
-    let (term, added) ← expose presentation raw constants
+    let (term, added) ← expose presentation raw background
     let lets := lets ++ added
     pending := pending.tail!
     match ← ofExcept term.getKind with
@@ -264,42 +278,43 @@ def extractClauses (relations : Array Relation) (assertionNumber : Nat)
       pending := (binders ++ variables, lets, term[1]!) :: pending
     | .AND => pending := term.getChildren.toList.map (binders, lets, ·) ++ pending
     | _ =>
-      let clause ← extractClause relations assertionNumber term source constructors presentation constants
+      let clause ← extractClause relations assertionNumber term source constructors presentation background
       clauses := clauses.push { clause with binders := binders ++ clause.binders, lets := lets ++ clause.lets }
   return clauses
 
 /-- Flatten only premise conjunctions, keeping source order and other formulas intact. -/
 private def validatePremises (relations : Array Relation) (terms : Array cvc5.Term)
     (constructors : Array ArrayConstructor) (presentation : Option ParsedQuery := none)
-    (constants : Array ParsedDeclaration := #[]) : cvc5.Env (Array Premise × Array cvc5.Term) := do
+    (background : Array ParsedDeclaration := #[]) : cvc5.Env (Array Premise × Array cvc5.Term) := do
   let mut pending := terms.toList
   let mut premises := #[]
   let mut lets := #[]
   while !pending.isEmpty do
-    let (term, added) ← expose presentation pending.head! constants
+    let (term, added) ← expose presentation pending.head! background
     lets := lets ++ added
     pending := pending.tail!
     if (← ofExcept term.getKind) == .AND then
       pending := term.getChildren.toList ++ pending
     else if let some atom ← relationAtom? relations term constructors
-        (presentation.map (·.definitions) |>.getD #[]) presentation.isSome constants then
+        (presentation.map (·.definitions) |>.getD #[]) presentation.isSome background then
       premises := premises.push (.relation atom)
     else
-      if presentation.isNone then checkRelationFree #[term] "a theory guard" constructors constants
+      if presentation.isNone then checkRelationFree #[term] "a theory guard" constructors background
       premises := premises.push (.guard term)
   return (premises, lets)
 
 /-- Validate every clause of an already parsed/scope-checked query before returning a problem. -/
 def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Problem := do
-  let (constants, relations) ← collectDeclarations query.declarations query.number query.valueSorts
+  let (constants, functions, relations) ← collectDeclarations query.declarations query.number query.valueSorts
+  let background := constants ++ functions
   let mut clauses : Array (Clause Premise) := #[]
   for h : i in [:query.assertions.size] do
     let assertion := query.assertions[i]
     let source := some assertion.source
     let context := source.map (·.context true query.number) |>.getD s!"{name}: query {query.number}"
     try
-      for clause in ← extractClauses relations (i + 1) assertion.term source query.arrayConstructors (constants := constants) do
-        let (premises, _) ← validatePremises relations clause.premises query.arrayConstructors (constants := constants)
+      for clause in ← extractClauses relations (i + 1) assertion.term source query.arrayConstructors (background := background) do
+        let (premises, _) ← validatePremises relations clause.premises query.arrayConstructors (background := background)
         clauses := clauses.push {
           assertionNumber := clause.assertionNumber
           source
@@ -310,16 +325,17 @@ def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Prob
     catch error => throw (errorWithContext s!"{context}: clause {i + 1}" error)
   return {
     query := some query, number := query.number, source := query.source, sorts := query.sorts, datatypes := query.datatypes
-    arrayTerms := arrayModelTerms query, arrayConstructors := query.arrayConstructors, constants, relations, clauses }
+    arrayTerms := arrayModelTerms query, arrayConstructors := query.arrayConstructors, constants, functions, relations, clauses }
 
 /-- Reuse validation above, but preserve theory calls and lets in the emitted clauses. -/
 def presentationClauses (problem : Problem) : cvc5.Env (Array (Clause Premise)) := do
   let some query := problem.query | return problem.clauses
+  let background := problem.constants ++ problem.functions
   let mut result := #[]
   for assertion in query.assertions, i in [:query.assertions.size] do
     for clause in ← extractClauses problem.relations (i + 1) (assertion.surface.getD assertion.term)
-        (some assertion.source) query.arrayConstructors (some query) problem.constants do
-      let (premises, lets) ← validatePremises problem.relations clause.premises query.arrayConstructors (some query) problem.constants
+        (some assertion.source) query.arrayConstructors (some query) background do
+      let (premises, lets) ← validatePremises problem.relations clause.premises query.arrayConstructors (some query) background
       result := result.push { clause with premises, lets := clause.lets ++ lets }
   unless result.size == problem.clauses.size do
     throw (.error "source-preserving clause normalization changed the clause count")
