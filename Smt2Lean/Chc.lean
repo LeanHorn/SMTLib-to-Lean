@@ -8,6 +8,25 @@ open Backend
 structure Relation extends ParsedDeclaration where
   argumentSorts : Array cvc5.Sort
 
+/-- CHC symbol roles. Bool-valued declarations are always relations. -/
+inductive Symbol where
+  | relation (value : Relation)
+  | dataConstant (declaration : ParsedDeclaration) (sort : cvc5.Sort)
+  | backgroundFunction (declaration : ParsedDeclaration)
+      (argumentSorts : Array cvc5.Sort) (resultSort : cvc5.Sort)
+
+/-- Classify by native sort; this does not validate translation support. -/
+def classifyDeclaration (declaration : ParsedDeclaration) : cvc5.Env Symbol := do
+  let sort ← ofExcept declaration.term.getSort
+  let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
+  let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
+  if result.isBoolean then
+    return .relation { toParsedDeclaration := declaration, argumentSorts := arguments }
+  else if sort.isFunction then
+    return .backgroundFunction declaration arguments result
+  else
+    return .dataConstant declaration sort
+
 /-- A relation applied to ordered arguments. Alone, it is a fact with no premises. -/
 structure RelationAtom where
   relation : Relation
@@ -56,12 +75,12 @@ def collectRelations (declarations : Array ParsedDeclaration) (queryNumber : Nat
     : cvc5.Env (Array Relation) :=
   declarations.mapM fun declaration => do
     try
+      -- Keep the relation-only profile until background symbols can be translated.
+      if let .relation relation ← classifyDeclaration declaration then
+        if relation.argumentSorts.all (isValueSort · sorts) then
+          return relation
       let sort ← ofExcept declaration.term.getSort
-      let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
-      let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
-      unless result.isBoolean && arguments.all (isValueSort · sorts) do
-        throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over supported value sorts, got {sort}")
-      return { toParsedDeclaration := declaration, argumentSorts := arguments }
+      throw (.unsupported s!"unsupported CHC declaration '{declaration.name}': expected a Bool-valued relation over supported value sorts, got {sort}")
     catch error =>
       throw (declaration.source.map (fun source => errorWithContext (source.context true queryNumber) error)
         |>.getD error)
