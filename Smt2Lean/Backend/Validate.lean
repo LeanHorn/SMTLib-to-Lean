@@ -6,6 +6,7 @@ namespace Smt2Lean.Backend
 partial def isValueSort (sort : cvc5.Sort) (sorts : Array ParsedSort := #[]) : Bool :=
   sort.isBoolean || sort.isInteger || sort.isReal ||
     (sort.isBitVector && sort.getBitVectorSize! != 0) || sorts.any (·.sort == sort) ||
+    (sort.isUninterpretedSort && sort.isInstantiated) ||
     (sort.isArray && isValueSort sort.getArrayIndexSort! sorts &&
       isValueSort sort.getArrayElementSort! sorts)
 
@@ -227,18 +228,22 @@ def arrayModelTerms (query : ParsedQuery) : Array cvc5.Term :=
     query.definitions.flatMap (fun d => #[d.symbol, d.body] ++ d.parameters ++ d.arrayConstants)
 
 /-- Recognize canonical sort syntax, including aliases with formal parameters. -/
-private partial def sortSyntax (names : Array String) : List String → Option (List String)
-  | "(" :: "Array" :: rest => do
-    let rest ← sortSyntax names rest
-    let ")" :: rest ← sortSyntax names rest | none
-    return rest
+private partial def sortSyntax (names : Array String) (constructors : Array (String × Nat))
+    : List String → Option (List String)
   | "(" :: "_" :: "BitVec" :: width :: ")" :: rest =>
     if width.toNat?.getD 0 > 0 then some rest else none
+  | "(" :: name :: rest => do
+    let some (_, arity) := constructors.find? (·.1 == name) | none
+    let mut rest := rest
+    for _ in [:arity] do rest ← sortSyntax names constructors rest
+    let ")" :: tail := rest | none
+    return tail
   | name :: rest => if names.contains name then some rest else none
   | _ => none
 
-/-- Check the resolved alias body; cvc5 handles syntax, arity, scope, and substitution. -/
-def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[]) : cvc5.Env Unit := do
+/-- Check the canonical alias body; native parsing checks arities and substitution. -/
+def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[])
+    (constructors : Array (String × Nat) := #[]) : cvc5.Env Unit := do
   let tokens := Source.tokenize command.toString
   let some endParams := (tokens.extract 4 tokens.size).findIdx? (· == ")")
     | throw (.unsupported s!"unsupported sort alias: {command}")
@@ -247,7 +252,7 @@ def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[])
   let names := #["Bool", "Int", "Real"] ++ sorts.map (·.sort.toString) ++ tokens.extract 4 endParams
   unless tokens[0]? == some "(" && tokens[1]? == some "define-sort" &&
       tokens[3]? == some "(" && tokens.back? == some ")" &&
-      sortSyntax names body.toList == some [] do
+      sortSyntax names (constructors.push ("Array", 2)) body.toList == some [] do
     throw (.unsupported s!"unsupported sort alias: {command}; expected a supported value sort or sort parameter")
 
 /-- These metadata fields never become assumptions or select a proof target. -/

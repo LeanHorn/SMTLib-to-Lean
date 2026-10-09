@@ -61,7 +61,7 @@ private partial def lower (stem : String) (expr : SExpr) : StateM Nat SExpr := d
 /-- SMT-LIB 2.7 defines each pattern `_` as a fresh, unused variable.
 Only adapt term-bearing commands; cvc5 still validates patterns, scopes and types. -/
 def prepare (command : Source.Command) (stem : String) : Except String Source.Command := do
-  unless #["assert", "define-fun", "define-const", "check-sat-assuming", "get-value"].contains
+  unless #["assert", "define-fun", "define-fun-rec", "define-funs-rec", "define-const", "check-sat-assuming", "get-value"].contains
       (command.tokens[1]?.getD "") && command.tokens.contains "match" && command.tokens.contains "_" do
     return command
   let (expr, stop) ← read command.tokens 0

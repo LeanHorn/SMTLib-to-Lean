@@ -18,6 +18,8 @@ private def checkStatement (query : ParsedQuery) (value expected : Expr)
   let statement := match kind with
     | .refutation => `Refutation
     | .problem => `Problem
+    | .model => `Model
+    | .safety => `Safe
   checkEqual value expected
   if value.hasFVar || value.hasLooseBVars || value.hasMVar then
     throwError "array statement contains unresolved variables"

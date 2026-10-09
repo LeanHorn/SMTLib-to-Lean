@@ -20,7 +20,6 @@ def checkSorts : IO Unit := do
       ids[0]! != ids[4]! && ids[4]! != ids[5]! && ids[5]! == ids[6]!)
     "sort identity did not follow declaration scopes"
   for (name, body, ordinal, reason) in #[
-    ("sort-arity", "(declare-sort S 1)", 2, "only arity 0"),
     ("sort-mismatch", "(declare-sort S 0)(declare-sort T 0)(declare-const s S)(declare-const t T)(assert (= s t))",
       6, "type"),
     ("sort-after-check", "(check-sat)(declare-sort S 0)", 3, "after check-sat"),

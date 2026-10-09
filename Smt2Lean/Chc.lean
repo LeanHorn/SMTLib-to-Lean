@@ -350,7 +350,7 @@ def validateQuery (query : ParsedQuery) (name : String := "chc") : cvc5.Env Prob
         }
     catch error => throw (errorWithContext s!"{context}: clause {i + 1}" error)
   return {
-    query := some query, number := query.number, source := query.source, sorts := query.sorts, datatypes := query.datatypes
+    query := some query, number := query.number, source := query.source, sorts := query.carrierSorts, datatypes := query.datatypes
     arrayTerms := arrayModelTerms query, arrayConstructors := query.arrayConstructors, constants, functions, relations, clauses }
 
 /-- Reuse validation above, but preserve theory calls and lets in the emitted clauses. -/

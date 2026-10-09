@@ -283,7 +283,7 @@ private def checkDefinitions : IO Unit := do
     ("unused-param", "(define-fun bad ((x String)) Int 0)", 2, "unsupported definition signature"),
     ("recursive", "(define-fun bad ((x Int)) Int (bad x))", 2, "not declared"),
     ("forward", "(define-fun a () Int b) (define-fun b () Int 0)", 2, "not declared"),
-    ("recursive-command", "(define-fun-rec f ((x Int)) Int x)", 2, "unsupported command"),
+    ("recursive-hidden-power", "(define-fun-rec f ((x Int)) Int (^ x 2))", 2, "POW"),
     ("duplicate", "(define-fun f () Int 1) (define-fun f () Int 2)", 3, "f"),
     ("declare-defined", "(define-fun f () Int 1) (declare-const f Int)", 3, "f"),
     ("define-declared", "(declare-const f Int) (define-fun f () Int 1)", 3, "f"),

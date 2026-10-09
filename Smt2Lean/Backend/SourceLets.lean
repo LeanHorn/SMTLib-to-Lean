@@ -73,7 +73,7 @@ private partial def preserve (solver : cvc5.Solver) (symbols : cvc5.SymbolManage
 /-- Only term-bearing source commands are adapted; native parsing still checks sorts/scopes. -/
 def prepare (command : Source.Command) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) (stem : String) : cvc5.Env (Source.Command × Array SourceLet) := do
-  unless command.tokens.contains "let" && #["assert", "define-fun", "define-const",
+  unless command.tokens.contains "let" && #["assert", "define-fun", "define-fun-rec", "define-funs-rec", "define-const",
       "check-sat-assuming", "get-value"].contains (command.tokens[1]?.getD "") do
     return (command, #[])
   let (expression, stop) ← ofExcept ((Collisions.read command.tokens 0).mapError cvc5.Error.error)

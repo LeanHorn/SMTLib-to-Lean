@@ -6,9 +6,12 @@ namespace Smt2Lean.Backend
 /-- Counts needed to restore a local scope after native pop. -/
 private structure Scope where
   sorts : Nat
+  sortConstructors : Nat
+  sortInstances : Nat
   datatypes : Nat
   declarations : Nat
   definitions : Nat
+  recursiveDefinitions : Nat
   assertions : Nat
   nativeAssertions : Nat
   namedConstants : Nat
@@ -33,7 +36,9 @@ def Session.push (session : Session) (count : Nat) : Session :=
   let scope : Scope := {
     datatypes := query.datatypes.size
     sorts := query.sorts.size
+    sortConstructors := query.sortConstructors.size, sortInstances := query.sortInstances.size
     declarations := query.declarations.size, definitions := query.definitions.size
+    recursiveDefinitions := query.recursiveDefinitions.size
     assertions := query.assertions.size, nativeAssertions := session.nativeCount
     namedConstants := query.namedArrayConstants.size, aliases := session.arrays.aliases.size }
   { session with scopes := session.scopes ++ Array.replicate count scope }
@@ -47,8 +52,11 @@ def Session.pop (session : Session) (count : Nat) : cvc5.Env Session := do
   let query := { query with
     datatypes := if session.globalDeclarations then query.datatypes else query.datatypes.extract 0 scope.datatypes
     sorts := if session.globalDeclarations then query.sorts else query.sorts.extract 0 scope.sorts
+    sortConstructors := if session.globalDeclarations then query.sortConstructors else query.sortConstructors.extract 0 scope.sortConstructors
+    sortInstances := if session.globalDeclarations then query.sortInstances else query.sortInstances.extract 0 scope.sortInstances
     declarations := if session.globalDeclarations then query.declarations else query.declarations.extract 0 scope.declarations
     definitions := if session.globalDeclarations then query.definitions else query.definitions.extract 0 scope.definitions
+    recursiveDefinitions := if session.globalDeclarations then query.recursiveDefinitions else query.recursiveDefinitions.extract 0 scope.recursiveDefinitions
     namedArrayConstants := if session.globalDeclarations then query.namedArrayConstants else
       query.namedArrayConstants.extract 0 scope.namedConstants
     assertions := query.assertions.extract 0 scope.assertions }
@@ -57,15 +65,16 @@ def Session.pop (session : Session) (count : Nat) : cvc5.Env Session := do
   return { session with
     query, arrays, scopes := session.scopes.extract 0 remaining
     nativeCount := scope.nativeAssertions +
-      if session.globalDeclarations then query.definitions.size - scope.definitions else 0 }
+      if session.globalDeclarations then query.definitions.size - scope.definitions +
+        (query.recursiveDefinitions.size - scope.recursiveDefinitions) else 0 }
 
 def Session.clearAssertions (session : Session) : Session := Id.run do
   let mut query := { session.query with assertions := #[] }
   let mut arrays := session.arrays
   if !session.globalDeclarations then
-    query := { query with sorts := #[], datatypes := #[], declarations := #[], definitions := #[], namedArrayConstants := #[] }
+    query := { query with sorts := #[], sortConstructors := #[], sortInstances := #[], datatypes := #[], declarations := #[], definitions := #[], recursiveDefinitions := #[], namedArrayConstants := #[] }
     arrays := { arrays with aliases := #[], arrayAlias := none, initialized := false }
-  return { session with query, arrays, scopes := #[], nativeCount := query.definitions.size }
+  return { session with query, arrays, scopes := #[], nativeCount := query.definitions.size + query.recursiveDefinitions.size }
 
 /-- A full reset retains source history and query numbering, but no native interpretations. -/
 def Session.reset (session : Session) (arrays : ConstantArrays.State) (number : Nat) : Session :=
@@ -76,7 +85,7 @@ def Session.checkNative (session : Session) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) (label : String) : cvc5.Env Unit := do
   unless (← solver.getAssertions).size == session.nativeCount &&
       SourceLets.sourceDeclarations session.query.sourceLets (ConstantArrays.sourceDeclarations session.arrays (← symbols.getDeclaredTerms)) ==
-        session.query.declarations.map (·.term) &&
+        session.query.nativeDeclarations.map (·.term) &&
       (← symbols.getDeclaredSorts) == session.query.sorts.map (·.sort) do
     throw (.error s!"native and translator {label} disagree")
 

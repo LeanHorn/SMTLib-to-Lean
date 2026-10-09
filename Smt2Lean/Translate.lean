@@ -191,7 +191,7 @@ private def usedDefinitions (definitions : Array StatementPart) (values : Array 
 private def withAssertionModel [Inhabited α] (query : ParsedQuery)
     (inspect : Array Expr → Array Expr → Array Expr → Array Expr → Array StatementPart → MetaM α)
     (namespaceName : Option Name := none) : MetaM α := do
-  withCarriers query.sorts fun carriers sortCache => do
+  withCarriers query.carrierSorts fun carriers sortCache => do
     -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
     for h : i in [:query.assertions.size] do
       atSource (some query.assertions[i].source) s!"assertion {i + 1}" (queryNumber := query.number) do
@@ -398,7 +398,7 @@ An empty assertion conjunction is `True`. Check the statement without proving it
 -/
 def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM Expr := do
   let value ← withAssertionModel query fun parameters laws assertions _ _ => do
-    closeRefutation query.sorts.size parameters laws assertions
+    closeRefutation query.carrierSorts.size parameters laws assertions
   atSource query.source "Refutation" (defineProposition name value) (queryNumber := query.number)
 
 /--
@@ -414,12 +414,12 @@ def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr
 def refutationStatement (query : ParsedQuery) (name : Name := `Refutation) : MetaM Statement :=
   atSource query.source "Refutation" (queryNumber := query.number) <|
     withAssertionModel query (namespaceName := some name) fun parameters laws assertions originals definitions => do
-      let original ← closeRefutation query.sorts.size parameters laws originals
+      let original ← closeRefutation query.carrierSorts.size parameters laws originals
       let (calls, parts) ← nameParts parameters assertions (query.assertionSources.map some) name "Assertion"
       let parts := parts.mapIdx fun i part =>
         if i < assertions.size - query.assumptionCount then part else
           { part with label := s!"assumption {i + 1 - (assertions.size - query.assumptionCount)}" }
-      let value ← defineProposition name (← closeRefutation query.sorts.size parameters laws calls)
+      let value ← defineProposition name (← closeRefutation query.carrierSorts.size parameters laws calls)
       checkAssembly name original value
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 
@@ -427,9 +427,9 @@ def refutationStatement (query : ParsedQuery) (name : Name := `Refutation) : Met
 def modelStatement (query : ParsedQuery) (name : Name := `Model) : MetaM Statement :=
   atSource query.source "Model" (queryNumber := query.number) <|
     withAssertionModel query (namespaceName := some name) fun parameters laws assertions originals definitions => do
-      let original ← closeProblem query.sorts.size parameters laws originals
+      let original ← closeProblem query.carrierSorts.size parameters laws originals
       let (calls, parts) ← nameParts parameters assertions (query.assertionSources.map some) name "Assertion"
-      let value ← defineProposition name (← closeProblem query.sorts.size parameters laws calls)
+      let value ← defineProposition name (← closeProblem query.carrierSorts.size parameters laws calls)
       checkAssembly name original value
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 

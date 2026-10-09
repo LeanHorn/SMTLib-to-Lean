@@ -68,17 +68,14 @@ def check_uninterpreted_sorts(lean, tmp):
         completed.write_text(statements + f"theorem checked : {target} := by\n" + proof)
         check_lean(lean, completed, complete=True)
     for name, prefix, suffix, reason in [
-        ("arity", "(set-logic ALL)(check-sat)", "(declare-sort S 1)", "only arity 0"),
         ("popped-sort", "(set-logic ALL)(push 1)(declare-sort S 0)(check-sat)",
          "(pop 1)(declare-const x S)", "not declared"),
         ("reset-sort", "(set-option :global-declarations true)(set-logic ALL)(declare-sort S 0)(check-sat)",
          "(reset)(set-logic ALL)(declare-const x S)", "not declared"),
         ("removed-alias", "(set-logic ALL)(declare-sort S 0)(define-sort Alias () S)(check-sat)",
          "(reset-assertions)(declare-const x Alias)", "not declared"),
-        ("horn-constant", "(set-logic HORN)(declare-sort S 0)(check-sat)",
-         "(declare-const x S)(check-sat)", "unsupported CHC declaration"),
-        ("horn-function", "(set-logic HORN)(declare-sort S 0)(check-sat)",
-         "(declare-fun f (S) S)(check-sat)", "unsupported CHC declaration"),
+        ("horn-unsupported-sort", "(set-logic HORN)(declare-sort S 0)(check-sat)",
+         "(declare-const x String)(check-sat)", "unsupported declaration sort"),
         ("horn-negative", "(set-logic HORN)(declare-sort S 0)(declare-fun P (S) Bool)(check-sat)",
          "(assert (forall ((x S)) (=> (not (P x)) false)))(check-sat)", "CHC relation inside"),
     ]:
@@ -88,5 +85,4 @@ def check_uninterpreted_sorts(lean, tmp):
         assert "query 2:" in result.stderr and reason in result.stderr, result.stderr
         assert not output.exists()
     print("Sort semantics passed: nonempty, singleton, two-element, infinite, and Horn models; later failures leave no output")
-
 

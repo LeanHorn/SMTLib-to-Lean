@@ -5,8 +5,10 @@ SMT solver cannot settle a query. Generated statements are kernel-checked; proof
 templates contain `sorry` until you complete them.
 
 Support includes Bool, Int, Real and bitvector expressions, functions,
-quantifiers, nonrecursive definitions, let bindings, arrays, monomorphic
-datatypes, incremental sessions, and a restricted Horn-clause fragment.
+quantifiers, ordinary and recursive definitions, let bindings, arrays, monomorphic
+datatypes, uninterpreted sort constructors, incremental sessions, and a restricted
+Horn-clause fragment. Recursive definitions become equations over function
+interpretations; no Lean termination proof is required.
 Full SMT-LIB support is in progress.
 
 ## Install

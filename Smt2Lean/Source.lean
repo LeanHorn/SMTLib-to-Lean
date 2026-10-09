@@ -114,7 +114,7 @@ def Command.scopeChange (command : Command) : Except String (Option (String × N
 /-- Reject unaudited attributes and recover labels before cvc5 erases or merges them. -/
 def Command.withNames (command : Command) : Except String Command := do
   let parts := command.tokens
-  unless #["assert", "define-fun", "define-const", "check-sat-assuming"].contains (parts[1]?.getD "") do
+  unless #["assert", "define-fun", "define-fun-rec", "define-funs-rec", "define-const", "check-sat-assuming"].contains (parts[1]?.getD "") do
     return command
   let mut names := #[]
   for i in [:parts.size] do

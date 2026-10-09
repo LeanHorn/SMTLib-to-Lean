@@ -1,3 +1,4 @@
+import Smt2Lean.Backend.Sorts
 import Smt2Lean.Backend.Definitions
 import Smt2Lean.Backend.Session
 import Smt2Lean.Backend.Datatypes
@@ -40,11 +41,13 @@ private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
   let parser ← cvc5.InputParser.new solver (some symbols)
   parser.setStringInput (String.intercalate " " (parts.extract 3 (parts.size - 2)).toList)
   let mut terms := #[]
+  let mut query := query
   while true do
     let term ← parser.nextTerm
     if term.isNull then break
     unless (← ofExcept term.getSort).isBoolean do
       throw (.unsupported "check-sat-assuming: expected a Boolean term")
+    query ← query.collectTermSorts #[term] command.source
     let term ← withoutQuantifierHints tm term
     validateAssertion term (knownTerms query) allowQuantifiers query.valueSorts query.arrayConstructors
     let surface := term
@@ -60,7 +63,7 @@ private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
   return terms
 
 /-- Native global equations can move: find the added term by occurrence count. -/
-private def addedAssertion (before after : Array cvc5.Term) : cvc5.Env cvc5.Term := do
+private def addedAssertions (before after : Array cvc5.Term) : cvc5.Env (Array cvc5.Term) := do
   let mut counts : Std.HashMap cvc5.Term Nat := {}
   for term in before do counts := counts.insert term (counts[term]?.getD 0 + 1)
   let mut added := #[]
@@ -68,9 +71,14 @@ private def addedAssertion (before after : Array cvc5.Term) : cvc5.Env cvc5.Term
     let count := counts[term]?.getD 0
     if count == 0 then added := added.push term
     else counts := counts.insert term (count - 1)
-  unless added.size == 1 && counts.toList.all (·.2 == 0) do
-    throw (.error "expected exactly one new native assertion")
-  return added[0]!
+  unless counts.toList.all (·.2 == 0) do
+    throw (.error "native command removed an existing assertion")
+  return added
+
+private def addedAssertion (before after : Array cvc5.Term) : cvc5.Env cvc5.Term := do
+  let #[term] ← addedAssertions before after
+    | throw (.error "expected exactly one new native assertion")
+  return term
 
 private def parseScript
     (input : String)
@@ -133,7 +141,7 @@ private def parseScript
           throw (.error s!"pop {count} exceeds active scope depth {session.depth}")
       if let some command := command? then
         let parts := command.tokens
-        if #["assert", "define-fun", "define-const", "check-sat-assuming", "get-value"].contains (parts[1]?.getD "") then
+        if #["assert", "define-fun", "define-fun-rec", "define-funs-rec", "define-const", "check-sat-assuming", "get-value"].contains (parts[1]?.getD "") then
           validateBitvectorIndices parts
         if #["get-value", "check-sat-assuming"].contains (parts[1]?.getD "") && parts.contains ":named" then
           throw (.unsupported "observational requests and assumptions cannot introduce named terms")
@@ -150,7 +158,7 @@ private def parseScript
           renamedBindings := aliases
           let kind := command.tokens[1]?.getD ""
           if adaptArrays && #["declare-sort", "declare-fun", "declare-const", "define-sort",
-              "define-fun", "define-const", "declare-datatype", "declare-datatypes", "assert", "push", "check-sat", "check-sat-assuming", "get-value"].contains kind then
+              "define-fun", "define-fun-rec", "define-funs-rec", "define-const", "declare-datatype", "declare-datatypes", "assert", "push", "check-sat", "check-sat-assuming", "get-value"].contains kind then
             let (_, state) ← (ConstantArrays.initializeAliases tm solver symbols).run session.arrays
             session := { session with arrays := state }
           if adaptArrays then
@@ -177,7 +185,7 @@ private def parseScript
           "get-model", "get-proof", "get-unsat-core", "get-unsat-assumptions", "get-value",
           "get-assignment", "get-assertions", "get-info", "get-option"].contains commandName do
         resultAvailable := false
-      if #["set-logic", "declare-sort", "declare-fun", "declare-const", "define-fun", "define-sort",
+      if #["set-logic", "declare-sort", "declare-fun", "declare-const", "define-fun", "define-fun-rec", "define-sort",
           "declare-datatype", "declare-datatypes", "assert", "push", "pop", "reset-assertions", "check-sat", "check-sat-assuming",
           "get-assertions"].contains commandName then
         inStartMode := false
@@ -204,9 +212,23 @@ private def parseScript
         session := session.mapQuery fun query => { query with logic := some logic, invoked := query.invoked.push commandName }
       | "declare-sort" =>
         let parts := command.tokens
-        unless parts.size == 5 && parts[3]? == some "0" do
-          throw (.unsupported "declare-sort: only arity 0 is supported")
+        let some arity := (parts[3]?.getD "").toNat?
+          | throw (.unsupported "declare-sort: expected a nonnegative arity")
+        unless parts.size == 5 && arity ≤ 4294967295 do
+          throw (.unsupported "declare-sort: arity exceeds native limit")
         invokeCommand cmd solver symbols
+        if arity > 0 then
+          let nativeName := (Source.tokenize cmd.toString)[2]!
+          -- A used constructor needs at least this many argument tokens.
+          if adaptArrays && arity ≤ inputTokens.size then
+            let (_, state) ← (ConstantArrays.rememberSortConstructor solver symbols
+              parts[2]! arity).run session.arrays
+            session := { session with arrays := state }
+          session := session.mapQuery fun query => { query with
+            sortConstructors := query.sortConstructors.push (nativeName, arity)
+            commands := query.commands.push command
+            invoked := query.invoked.push commandName }
+          continue
         let sorts ← symbols.getDeclaredSorts
         unless sorts.size == session.query.sorts.size + 1 do
           throw (.error "expected one new sort declaration")
@@ -223,6 +245,7 @@ private def parseScript
       | "declare-datatype" | "declare-datatypes" =>
         invokeCommand cmd solver symbols
         let fresh ← datatypeSorts cmd solver symbols
+        session := { session with query := ← session.query.collectSorts fresh command.source }
         let group ← readDatatypes fresh session.query command.source
         let group := Collisions.restoreDatatypes renamedBindings group
         if adaptArrays then
@@ -236,10 +259,11 @@ private def parseScript
       | "declare-const" | "declare-fun" =>
         invokeCommand cmd solver symbols
         let terms := SourceLets.sourceDeclarations session.query.sourceLets (ConstantArrays.sourceDeclarations session.arrays (← symbols.getDeclaredTerms))
-        unless terms.size == session.query.declarations.size + 1 do
+        unless terms.size == session.query.nativeDeclarations.size + 1 do
           throw (.error "expected one new declaration")
         let term := terms.back!
         let sort ← ofExcept term.getSort
+        session := { session with query := ← session.query.collectSorts #[sort] command.source }
         unless isValueSort sort session.query.valueSorts || (← isSupportedFunction sort session.query.valueSorts) do
           throw (.unsupported s!"unsupported declaration sort: {sort}; expected a supported value sort or first-order function")
         let symbol := Collisions.originalName renamedBindings (← ofExcept term.getSymbol)
@@ -255,7 +279,9 @@ private def parseScript
         let assertions ← solver.getAssertions
         unless assertions.size == session.nativeCount + 1 do
           throw (.error "expected one native defining equation")
-        let definition ← readDefinition (← addedAssertion before assertions) command.source session.query tm allowQuantifiers
+        let equation ← addedAssertion before assertions
+        session := { session with query := ← session.query.collectTermSorts #[equation] command.source }
+        let definition ← readDefinition equation command.source session.query tm allowQuantifiers
         let definition := { definition with
           arrayConstants := arrayConstants
           name := Collisions.originalName renamedBindings definition.name }
@@ -263,8 +289,21 @@ private def parseScript
         session := session.mapQuery fun query => { query with
           definitions := query.definitions.push definition
           invoked := query.invoked.push commandName }
+      | "define-fun-rec" =>
+        validateNamedTerms command.source.names tm solver symbols session.query allowQuantifiers
+        let before ← solver.getAssertions
+        invokeCommand cmd solver symbols
+        let assertions ← solver.getAssertions
+        let equations ← addedAssertions before assertions
+        let query ← session.query.collectTermSorts equations command.source
+        let query ← readRecursiveDefinitions equations command.source query tm allowQuantifiers arrayConstants
+        let query := { query with declarations := query.declarations.map fun (d : ParsedDeclaration) =>
+          { d with name := Collisions.originalName renamedBindings d.name } }
+        session := { session with
+          nativeCount := assertions.size
+          query := { query with invoked := query.invoked.push commandName } }
       | "define-sort" =>
-        validateSortAlias cmd session.query.valueSorts
+        validateSortAlias cmd session.query.valueSorts session.query.sortConstructors
         invokeCommand cmd solver symbols
         session := session.mapQuery fun query => { query with invoked := query.invoked.push commandName }
       | "assert" =>
@@ -277,6 +316,7 @@ private def parseScript
           unless assertions.size == session.nativeCount + 1 do
             throw (.error "expected one new native assertion")
           let term ← addedAssertion before assertions
+          session := { session with query := ← session.query.collectTermSorts #[term] command.source }
           let term ← withoutQuantifierHints tm term
           validateAssertion term (knownTerms session.query) allowQuantifiers session.query.valueSorts session.query.arrayConstructors
           let surface := term
@@ -342,10 +382,11 @@ private def parseScript
         let assumptions ← if commandName == "check-sat-assuming" then
           readAssumptions { command with text, tokens := Source.tokenize text }
             tm solver symbols session.query allowQuantifiers else pure #[]
-        let snapshot := { session.query with
+        let query ← session.query.collectTermSorts (assumptions.flatMap fun (a, b) => #[a, b]) command.source
+        let snapshot := { query with
           source := some command.source, checkCommand := commandName
           assumptionCount := assumptions.size
-          assertions := session.query.assertions ++ assumptions.map (fun (term, surface) => { term, surface := some surface, source := command.source, arrayConstants }) }
+          assertions := session.query.recursiveDefinitions.map (·.equation) ++ session.query.assertions ++ assumptions.map (fun (term, surface) => { term, surface := some surface, source := command.source, arrayConstants }) }
         if singleQuery then session := { session with query := snapshot }
         checked := true
         resultAvailable := true

@@ -192,7 +192,7 @@ def prepare (command : Source.Command) (query : ParsedQuery) (solver : cvc5.Solv
     (symbols : cvc5.SymbolManager) (stem : String) : cvc5.Env (Source.Command × Bindings) := do
   unless command.tokens.any (fun token => localCollision (sourceName token)) do return (command, #[])
   let kind := command.tokens[1]?.getD ""
-  unless #["declare-fun", "declare-const", "define-fun", "define-const", "declare-datatype",
+  unless #["declare-fun", "declare-const", "define-fun", "define-fun-rec", "define-funs-rec", "define-const", "declare-datatype",
       "declare-datatypes", "assert", "check-sat-assuming", "get-value"].contains kind do
     return (command, #[])
   let (expression, stop) ← ofExcept ((read command.tokens 0).mapError cvc5.Error.error)
@@ -213,6 +213,42 @@ def prepare (command : Source.Command) (query : ParsedQuery) (solver : cvc5.Solv
         aliases := aliases ++ names
         rewritten := rewritten.push body
       return (.list (items.set! 2 (.list rewritten)), aliases)
+    if kind == "define-fun-rec" || kind == "define-funs-rec" then
+      let (signatures, bodies) ← if kind == "define-fun-rec" && items.size == 5 then
+          pure (#[SExpr.list (items.extract 1 4)], #[items[4]!])
+        else if kind == "define-funs-rec" && items.size == 3 then do
+          let .list signatures := items[1]! | throw (.unsupported "expected recursive signatures")
+          let .list bodies := items[2]! | throw (.unsupported "expected recursive bodies")
+          pure (signatures, bodies)
+        else throw (.unsupported "invalid recursive definition")
+      unless !signatures.isEmpty && signatures.size == bodies.size do
+        throw (.unsupported "recursive group size mismatch")
+      let mut renamed := #[]
+      for signature in signatures do
+        let .list fields := signature | throw (.unsupported "expected recursive signature")
+        unless fields.size == 3 do throw (.unsupported "expected recursive signature")
+        if fields[0]!.name == "set.card" then
+          if (globals query ++ aliases).any (·.1 == "set.card") then
+            throw (.unsupported "duplicate declaration: set.card")
+          let spelling ← fresh stem
+          aliases := aliases.push ("set.card", spelling)
+          renamed := renamed.push (fields.set! 0 (.atom spelling))
+        else renamed := renamed.push fields
+      let mut signatures := #[]
+      let mut rewritten := #[]
+      for fields in renamed, body in bodies do
+        let .list parameters := fields[1]! | throw (.unsupported "expected function parameters")
+        let pairs ← parameters.mapM fun parameter => do
+          let .list pair := parameter | throw (.unsupported "expected sorted parameter")
+          unless pair.size == 2 do throw (.unsupported "expected sorted parameter")
+          return pair
+        let (names, locals) ← binders stem (pairs.map (·[0]!))
+        signatures := signatures.push (.list (fields.set! 1 (.list (pairs.mapIdx fun i pair => .list (pair.set! 0 names[i]!)))))
+        rewritten := rewritten.push (← term query solver symbols stem (locals ++ aliases) body)
+      if kind == "define-fun-rec" then
+        let .list fields := signatures[0]! | throw (.error "missing recursive signature")
+        return (.list (#[items[0]!] ++ fields ++ #[rewritten[0]!]), aliases)
+      return (.list #[items[0]!, .list signatures, .list rewritten], aliases)
     if #["declare-fun", "declare-const", "define-fun", "define-const"].contains kind then
       if items[1]?.map SExpr.name == some "set.card" then
         if (globals query).any (·.1 == "set.card") then

@@ -69,6 +69,21 @@ def rememberSort (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
   invoke solver symbols s!"(define-sort {name} () {sortText})"
   modify fun state => { state with aliases := state.aliases.push (sort, name) }
 
+/-- Preserve a constructor's native identity even if its source name is shadowed. -/
+def rememberSortConstructor (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
+    (sourceName : String) (arity : Nat) : StateT State cvc5.Env Unit := do
+  let name ← fresh
+  let parameters := (List.range arity).map (fun i => s!"T{i}")
+  let arguments := String.intercalate " " parameters
+  invoke solver symbols s!"(define-sort {name} ({arguments}) ({sourceName} {arguments}))"
+  let parser ← cvc5.InputParser.new solver (some symbols)
+  let bools := String.intercalate " " (List.replicate arity "Bool")
+  parser.setStringInput s!"(forall ((x ({name} {bools}))) true)"
+  let term ← parser.nextTerm
+  let sort := term.getChildren[0]!.getChildren[0]!.getSort!
+  let constructor ← ofExcept sort.getUninterpretedSortConstructor
+  modify fun state => { state with aliases := state.aliases.push (constructor, name) }
+
 /-- Initialize aliases only after the source logic is known (or defaults to ALL). -/
 def initializeAliases (tm : cvc5.TermManager) (solver : cvc5.Solver)
     (symbols : cvc5.SymbolManager) : StateT State cvc5.Env Unit := do
@@ -88,6 +103,11 @@ def initializeAliases (tm : cvc5.TermManager) (solver : cvc5.Solver)
 
 private partial def sortSyntax (state : State) (sort : cvc5.Sort) : cvc5.Env String := do
   if let some (_, name) := state.aliases.find? (·.1 == sort) then return name
+  if sort.isUninterpretedSort && sort.isInstantiated then
+    let constructor ← ofExcept sort.getUninterpretedSortConstructor
+    if let some (_, name) := state.aliases.find? (·.1 == constructor) then
+      let parameters ← (← ofExcept sort.getInstantiatedParameters).mapM (sortSyntax state)
+      return s!"({name} {String.intercalate " " parameters.toList})"
   if sort.isBitVector then return s!"(_ BitVec {sort.getBitVectorSize!})"
   if sort.isArray then
     let some array := state.arrayAlias | throw (.unsupported "arrays require an array logic")
@@ -217,7 +237,7 @@ private partial def lower (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
 def prepare (command : Source.Command) (solver : cvc5.Solver) (symbols : cvc5.SymbolManager)
     (query : ParsedQuery) : StateT State cvc5.Env (String × Requirements × Bindings) := do
   let tokens := command.tokens
-  unless #["assert", "define-fun", "define-const", "check-sat-assuming", "get-value"].contains (tokens[1]?.getD "") do
+  unless #["assert", "define-fun", "define-fun-rec", "define-funs-rec", "define-const", "check-sat-assuming", "get-value"].contains (tokens[1]?.getD "") do
     return (command.text, #[], #[])
   let (expression, stop) ← match readExpr tokens 0 with
     | .ok result => pure result
@@ -229,13 +249,36 @@ def prepare (command : Source.Command) (solver : cvc5.Solver) (symbols : cvc5.Sy
     query.datatypes.flatMap (fun group => group.types.flatMap fun datatype =>
       datatype.constructors.flatMap (fun constructor =>
         #[(constructor.name, #[])] ++ constructor.fields.map (fun field => (field.name, #[]))))
-  if tokens[1]? == some "define-fun" && items.size == 5 then
+  if (tokens[1]? == some "define-fun" || tokens[1]? == some "define-fun-rec") && items.size == 5 then
     let .list parameters := items[2]! | throw (.error "expected definition parameters")
     let locals := parameters.filterMap fun parameter => match parameter with
       | .list pair => pair[0]?.map (fun name => (name.name, #[]))
       | _ => none
-    let body ← lower solver symbols query.valueSorts (locals ++ bindings) items[4]!
+    let recursive := if tokens[1]? == some "define-fun-rec" then #[(items[1]!.name, #[])] else #[]
+    let body ← lower solver symbols query.valueSorts (locals ++ recursive ++ bindings) items[4]!
     return ((SExpr.list (items.set! 4 body.expression)).render, body.requirements, body.names)
+  if tokens[1]? == some "define-funs-rec" && items.size == 3 then
+    let .list signatures := items[1]! | throw (.error "expected recursive signatures")
+    let .list bodies := items[2]! | throw (.error "expected recursive bodies")
+    unless signatures.size == bodies.size do throw (.error "recursive group size mismatch")
+    let mut recursive := #[]
+    for signature in signatures do
+      let .list fields := signature | throw (.error "expected recursive signature")
+      recursive := recursive.push (fields[0]!.name, #[])
+    let mut rewritten := #[]
+    let mut requirements := #[]
+    let mut names := #[]
+    for signature in signatures, body in bodies do
+      let .list fields := signature | throw (.error "expected recursive signature")
+      let .list parameters := fields[1]! | throw (.error "expected recursive parameters")
+      let locals := parameters.filterMap fun parameter => match parameter with
+        | .list pair => pair[0]?.map (fun name => (name.name, #[]))
+        | _ => none
+      let result ← lower solver symbols query.valueSorts (locals ++ recursive ++ bindings) body
+      rewritten := rewritten.push result.expression
+      requirements := merge requirements result.requirements
+      names := names ++ result.names
+    return ((SExpr.list (items.set! 2 (.list rewritten))).render, requirements, names)
   let result ← lower solver symbols query.valueSorts bindings expression
   return (result.expression.render, result.requirements, result.names)
 

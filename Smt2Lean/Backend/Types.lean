@@ -84,6 +84,11 @@ structure ParsedAssertion where
   arrayConstants : Array cvc5.Term := #[]
   deriving Inhabited
 
+/-- Recursive definitions are constraints, never expansion macros. -/
+structure ParsedRecursiveDefinition where
+  symbol : cvc5.Term
+  equation : ParsedAssertion
+
 /-- One validated query. Use native terms only inside `inspect`. -/
 structure ParsedQuery where
   manager : Option cvc5.TermManager := none
@@ -94,9 +99,12 @@ structure ParsedQuery where
   source : Option Source.Ref := none
   commands : Array Source.Command := #[]
   sorts : Array ParsedSort := #[]
+  sortConstructors : Array (String × Nat) := #[]
+  sortInstances : Array ParsedSort := #[]
   datatypes : Array DatatypeGroup := #[]
   declarations : Array ParsedDeclaration := #[]
   definitions : Array ParsedDefinition := #[]
+  recursiveDefinitions : Array ParsedRecursiveDefinition := #[]
   sourceLets : Array SourceLet := #[]
   assertions : Array ParsedAssertion := #[]
   /-- Private parser carriers, recognized by native identity rather than spelling. -/
@@ -109,9 +117,16 @@ structure ParsedQuery where
 def ParsedQuery.assertionTerms (query : ParsedQuery) : Array cvc5.Term :=
   query.assertions.map (·.term)
 
-/-- All declared value sorts; only `sorts` are arbitrary uninterpreted carriers. -/
+/-- Nullary sorts and ground sort applications have arbitrary nonempty carriers. -/
+def ParsedQuery.carrierSorts (query : ParsedQuery) : Array ParsedSort :=
+  query.sorts ++ query.sortInstances
+
 def ParsedQuery.valueSorts (query : ParsedQuery) : Array ParsedSort :=
-  query.sorts ++ query.datatypes.flatMap (fun group => group.types.map (·.toParsedSort))
+  query.carrierSorts ++ query.datatypes.flatMap (fun group => group.types.map (·.toParsedSort))
+
+/-- Native SymbolManager omits defined functions, including recursive ones. -/
+def ParsedQuery.nativeDeclarations (query : ParsedQuery) : Array ParsedDeclaration :=
+  query.declarations.filter fun d => !query.recursiveDefinitions.any (·.symbol == d.term)
 
 def ParsedQuery.assertionSources (query : ParsedQuery) : Array Source.Ref :=
   query.assertions.map (·.source)

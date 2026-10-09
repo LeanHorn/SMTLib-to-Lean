@@ -87,4 +87,54 @@ def readDefinition (equation : cvc5.Term) (source : Source.Ref)
   validateTerm body query.declarations allowQuantifiers parameters query.valueSorts query.arrayConstructors
   return { symbol, parameters, body, sourceBody := some sourceBody, source }
 
+/-- cvc5 attaches a private function-definition hint to recursive equations.
+Remove only its exact self-application marker; audit other hints normally. -/
+private def recursiveEquation (tm : cvc5.TermManager) (equation : cvc5.Term)
+    : cvc5.Env cvc5.Term := do
+  let mut equation := equation
+  if equation.getKind! == .FORALL && equation.getNumChildren == 3 then
+    let body := equation[1]!
+    let hints := equation[2]!
+    if body.getKind! == .EQUAL && hints.getKind! == .INST_PATTERN_LIST then
+      let remaining := hints.getChildren.filter fun hint =>
+        !(hint.getKind! == .INST_ATTRIBUTE && hint.getNumChildren == 1 && hint[0]! == body[0]!)
+      let children := #[equation[0]!, body]
+      let children ← if remaining.isEmpty then pure children else do
+        pure (children.push (← tm.mkTerm .INST_PATTERN_LIST remaining))
+      equation ← tm.mkTerm .FORALL children
+  withoutQuantifierHints tm equation
+
+/-- Register the whole recursive group before checking any body. Keep its equations
+as constraints; never put these functions in the abbreviation expansion table. -/
+def readRecursiveDefinitions (equations : Array cvc5.Term) (source : Source.Ref)
+    (query : ParsedQuery) (tm : cvc5.TermManager) (allowQuantifiers : Bool)
+    (arrayConstants : Array cvc5.Term := #[]) : cvc5.Env ParsedQuery := do
+  if equations.isEmpty then throw (.error "expected recursive defining equations")
+  let equations ← equations.mapM (recursiveEquation tm)
+  let mut query := query
+  let mut functions := #[]
+  for equation in equations do
+    let body := if equation.getKind! == .FORALL then equation[1]! else equation
+    unless body.getKind! == .EQUAL && body.getNumChildren == 2 do
+      throw (.error "expected a recursive defining equality")
+    let lhs := body[0]!
+    let symbol := if lhs.getKind! == .APPLY_UF then lhs[0]! else lhs
+    let sort := symbol.getSort!
+    unless symbol.getKind! == .CONSTANT &&
+        (isValueSort sort query.valueSorts || (← isSupportedFunction sort query.valueSorts)) do
+      throw (.unsupported s!"unsupported recursive signature: {sort}")
+    let name ← ofExcept symbol.getSymbol
+    if (knownTerms query).any (·.name == name) then
+      throw (.unsupported s!"duplicate recursive definition: {name}")
+    functions := functions.push symbol
+    query := { query with declarations := query.declarations.push { name, term := symbol, source := some source } }
+  for symbol in functions, surface in equations do
+    validateAssertion surface (knownTerms query) allowQuantifiers query.valueSorts query.arrayConstructors
+    let term ← SourceLets.erase tm query.sourceLets surface
+    let term ← expandDefinitions tm query.definitions term
+    validateAssertion term query.declarations allowQuantifiers query.valueSorts query.arrayConstructors
+    query := { query with recursiveDefinitions := query.recursiveDefinitions.push {
+      symbol, equation := { term, surface := some surface, source, arrayConstants } } }
+  return query
+
 end Smt2Lean.Backend
