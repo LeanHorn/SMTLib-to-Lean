@@ -40,16 +40,20 @@ def Problem_1.Clause003
   (¬v) →
   False
 
--- Source: "tests/chc/lh_sum_rec.smt2":28:1-28:12 (check-sat, command 7)
-/-- There are relation interpretations satisfying every Horn clause. -/
-def Problem : Prop :=
-  ∃ (r0 : Int → Prop),
+def Problem_1.Clauses
+    (r0 : Int → Prop) : Prop :=
   (Problem_1.Clause001 r0) ∧
   (Problem_1.Clause002 r0) ∧
   Problem_1.Clause003 r0
 
+-- Source: "tests/chc/lh_sum_rec.smt2":28:1-28:12 (check-sat, command 7)
+/-- There are interpretations of the declared symbols satisfying every Horn clause. -/
+def Problem : Prop :=
+  ∃ (r0 : Int → Prop),
+  Problem_1.Clauses r0
+
 -- Proofs
 
--- Unfinished proof: replace sorry to establish the existence of satisfying relations.
+-- Unfinished proof: replace sorry to establish the existence of a satisfying interpretation.
 theorem problem : Problem := by
   sorry

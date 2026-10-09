@@ -190,7 +190,6 @@ private def expectError (name reason : String) (action : cvc5.Env Unit) : IO Uni
 
 private def checkRejectedFacts : IO Unit := do
   for (name, body, reason) in #[
-    ("integer-constant", "(declare-const x Int)", "unsupported CHC declaration 'x'"),
     ("integer-function", "(declare-fun f (Int) Int)", "unsupported CHC declaration 'f'"),
     ("string-domain", "(declare-fun P (String) Bool)", "unsupported declaration sort"),
     ("nested-relation", "(declare-fun P (Int) Bool)\n(declare-fun R (Bool) Bool)\n(assert (R (P 0)))",
@@ -209,6 +208,17 @@ private def checkRejectedFacts : IO Unit := do
         for assertion in query.assertionTerms do discard <| recognizeFact relations assertion
 
 private def checkBoundData : IO Unit := do
+  (parseAndInspectProblem
+    "(set-logic HORN) (declare-const c Int) (declare-fun P (Int) Bool)\n\
+     (assert (P c)) (assert (forall ((x Int)) (=> (= x c) (P x)))) (check-sat)"
+    fun problem => do
+      let #[constant] := problem.constants | throw (.error "expected one global constant")
+      require (constant.name == "c" && problem.relations.size == 1)
+        "data constant was mistaken for a relation"
+      let some clause := problem.clauses[0]? | throw (.error "expected a clause")
+      let .relation atom := clause.head | throw (.error "expected P c")
+      require (atom.arguments == #[constant.term]) "global constant lost its native identity"
+  ).runIO
   let input := "(set-logic HORN)\n(declare-const p Bool)\n(declare-fun R (Bool) Bool)\n" ++
     "(assert (forall ((p Bool)) (R p)))\n" ++
     "(assert (forall ((p Bool)) (=> (not p) (R p))))\n(check-sat)"

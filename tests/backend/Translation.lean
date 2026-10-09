@@ -345,6 +345,17 @@ private def checkHornReconstruction (env : Environment) : IO Unit := do
   IO.println "CHC reconstruction passed: 19 clauses match handwritten Lean propositions"
 
 private def checkHornProblems (env : Environment) : IO Unit := do
+  runProblem env "global-constant-witness" "
+    (set-logic HORN)(declare-const c Int)(declare-fun P (Int) Bool)
+    (assert (P c))
+    (assert (forall ((x Int)) (=> (and (P x) (< x c)) false)))
+    (check-sat)" fun problem => do
+      checkProblem problem q(∃ (c : Int) (p : Int → Prop),
+        p c ∧ (∀ x : Int, p x → x < c → False))
+      let clauses := mkConst `Problem.Clauses
+      checkEqual (← inferType clauses) q(Int → (Int → Prop) → Prop)
+      checkEqual (mkAppN clauses #[q((0 : Int)), q(fun x : Int => x = 0)])
+        q((0 : Int) = 0 ∧ (∀ x : Int, x = 0 → x < 0 → False))
   let surface := "tests/translation/chc/surface-forms.smt2"
   runProblem env surface (← IO.FS.readFile surface) fun problem =>
     checkProblem problem q(∃ (p q : Int → Prop) (done : Prop),
@@ -594,8 +605,10 @@ private def checkNamedClauses (env : Environment) : IO Unit := do
     let original ← defineProblem problem `Original
     let statement ← problemStatement problem
     checkEqual statement.value original
-    unless statement.parts.size == 2 do throwError "lost clause boundaries"
-    for part in statement.parts do
+    unless statement.parts.size == 3 &&
+        statement.parts[2]?.map (·.name) == some `Problem.Clauses do
+      throwError "lost clause boundaries or the parameterized Clauses definition"
+    for part in statement.parts.pop do
       lambdaTelescope part.value fun parameters _ => do
         unless parameters.size == 2 do
           throwError "a clause must bind its carrier and relation, but not the unused relation"

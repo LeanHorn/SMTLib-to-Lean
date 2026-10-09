@@ -274,7 +274,7 @@ private def reconstructClause (context : Smt.Reconstruct.Context) (sortCache : S
     return value
 
 /--
-Reconstruct CHC clauses with carriers, array models, arithmetic choices, and relations.
+Reconstruct CHC clauses with carriers, array models, arithmetic choices, constants, and relations.
 Each clause is `∀ variables, premise₁ → … → head`. Inspect the parameters and
 model laws, and clauses inside the callback, while their context and native terms are alive.
 -/
@@ -296,23 +296,26 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
         (fun d => #[d.body, d.sourceBody.getD d.body]) else #[])
     Arithmetic.withZeroCases terms fun zeroCases context => do
       let context := SourceBindings.context context query.sourceLets
-      let modelTerms := problem.arrayTerms ++ problem.relations.map (·.term) ++ terms ++
+      let symbols := problem.constants ++ problem.relations.map (·.toParsedDeclaration)
+      let modelTerms := problem.arrayTerms ++ symbols.map (·.term) ++ terms ++
         problem.clauses.flatMap (fun c => c.binders.map (·.term))
       Models.withModels problem.datatypes modelTerms sortCache context (constructors := problem.arrayConstructors) fun arrayParameters laws sortCache context => do
-        let declarations ← problem.relations.mapIdxM fun i (relation : Chc.Relation) =>
-          atSource relation.source s!"relation '{relation.name}'" (chc := true) (queryNumber := problem.number) do
-            let sort ← ofExcept relation.term.getSort
+        let declarations ← symbols.mapIdxM fun i (symbol : ParsedDeclaration) =>
+          atSource symbol.source s!"declaration '{symbol.name}'" (chc := true) (queryNumber := problem.number) do
+            let sort ← ofExcept symbol.term.getSort
             let (type, _) ← (Smt.Reconstruct.reconstructSort sort).run {} { sortCache }
-            return (← mkFreshUserName (Name.mkSimple s!"r{i}"), type)
+            let name := if i < problem.constants.size then s!"c{i}" else s!"r{i - problem.constants.size}"
+            return (← mkFreshUserName (Name.mkSimple name), type)
         withLocalDeclsDND declarations fun parameters => do
-          let mut relations : Std.HashMap cvc5.Term Expr := {}
-          for relation in problem.relations, parameter in parameters do
-            relations := relations.insert relation.term parameter
+          -- Every clause and source definition uses the same global interpretation.
+          let mut interpretations : Std.HashMap cvc5.Term Expr := {}
+          for symbol in symbols, parameter in parameters do
+            interpretations := interpretations.insert symbol.term parameter
           let allParameters := carriers ++ arrayParameters ++ zeroCases ++ parameters
           let (definitions, state) ← withTermReconstruction <| Elab.Tactic.classical <|
             (match namespaceName with
               | some name => reconstructDefinitions definitions allParameters name
-              | none => pure #[]).run context { sortCache, termCache := relations }
+              | none => pure #[]).run context { sortCache, termCache := interpretations }
           let sourceClauses ← if namespaceName.isSome then (Chc.presentationClauses problem).runIO
             else pure problem.clauses
           let clauses ← sourceClauses.mapM fun clause =>
@@ -322,7 +325,7 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
                 throwError "clause contains variables outside its interpretation parameters"
               return value
           let originals ← if namespaceName.isSome then
-            problem.clauses.mapM (reconstructClause context sortCache relations) else pure clauses
+            problem.clauses.mapM (reconstructClause context sortCache interpretations) else pure clauses
           inspect allParameters laws clauses originals definitions
 
 /-- Inspect reconstructed clauses while their interpretation parameters are in scope. -/
@@ -396,7 +399,7 @@ def defineRefutation (query : ParsedQuery) (name : Name := `Refutation) : MetaM 
   atSource query.source "Refutation" (defineProposition name value) (queryNumber := query.number)
 
 /--
-Define CHC model existence over admissible models and relations.
+Define CHC model existence over admissible models, global constants, and relations.
 Retain unused declarations; an empty clause conjunction is `True`. Check without proving it.
 -/
 def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr := do
@@ -417,14 +420,19 @@ def refutationStatement (query : ParsedQuery) (name : Name := `Refutation) : Met
       checkAssembly name original value
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 
-/-- Keep each Horn clause as a separate definition rather than expanding the whole problem. -/
+/-- Expose parameterized clauses, then existentially close their shared interpretation. -/
 def problemStatement (problem : Chc.Problem) (name : Name := `Problem) : MetaM Statement :=
   atSource problem.source "Problem" (chc := true) (queryNumber := problem.number) <|
     withClauseModel problem (namespaceName := some name) fun parameters laws clauses originals definitions => do
       let original ← closeProblem problem.sorts.size parameters laws originals
       let (calls, parts) ← nameParts parameters clauses (problem.clauses.map (·.source)) name "Clause"
-      let value ← defineProposition name (← closeProblem problem.sorts.size parameters laws calls)
+      let clauseName := name ++ `Clauses
+      let clauseValue ← mkLambdaFVars parameters (mkAndN calls.toList) (usedOnly := false)
+      discard <| defineChecked clauseName clauseValue
+      let clauseCall := mkAppN (mkConst clauseName) parameters
+      let value ← defineProposition name (← closeProblem problem.sorts.size parameters laws #[clauseCall])
       checkAssembly name original value
+      let parts := parts.push { name := clauseName, value := clauseValue, label := "clauses" }
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 
 end Smt2Lean.Translate

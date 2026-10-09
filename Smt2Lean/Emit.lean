@@ -132,8 +132,8 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
     | .refutation => ("Refutation", "refutation",
         "No interpretation satisfies all assertions of the SMT query.", "the query's refutation")
     | .problem => ("Problem", "problem",
-        "There are relation interpretations satisfying every Horn clause.",
-        "the existence of satisfying relations")
+        "There are interpretations of the declared symbols satisfying every Horn clause.",
+        "the existence of a satisfying interpretation")
   let suffix := number.map (fun n => s!"_{n}") |>.getD ""
   let definitionName := baseName ++ suffix
   let theoremName := baseProof ++ suffix

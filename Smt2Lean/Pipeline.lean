@@ -25,10 +25,11 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
         | some problem => do
           let statement ← Translate.problemStatement problem (.mkSimple s!"Problem_{query.number}")
           let assertionCount := query.assertions.size - query.assumptionCount
-          let parts := (statement.parts.zip problem.clauses).map fun (part, clause) =>
+          let parts := statement.parts.mapIdx fun i part => Id.run do
+            let some clause := problem.clauses[i]? | return part
             if clause.assertionNumber > assertionCount then
-              { part with label := s!"assumption {clause.assertionNumber - assertionCount}" }
-            else part
+              return { part with label := s!"assumption {clause.assertionNumber - assertionCount}" }
+            else return part
           pure ({ statement with parts }, .problem)
         | none => do
           pure (← Translate.refutationStatement query (.mkSimple s!"Refutation_{query.number}"), .refutation)
