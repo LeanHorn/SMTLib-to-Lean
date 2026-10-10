@@ -52,6 +52,51 @@ Run the Lean command again to check the completed proof. For broader examples,
 see [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.smt2).
 Use `--max-rec-depth N` to override the default recursion limit of 4096.
 
+## Library API: standalone definitions
+
+`Smt2Lean.Translate.reconstructDefinitions` takes a validated
+`Backend.ParsedQuery` and returns `Array ReconstructedDefinition` in `Lean.MetaM`.
+Each result contains the original SMT name (without quoting bars), source location,
+Lean type, and closed Lean value. All active ordinary definitions are returned in
+source order, including definitions unused by assertions. Unused parameters retain
+their positions; SMT `Bool` becomes Lean `Prop`.
+
+```lean
+import Smt2Lean
+
+open Lean Meta
+
+run_elab do
+  let env ← getEnv
+  let input := "(set-logic LIA) \
+    (define-fun inv ((x Int)) Bool (>= x 0)) (check-sat)"
+  (Smt2Lean.Backend.parseAndInspectQuery input fun query => do
+    let inspect : MetaM Unit := do
+      let definitions ← Smt2Lean.Translate.reconstructDefinitions query
+      for definition in definitions do
+        IO.println s!"{definition.name} : {← ppExpr definition.type} := {← ppExpr definition.value}"
+    discard <| inspect.toIO { fileName := "definitions", fileMap := default } { env }
+  ).runIO
+```
+
+Run this with `lake lean`, which loads the native cvc5 plugin. The result is an
+`Int → Prop` lambda equivalent to `fun x => x ≥ 0`. Reconstruction must happen
+inside the parser callback, but the returned values remain usable afterwards in
+the original Lean environment. The API leaves no generated declarations or
+changed reconstruction handlers behind.
+
+The initial API supports Bool/Int signatures and bodies, including Boolean and
+integer operators, quantifiers, `ite`, `let`, and calls to earlier ordinary
+definitions. Definitions with unresolved global symbols, recursive definitions,
+other sorts, or division/modulo needing an unspecified zero-case interpretation
+are rejected with source context. Division/modulo by a nonzero integer literal
+is supported. These restrictions apply to this standalone API; the query
+translator retains its broader theory support.
+
+This API does not invoke `checkSat`, use assertions as assumptions, or certify
+that returned definitions satisfy a constraint. It accepts parsed SMT scripts;
+importing external solver response envelopes is a separate layer.
+
 ## Tests
 
 ```sh

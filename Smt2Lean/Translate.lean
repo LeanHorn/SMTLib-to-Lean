@@ -1,6 +1,7 @@
 import Smt2Lean.Chc
 import Smt2Lean.Sharing
 import Smt2Lean.Statement
+import Smt2Lean.Definition
 import Smt2Lean.SourceBindings
 import Smt2Lean.Equivalence
 import Smt2Lean.Theory.Arithmetic
@@ -150,20 +151,27 @@ private def neededDefinitions (query : ParsedQuery) : Array ParsedDefinition := 
     pending := pending ++ term.getChildren
   return query.definitions.filter (used.contains ·.symbol)
 
-private def reconstructDefinitions (definitions : Array ParsedDefinition) (globals : Array Expr)
+/-- Share parameter binding between named statement emission and standalone definitions. -/
+private def reconstructDefinitionValue (definition : ParsedDefinition) (body : cvc5.Term)
+    : Smt.ReconstructM Expr := do
+  let binders ← definition.parameters.mapM fun p => do
+    return (← mkFreshUserName (Name.mkSimple p.getSymbol!),
+      ← Smt.Reconstruct.reconstructSort p.getSort!)
+  let saved := (← get).termCache
+  try
+    withLocalDeclsDND binders fun parameters => do
+      for term in definition.parameters, parameter in parameters do
+        modify fun state => { state with termCache := state.termCache.insert term parameter }
+      let value ← Smt.Reconstruct.reconstructTerm body
+      mkLambdaFVars parameters value (usedOnly := false)
+  finally
+    modify fun state => { state with termCache := saved }
+
+private def reconstructNamedDefinitions (definitions : Array ParsedDefinition) (globals : Array Expr)
     (namespaceName : Name) : Smt.ReconstructM (Array StatementPart) := do
   let mut parts := #[]
   for definition in definitions do
-    let binders ← definition.parameters.mapM fun p => do
-      return (← mkFreshUserName (Name.mkSimple p.getSymbol!),
-        ← Smt.Reconstruct.reconstructSort p.getSort!)
-    let saved := (← get).termCache
-    let value ← withLocalDeclsDND binders fun parameters => do
-      for term in definition.parameters, parameter in parameters do
-        modify fun state => { state with termCache := state.termCache.insert term parameter }
-      let body ← Smt.Reconstruct.reconstructTerm (definition.sourceBody.getD definition.body)
-      mkLambdaFVars parameters body (usedOnly := false)
-    modify fun state => { state with termCache := saved }
+    let value ← reconstructDefinitionValue definition (definition.sourceBody.getD definition.body)
     let mut value := value
     let mut arguments := #[]
     for parameter in globals.reverse do
@@ -177,6 +185,78 @@ private def reconstructDefinitions (definitions : Array ParsedDefinition) (globa
     modify fun state => { state with termCache := state.termCache.insert definition.symbol call }
     parts := parts.push { name, value, source := some definition.source, label := "definition" }
   return parts
+
+/-- Validate without a global symbol table: a standalone witness must not accidentally
+resolve an SMT name through lean-smt's fallback to a Lean constant of the same name. -/
+private def validateClosedDefinition (definition : ParsedDefinition) : cvc5.Env Unit := do
+  let signature ← ofExcept definition.symbol.getSort
+  let sorts ← if signature.isFunction then do
+      let domains ← ofExcept signature.getFunctionDomainSorts
+      let codomain ← ofExcept signature.getFunctionCodomainSort
+      pure (domains.push codomain)
+    else pure #[signature]
+  unless sorts.all (fun s => s.isBoolean || s.isInteger) do
+    throw (.unsupported "standalone definition signatures support only Bool/Int sorts")
+  validateTerm definition.body #[] true definition.parameters
+  let mut pending := definition.parameters.push definition.body
+  let mut visited : Std.HashSet cvc5.Term := {}
+  while !pending.isEmpty do
+    let term := pending.back!
+    pending := pending.pop
+    if visited.contains term then continue
+    visited := visited.insert term
+    unless term.getKind! == .VARIABLE_LIST do
+      let sort ← ofExcept term.getSort
+      unless sort.isBoolean || sort.isInteger do
+        throw (.unsupported "standalone definition bodies support only Bool/Int sorts")
+    pending := pending ++ term.getChildren
+
+/-- Reconstruct every active ordinary definition, including those unused by assertions.
+
+Call inside `Backend.parseAndInspectQuery` or `Backend.parseAndInspectSession`, while
+the query's native terms are alive. Results contain only closed Lean expressions and
+source metadata, and remain usable after that callback ends in the original Lean
+environment. This function does not add declarations or change reconstruction handlers.
+
+The initial supported fragment uses Bool/Int sorts, the existing Boolean/integer
+operators, and quantifiers. Lets and calls to earlier ordinary definitions use the
+parser's checked, capture-avoiding expansions. Uninterpreted global dependencies,
+recursive definitions, and division/modulo requiring an interpretation at zero are
+rejected. Assertions are not solved or used as assumptions; this API neither parses
+solver response envelopes nor establishes that a definition is a valid invariant.
+-/
+def reconstructDefinitions (query : ParsedQuery) : MetaM (Array ReconstructedDefinition) := do
+  let originalEnv ← getEnv
+  withoutModifyingEnv do
+    for definition in query.recursiveDefinitions do
+      atSource (some definition.equation.source) "recursive definition" (queryNumber := query.number) do
+        throwError "standalone reconstruction does not support recursive definitions"
+    query.definitions.mapM fun definition =>
+      atSource (some definition.source) s!"definition '{definition.name}'" (queryNumber := query.number) do
+        (validateClosedDefinition definition).runIO
+        Arithmetic.withZeroCases #[definition.body] fun zeroCases context => do
+          unless zeroCases.isEmpty do
+            throwError "standalone definition requires an interpretation for division/modulo at zero"
+          let reconstruction : Smt.ReconstructM (Expr × Expr) := do
+            let type ← Smt.Reconstruct.reconstructSort (← ofExcept definition.symbol.getSort)
+            let value ← reconstructDefinitionValue definition definition.body
+            return (type, value)
+          let ((type, value), state) ← withTermReconstruction <|
+            Elab.Tactic.classical <| reconstruction.run context {}
+          unless state.skippedGoals.isEmpty do
+            throwError "definition reconstruction left unfinished goals"
+          -- Operator helpers may have been installed while reconstructing. Inline them
+          -- before restoring the caller's environment; ordinary definitions are already expanded.
+          let value ← deltaExpand value Helpers.isHelper
+          for expression in #[type, value] do
+            if expression.hasFVar || expression.hasLooseBVars || expression.hasMVar then
+              throwError "definition reconstruction left unresolved variables"
+          withEnv originalEnv do
+            unless ← isDefEq (← inferType value) type do
+              throwError "reconstructed definition does not match its declared signature: {type}"
+            -- Reuse the synchronous kernel and axiom checks, without publishing the declaration.
+            discard <| defineChecked (← mkFreshId) value
+          return { name := Collisions.sourceName definition.name, type, value, source := definition.source }
 
 /-- Horn normalization can unfold structural macros; emit only definitions still used. -/
 private def usedDefinitions (definitions : Array StatementPart) (values : Array Expr)
@@ -216,7 +296,7 @@ private def withAssertionModel [Inhabited α] (query : ParsedQuery)
           let allParameters := carriers ++ arrayParameters ++ zeroCases ++ parameters
           let reconstruction : Smt.ReconstructM (Array Expr × Array Expr × Array StatementPart) := do
             let parts ← match namespaceName with
-              | some name => reconstructDefinitions definitions allParameters name
+              | some name => reconstructNamedDefinitions definitions allParameters name
               | none => pure #[]
             let assertions ← query.assertions.mapIdxM fun i assertion =>
               atSource (some assertion.source) s!"assertion {i + 1}" (queryNumber := query.number) do
@@ -317,7 +397,7 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
           let allParameters := carriers ++ arrayParameters ++ zeroCases ++ parameters
           let (definitions, state) ← withTermReconstruction <| Elab.Tactic.classical <|
             (match namespaceName with
-              | some name => reconstructDefinitions definitions allParameters name
+              | some name => reconstructNamedDefinitions definitions allParameters name
               | none => pure #[]).run context { sortCache, termCache := interpretations }
           let sourceClauses ← if namespaceName.isSome then (Chc.presentationClauses problem).runIO
             else pure problem.clauses

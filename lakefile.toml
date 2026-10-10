@@ -18,7 +18,7 @@ name = "Smt2Lean"
 [[lean_lib]]
 name = "TestSupport"
 roots = ["tests.backend.ArrayModel", "tests.backend.Support", "tests.backend.Arithmetic",
-  "tests.backend.BitVec", "tests.backend.Datatypes", "tests.backend.Sessions", "tests.backend.Sharing", "tests.backend.ParserSupport", "tests.backend.ParserTerms"]
+  "tests.backend.BitVec", "tests.backend.Datatypes", "tests.backend.Sessions", "tests.backend.Sharing", "tests.backend.ParserSupport", "tests.backend.ParserTerms", "tests.backend.Definitions"]
 
 [[lean_exe]]
 name = "smt2lean"

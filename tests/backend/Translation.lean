@@ -3,6 +3,7 @@ import tests.backend.BitVec
 import tests.backend.Sessions
 import tests.backend.Datatypes
 import tests.backend.Sharing
+import tests.backend.Definitions
 
 open Lean Meta Qq Classical
 open Smt2Lean.Tests
@@ -672,6 +673,7 @@ def main (args : List String) : IO Unit := do
       checkBitvectorDivision env
       checkBitvectorConversions env),
     ("bindings", fun env => do
+      checkDefinitionAPI env
       checkLetBindings env
       checkDefinitions env
       checkSourceBindings env
