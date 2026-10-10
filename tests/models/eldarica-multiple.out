@@ -1,0 +1,7 @@
+sat
+(
+    (define-fun always ((A Int) (B Bool)) Bool true)
+    (define-fun never ((A Int)) Bool false)
+    (define-fun nonnegative ((A Int)) Bool (>= A 0))
+    (define-fun positive ((A Int) (B Int)) Bool (and (>= A 0) (>= B 1)))
+)

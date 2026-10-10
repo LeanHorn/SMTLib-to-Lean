@@ -3,5 +3,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-lake build smt2lean testSource testParser testReconstruction testHorn testTranslation testArrays
+lake build smt2lean testSource testParser testReconstruction testHorn testTranslation testArrays testModels
 lake env python3 tests/run.py "$@"

@@ -23,7 +23,7 @@ def checks():
     result.update({f"cli-{group}": [sys.executable, "tests/cli.py", group]
                    for group in GROUPS})
     result.update({target: [f".lake/build/bin/{target}"] for target in
-                   ("testSource", "testParser", "testReconstruction", "testHorn", "testArrays")})
+                   ("testSource", "testParser", "testReconstruction", "testHorn", "testArrays", "testModels")})
     result["runner-policy"] = [sys.executable, "tests/cli_selection.py"]
     result["anchor"] = [sys.executable, "tests/anchor.py"]
     return result

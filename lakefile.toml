@@ -44,6 +44,11 @@ root = "tests.backend.Translation"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "testModels"
+root = "tests.backend.Models"
+supportInterpreter = true
+
+[[lean_exe]]
 name = "testHorn"
 root = "tests.backend.Horn"
 

@@ -139,7 +139,7 @@ Read one complete command, preserving its bytes. This only finds boundaries;
 cvc5 still parses terms and checks their syntax. SMT-LIB strings escape quotes
 by doubling them; backslashes do not escape quotes or quoted-name delimiters.
 -/
-def Reader.next (initial : Reader input) (file : String)
+private def Reader.nextForm (initial : Reader input) (file : String) (allowAtom : Bool)
     : Except Error (Option Command × Reader input) := do
   let mut reader := initial
   let mut comment := false
@@ -153,10 +153,20 @@ def Reader.next (initial : Reader input) (file : String)
       break
     reader := reader.advance
   if reader.cursor == input.endPos then return (none, reader)
-  unless reader.cursor.get! == '(' do
-    throw { position := reader.position, message := "expected '(' at the start of a command" }
   let start := reader.position
   let begin := reader.cursor
+  unless reader.cursor.get! == '(' do
+    unless allowAtom do
+      throw { position := reader.position, message := "expected '(' at the start of a command" }
+    if [')', '|', '"'].contains reader.cursor.get! then
+      throw { position := reader.position, message := "unexpected response delimiter" }
+    while reader.cursor != input.endPos && !reader.cursor.get!.isWhitespace &&
+        !['(', ')', ';', '|', '"'].contains reader.cursor.get! do
+      reader := reader.advance
+    let text := String.extract begin reader.cursor
+    return (some { text, tokens := #[text], source := {
+        file, number := reader.number, span := { start, stop := reader.position } } },
+      { reader with number := reader.number + 1 })
   let mut depth := 0
   let mut mode := Mode.normal
   let mut quoteStart := start
@@ -196,5 +206,16 @@ def Reader.next (initial : Reader input) (file : String)
   throw {
     position := reader.position
     message := s!"unexpected EOF: unterminated {what} opened at {opened.line}:{opened.column}" }
+
+/-- Read a script command. Atoms are rejected; native parsing checks term syntax. -/
+def Reader.next (reader : Reader input) (file : String)
+    : Except Error (Option Command × Reader input) :=
+  reader.nextForm file false
+
+/-- Read one solver-response list or unquoted atom, preserving its original span.
+Quoted symbols and strings are handled inside lists by the same scanner as scripts. -/
+def Reader.nextResponse (reader : Reader input) (file : String)
+    : Except Error (Option Command × Reader input) :=
+  reader.nextForm file true
 
 end Smt2Lean.Source

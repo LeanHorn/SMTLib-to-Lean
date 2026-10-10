@@ -1,0 +1,11 @@
+sat
+(
+  (define-fun never ((x!0 Int)) Bool
+    false)
+  (define-fun positive ((x!0 Int) (x!1 Int)) Bool
+    (and (not (<= x!0 (- 1))) (= x!1 (+ 1 x!0))))
+  (define-fun always ((x!0 Int) (x!1 Bool)) Bool
+    true)
+  (define-fun nonnegative ((x!0 Int)) Bool
+    (not (<= x!0 (- 1))))
+)

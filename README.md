@@ -95,7 +95,69 @@ translator retains its broader theory support.
 
 This API does not invoke `checkSat`, use assertions as assumptions, or certify
 that returned definitions satisfy a constraint. It accepts parsed SMT scripts;
-importing external solver response envelopes is a separate layer.
+importing external solver response envelopes uses the API below.
+
+## Library API: external solver models
+
+`Smt2Lean.Model.importResponse` takes solver **stdout**, a Lean environment, and
+an optional source name. It returns typed, closed definitions using the same
+parser and reconstruction API above; it does not launch a process or solve again.
+
+```lean
+import Smt2Lean
+
+open Lean Meta
+
+run_elab do
+  let response ← Smt2Lean.Model.importResponse
+    "sat ((define-fun inv ((x Int)) Bool (>= x 0)))"
+    (← getEnv) "spacer.out"
+  let some definitions := response.definitions
+    | throwError "solver returned no model"
+  for definition in definitions do
+    logInfo m!"{definition.name} : {definition.type} := {definition.value}"
+```
+
+Run with `lake lean` to load the native plugin. Results remain usable after the
+call in the supplied environment. The function returns:
+
+- `status : Option SolverResponse.Status`: the literal `sat`, `unsat`, or
+  `unknown` response. Standalone models and error-only responses have no status.
+- `definitions : Option (Array ReconstructedDefinition)`: `none` means no model
+  was supplied; `some #[]` means an explicitly empty model. Definition order,
+  original symbol names, and source spans in the response are preserved.
+- `diagnostics`: decoded `(error "...")` and `(:reason-unknown ...)` messages,
+  tagged by kind and source location. Solver stderr belongs to the process runner
+  and should not be concatenated with stdout.
+
+Accepted model formats are `((define-fun ...) ...)`, `(model (define-fun ...) ...)`,
+and direct `define-fun` sequences, with or without a preceding `sat`.
+Leading `success` acknowledgements and SMT-LIB comments are accepted. Helpers
+must precede their callers, as in an ordinary SMT script, and are expanded by
+the existing capture-avoiding definition machinery. All definitions, including
+helpers, are returned. The Bool/Int restrictions of the standalone API apply.
+
+The importer consumes exactly one response. Duplicate names, repeated statuses,
+multiple models, malformed/trailing data, unsupported definitions, and models
+mixed with errors or `unknown`/`unsat` are rejected with source context. Imports
+fail atomically: a valid prefix of an invalid model is never returned. A status
+without a model, or an error/unknown response, returns no definitions.
+
+This API handles models for **asserted CHCs with `check-sat`**, where `sat`
+indicates satisfiability. It does not interpret Z3 fixedpoint `(query ...)`
+answers or their different status convention. Definitions are candidate
+interpretations; no proof that they satisfy the original constraints is added.
+Matching them to Flex's existential predicates and checking those constraints
+belongs to the later integration.
+
+Captured Z3/Spacer and Eldarica fixtures, commands, and versions are in
+[`tests/models/README.md`](tests/models/README.md). The tests run without either
+external solver installed:
+
+```sh
+lake build testModels
+lake env .lake/build/bin/testModels
+```
 
 ## Tests
 
