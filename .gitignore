@@ -3,3 +3,5 @@
 /docs/
 __pycache__/
 /benchmarks/results/
+/benchmarks/chc-smtlib/archives/
+/benchmarks/chc-smtlib/extracted/

@@ -1,0 +1,223 @@
+{
+  "selection": "flex-chc-965",
+  "created_date": "2026-10-17",
+  "suite_count": 17,
+  "query_count": 965,
+  "notes": [
+    "One tar.gz per suite; exactly the selected SMT-LIB inputs plus attribution and supporting metadata.",
+    "Input contents and source-relative member paths are unchanged. No translation or Flex evaluation has been run.",
+    "Paths in manifest.csv are relative to this folder after extracting each tar.gz into extracted/.",
+    "Expected-result metadata is retained where supplied; placeholder metadata is not proof of a verdict.",
+    "Cross-suite semantic duplicates may exist. Input ZIP hashes are provenance; SHA256SUMS covers the stored tar.gz archives."
+  ],
+  "sources": [
+    {
+      "source": "chc-comp26",
+      "revision": "b4fa7a708e5863bbcdb5de50d692ead3a67cbedc",
+      "source_url": "https://github.com/chc-comp/chc-comp26-benchmarks",
+      "download_url": "https://github.com/chc-comp/chc-comp26-benchmarks/archive/b4fa7a708e5863bbcdb5de50d692ead3a67cbedc.zip",
+      "selected_queries": 917,
+      "original_download_sha256": "912aa7b44471c9e1ed49ba0c2c034dcafa4300a821edaf3bf016618fd0e99b25",
+      "suites": {
+        "extra-small-lia": 55,
+        "hopv/lia/fpice": 10,
+        "hopv/lia/mochi": 64,
+        "hopv/lia/termination": 43,
+        "aeval-benchmarks/multi-phase": 54,
+        "aeval-unsafe": 54,
+        "eldarica-misc/LIA/HOLA": 46,
+        "eldarica-misc/LIA/reve": 72,
+        "eldarica-misc/LIA/llreve": 43,
+        "eldarica-misc/LIA/Consistency": 55,
+        "hcai-bench/svcomp/O0": 146,
+        "hcai-bench/svcomp/O3": 148,
+        "synthesis/nay-horn": 119,
+        "ultimate/LIA-NonLin": 8
+      },
+      "includes": "Selected suite contents, original per-input metadata, upstream README and properties",
+      "input_archive_sha256": "2c11ca93acc60a2ea72f6d36a5bebd1befbb345d3e6b90f49b012671e2794d07",
+      "input_archive_bytes": 1353322,
+      "input_archive_name": "chc-comp26-selected-b4fa7a7.zip",
+      "input_archive_kind": "selected files repackaged unchanged from verified local snapshot"
+    },
+    {
+      "source": "hoice",
+      "revision": "e440ea8da1b6f2f8823a4e4f8eae08ef3a532919",
+      "source_url": "https://github.com/hopv/hoice",
+      "download_url": "https://codeload.github.com/hopv/hoice/zip/e440ea8da1b6f2f8823a4e4f8eae08ef3a532919",
+      "selected_queries": 32,
+      "selected_directories": {
+        "rsc/sat/": 18,
+        "rsc/unsat/": 14
+      },
+      "attribution_files": [
+        "LICENSE",
+        "NOTICE.md",
+        "README.md"
+      ],
+      "archive_wrapper": "hoice-e440ea8da1b6f2f8823a4e4f8eae08ef3a532919/",
+      "input_archive_sha256": "e0e4ee4b1b72c78c22ffb85e886c4a512d13180aa674d6ec848f6a1f8c1be225",
+      "input_archive_bytes": 406402,
+      "input_archive_name": "hoice-e440ea8.zip",
+      "input_archive_kind": "complete pinned upstream ZIP; only manifest entries are evaluation inputs"
+    },
+    {
+      "source": "eldarica",
+      "revision": "9c3addbebf8f7f201f7bf6d65d77e43d97122201",
+      "source_url": "https://github.com/uuverifiers/eldarica",
+      "download_url": "https://codeload.github.com/uuverifiers/eldarica/zip/9c3addbebf8f7f201f7bf6d65d77e43d97122201",
+      "selected_queries": 16,
+      "selected_directories": {
+        "regression-tests/horn-abstract/": 13,
+        "regression-tests/horn-accel/": 3
+      },
+      "attribution_files": [
+        "LICENSE",
+        "README.md"
+      ],
+      "archive_wrapper": "eldarica-9c3addbebf8f7f201f7bf6d65d77e43d97122201/",
+      "input_archive_sha256": "77180260bbd330ea8c9cec8ae911bc65bee1502184d6540d7f10cba367dd0434",
+      "input_archive_bytes": 5523922,
+      "input_archive_name": "eldarica-9c3addb.zip",
+      "input_archive_kind": "complete pinned upstream ZIP; only manifest entries are evaluation inputs"
+    }
+  ],
+  "archives": [
+    {
+      "suite": "chc26/extra-small-lia",
+      "source": "chc-comp26",
+      "archive": "archives/extra-small-lia.tar.gz",
+      "queries": 55,
+      "sha256": "7749f72efd5c0ce48efe0e82b634322f98c786dcfe8cdb02121e730aa8cd75b0",
+      "bytes": 8423
+    },
+    {
+      "suite": "chc26/hopv/lia/fpice",
+      "source": "chc-comp26",
+      "archive": "archives/hopv-fpice.tar.gz",
+      "queries": 10,
+      "sha256": "7af54f9f95a0156b8c09014c8c9ee72837f7f0bc9287745b29fa44b986217c0a",
+      "bytes": 2903
+    },
+    {
+      "suite": "chc26/hopv/lia/mochi",
+      "source": "chc-comp26",
+      "archive": "archives/hopv-mochi.tar.gz",
+      "queries": 64,
+      "sha256": "98e27e67abbf16fbbe8d338dd3708d4b7054b8277b46bf0ad45fbffc5462977d",
+      "bytes": 20491
+    },
+    {
+      "suite": "chc26/hopv/lia/termination",
+      "source": "chc-comp26",
+      "archive": "archives/hopv-termination.tar.gz",
+      "queries": 43,
+      "sha256": "eb52021ba9939e99524006b429a24d0504d91e25a3dcc03d3959f1b2ee83911f",
+      "bytes": 14470
+    },
+    {
+      "suite": "chc26/aeval-benchmarks/multi-phase",
+      "source": "chc-comp26",
+      "archive": "archives/aeval-benchmarks.tar.gz",
+      "queries": 54,
+      "sha256": "db7b5ba230dcb94342f1c4abeb130342a7d3c95aa2923680373888e2b0ed6f6d",
+      "bytes": 6355
+    },
+    {
+      "suite": "chc26/aeval-unsafe",
+      "source": "chc-comp26",
+      "archive": "archives/aeval-unsafe.tar.gz",
+      "queries": 54,
+      "sha256": "c6d863b450f779f059f7179eb10d4743f2112418b1312ffc519e3b3d6a22bcb0",
+      "bytes": 6128
+    },
+    {
+      "suite": "chc26/eldarica-misc/LIA/HOLA",
+      "source": "chc-comp26",
+      "archive": "archives/eldarica-lia-hola.tar.gz",
+      "queries": 46,
+      "sha256": "9e6834f6bdec8404ffa9093aa5a8765d53918545d68c8d6e9c4317c0ccbab351",
+      "bytes": 25702
+    },
+    {
+      "suite": "chc26/eldarica-misc/LIA/reve",
+      "source": "chc-comp26",
+      "archive": "archives/eldarica-lia-reve.tar.gz",
+      "queries": 72,
+      "sha256": "cfd6e94215fd8ba8a130fb0b88fa68c8a579094adeb91125bf4234662d28576a",
+      "bytes": 21257
+    },
+    {
+      "suite": "chc26/eldarica-misc/LIA/llreve",
+      "source": "chc-comp26",
+      "archive": "archives/eldarica-lia-llreve.tar.gz",
+      "queries": 43,
+      "sha256": "f5ed7b0813d25b667ea2137df98dcdf26ecc0a61341afa2af2b3572ca9a53444",
+      "bytes": 41947
+    },
+    {
+      "suite": "chc26/eldarica-misc/LIA/Consistency",
+      "source": "chc-comp26",
+      "archive": "archives/eldarica-lia-consistency.tar.gz",
+      "queries": 55,
+      "sha256": "668e20fa94b1fa73c58297fcb89f81435b7fd4951c28b74af812ca917a0766cc",
+      "bytes": 100719
+    },
+    {
+      "suite": "chc26/hcai-bench/svcomp/O0",
+      "source": "chc-comp26",
+      "archive": "archives/hcai-svcomp-o0.tar.gz",
+      "queries": 146,
+      "sha256": "077e46fd004ea6ada501414fd0d05d114404b10097509ce945a96345f7e5c302",
+      "bytes": 56637
+    },
+    {
+      "suite": "chc26/hcai-bench/svcomp/O3",
+      "source": "chc-comp26",
+      "archive": "archives/hcai-svcomp-o3.tar.gz",
+      "queries": 148,
+      "sha256": "5e047dead745bb44eca71cb6fc654ee60370aff4be7d47b5e0e0a6348880b7eb",
+      "bytes": 79229
+    },
+    {
+      "suite": "chc26/synthesis/nay-horn",
+      "source": "chc-comp26",
+      "archive": "archives/nay-horn.tar.gz",
+      "queries": 119,
+      "sha256": "4c0553b8f0e1fd7a197edaefee7507342a11beefcfb976b0114e54764bfbad3d",
+      "bytes": 106814
+    },
+    {
+      "suite": "chc26/ultimate/LIA-NonLin",
+      "source": "chc-comp26",
+      "archive": "archives/ultimate-lia-nonlin.tar.gz",
+      "queries": 8,
+      "sha256": "0b3538133a067aee0a4d9717a56c086a6f5ad5b4d676555d5391dfd25b6ffd5f",
+      "bytes": 5885
+    },
+    {
+      "suite": "hoice/regressions",
+      "source": "hoice",
+      "archive": "archives/hoice-regressions.tar.gz",
+      "queries": 32,
+      "sha256": "276bc51e90a7f830a607672389bb00ae50df13f9b85c4039ab7fb8c3affb1a09",
+      "bytes": 24630
+    },
+    {
+      "suite": "eldarica/horn-abstract",
+      "source": "eldarica",
+      "archive": "archives/eldarica-horn-abstract.tar.gz",
+      "queries": 13,
+      "sha256": "8aaf0b600b8b6f04bdb84a92e21f54fe6dadb04888a60873b86b66d3c5b47369",
+      "bytes": 16852
+    },
+    {
+      "suite": "eldarica/horn-accel",
+      "source": "eldarica",
+      "archive": "archives/eldarica-horn-accel.tar.gz",
+      "queries": 3,
+      "sha256": "9d6649e5c17d95e806b714c76ec63cef2cf0b93a87673b8691dff694bc8aadf2",
+      "bytes": 8373
+    }
+  ]
+}
