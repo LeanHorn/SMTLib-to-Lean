@@ -174,7 +174,7 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
 /-- Emit helpers once, then all statements, then all unfinished proofs.
 Single-query files retain their original goal names. -/
 def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
-    (maxRecDepth : Nat := defaultMaxRecDepth) : MetaM String := do
+    (maxRecDepth : Nat := defaultMaxRecDepth) (scope : Option String := none) : MetaM String := do
   if goals.isEmpty then throwError "expected at least one translated query"
   let values := goals.flatMap fun goal => #[goal.value] ++ (goal.definitions ++ goal.parts).map (·.value)
   let datatypeGroups ← Datatypes.groups values
@@ -192,10 +192,12 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
   let usesFloor := values.any fun value => (value.find? (·.isConstOf ``Int.floor)).isSome
   let imports := if usesFloor then "import Mathlib.Algebra.Order.Archimedean.Real.Basic"
     else if usesReal then "import Mathlib.Data.Real.Basic" else "import Init"
-  return imports ++ s!"\n\nset_option maxRecDepth {maxRecDepth}\n\n-- Statements\n\n" ++
+  let opening := scope.map (fun name => s!"namespace {name}\n\n") |>.getD ""
+  let closing := scope.map (fun name => s!"\nend {name}\n") |>.getD ""
+  return imports ++ s!"\n\nset_option maxRecDepth {maxRecDepth}\n\n" ++ opening ++ "-- Statements\n\n" ++
     requests ++ datatypeDeclarations ++ helperDefinitions ++
     String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
-    String.intercalate "\n" (entries.toList.map Prod.snd)
+    String.intercalate "\n" (entries.toList.map Prod.snd) ++ closing
 
 /-- Render one file with statements first, followed by unfinished proofs. -/
 def render (value : Expr) (kind : GoalKind := .refutation)

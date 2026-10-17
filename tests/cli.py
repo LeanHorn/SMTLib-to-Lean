@@ -21,6 +21,7 @@ from cli_checks.bitvec import (check_bitvectors, check_bitvector_widths, check_b
 from cli_checks.datatypes import check_datatypes
 from cli_checks.profiles import check_profiles
 from cli_checks.recursive import check_recursive
+from cli_checks.batch import check_batch
 from cli_checks.arrays import (check_arrays_basic, check_arrays_extended, check_array_sharing)
 
 
@@ -468,6 +469,7 @@ GROUPS = {
     "horn": (check_horn,),
     "profiles": (check_profiles,),
     "recursive": (check_recursive,),
+    "batch": (check_batch,),
 }
 
 

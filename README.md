@@ -32,8 +32,21 @@ lake exe smt2lean tests/translation/bool/contradiction.smt2 --out boolean-demo
 lake env lean boolean-demo/Query.lean
 ```
 
-The output directory must be new, with an existing parent. Each query produces
-named assertions or clauses, a statement, and a proof template in `Query.lean`.
+For a directory of queries:
+
+```sh
+lake exe smt2lean path/to/suite --out generated
+```
+
+This writes `generated/suite/<relative-path>.lean`, preserving filenames and
+subdirectories. Each file has its own namespace so modules can be imported together.
+`generated/manifest.json` records input/output names, sizes, translation times and
+per-file errors. Failed inputs do not stop the remaining translations; the command
+exits with status 1 if any fail. No Lean proof is completed by translation.
+
+The output directory must be new, with an existing parent. For a single input
+file, all queries' named assertions or clauses, statements and proof templates
+are written to `Query.lean`.
 SMT queries produce a `Refutation` goal; Horn queries produce a `Problem` goal
 asserting the existence of satisfying relations.
 

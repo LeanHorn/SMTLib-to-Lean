@@ -14,7 +14,8 @@ inductive Mode where
 /-- Reconstruct at each check, but return output only after the entire session succeeds.
 `maxRecDepth` sets the recursion limit during translation and in the generated Lean file. -/
 def translateSession (input : String) (env : Environment) (name : String := "session")
-    (maxRecDepth : Nat := Emit.defaultMaxRecDepth) (mode : Mode := .auto) : IO String := do
+    (maxRecDepth : Nat := Emit.defaultMaxRecDepth) (mode : Mode := .auto)
+    (scope : Option String := none) : IO String := do
   let adapted ← if mode == .fixedpoint then
     match Fixedpoint.adapt input name with
     | .ok script => pure script
@@ -61,7 +62,7 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
     state.set checkedState
     goals.modify (·.push goal)
   ).runIO
-  let (source, _, _) ← (renderSession (← goals.get) (← skipped.get) maxRecDepth).toIO context (← state.get)
+  let (source, _, _) ← (renderSession (← goals.get) (← skipped.get) maxRecDepth scope).toIO context (← state.get)
   return source
 
 end Smt2Lean.Pipeline
