@@ -6,3 +6,8 @@ __pycache__/
 /benchmarks/chc-smtlib/archives/
 /benchmarks/chc-smtlib/extracted/
 /benchmarks/chc-smtlib/generated
+/evaluation/smt-queries/*.tar.gz
+/evaluation/generated/
+/evaluation/extracted/
+/evaluation/results/
+/evaluation/tools/
