@@ -239,34 +239,40 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
   let mut binders := #[]
   let mut body := assertion
   let mut lets := #[]
-  while true do
-    let (exposed, added) ← expose relations presentation body background
-    body := exposed
-    lets := lets ++ added
-    unless body.getKind! == .FORALL do break
-    for term in body[0]!.getChildren do
-      binders := binders.push { term, sort := ← ofExcept term.getSort : Binder }
-    body := body[1]!
   let mut premises := #[]
   while true do
     let (exposed, added) ← expose relations presentation body background
     body := exposed
     lets := lets ++ added
-    unless body.getKind! == .IMPLIES do break
-    let children := body.getChildren
-    premises := premises ++ children.pop
-    body := children.back!
-  let mut pending := [body]
+    if body.getKind! == .FORALL then
+      for term in body[0]!.getChildren do
+        binders := binders.push { term, sort := ← ofExcept term.getSort : Binder }
+      body := body[1]!
+    else if body.getKind! == .IMPLIES then
+      let children := body.getChildren
+      premises := premises ++ children.pop
+      body := children.back!
+    else break
+  -- Track polarity instead of rewriting theory terms. De Morgan and ¬∃ expose
+  -- Horn literals without distributing arbitrary formulas or inventing symbols.
+  let mut pending := [(body, false)]
   let mut positiveHead : Option RelationAtom := none
   while !pending.isEmpty do
-    let (term, added) ← expose relations presentation pending.head! background
+    let (raw, negative) := pending.head!
+    let (term, added) ← expose relations presentation raw background
     lets := lets ++ added
     pending := pending.tail!
     let kind ← ofExcept term.getKind
-    if kind == .OR then
-      pending := term.getChildren.toList ++ pending
-    else if kind == .NOT then
-      premises := premises.push term[0]!
+    if kind == .NOT then
+      pending := (term[0]!, !negative) :: pending
+    else if (kind == .OR && !negative) || (kind == .AND && negative) then
+      pending := term.getChildren.toList.map (·, negative) ++ pending
+    else if (kind == .FORALL && !negative) || (kind == .EXISTS && negative) then
+      for binder in term[0]!.getChildren do
+        binders := binders.push { term := binder, sort := ← ofExcept binder.getSort : Binder }
+      pending := (term[1]!, negative) :: pending
+    else if negative then
+      premises := premises.push term
     else if kind == .CONST_BOOLEAN then
       if ← ofExcept term.getBooleanValue then
         premises := premises.push (← term.notTerm)
@@ -284,16 +290,18 @@ def extractClause (relations : Array Relation) (assertionNumber : Nat)
   let head := positiveHead.map ClauseHead.relation |>.getD .falsity
   return { assertionNumber, source, binders, lets, premises, head }
 
-/-- Split assertion conjunctions without distributing disjunctions or changing binder identity. -/
+/-- Split conjunctions in clause conclusions, retaining enclosing premises and
+universal binders. Native binder identities prevent capture when lifting ∀. -/
 def extractClauses (relations : Array Relation) (assertionNumber : Nat)
     (assertion : cvc5.Term) (source : Option Source.Ref := none)
     (constructors : Array ArrayConstructor := #[])
     (presentation : Option ParsedQuery := none)
     (background : Array ParsedDeclaration := #[]) : cvc5.Env (Array Clause) := do
-  let mut pending : List (Array Binder × Array cvc5.Term × cvc5.Term) := [(#[], #[], assertion)]
+  let mut pending : List (Array Binder × Array cvc5.Term × Array cvc5.Term × cvc5.Term) :=
+    [(#[], #[], #[], assertion)]
   let mut clauses := #[]
   while !pending.isEmpty do
-    let (binders, lets, raw) := pending.head!
+    let (binders, lets, premises, raw) := pending.head!
     let (term, added) ← expose relations presentation raw background
     let lets := lets ++ added
     pending := pending.tail!
@@ -301,11 +309,18 @@ def extractClauses (relations : Array Relation) (assertionNumber : Nat)
     | .FORALL =>
       let variables ← term[0]!.getChildren.mapM fun binder => do
         return { term := binder, sort := ← ofExcept binder.getSort : Binder }
-      pending := (binders ++ variables, lets, term[1]!) :: pending
-    | .AND => pending := term.getChildren.toList.map (binders, lets, ·) ++ pending
+      pending := (binders ++ variables, lets, premises, term[1]!) :: pending
+    | .AND => pending := term.getChildren.toList.map (binders, lets, premises, ·) ++ pending
+    | .IMPLIES =>
+      let children := term.getChildren
+      pending := (binders, lets, premises ++ children.pop, children.back!) :: pending
     | _ =>
+      if presentation.isNone then checkGuardQuantifiers relations premises constructors background
       let clause ← extractClause relations assertionNumber term source constructors presentation background
-      clauses := clauses.push { clause with binders := binders ++ clause.binders, lets := lets ++ clause.lets }
+      clauses := clauses.push { clause with
+        binders := binders ++ clause.binders
+        lets := lets ++ clause.lets
+        premises := premises ++ clause.premises }
   return clauses
 
 /-- Flatten only premise conjunctions, keeping source order and other formulas intact. -/

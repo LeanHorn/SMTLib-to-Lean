@@ -37,8 +37,24 @@ private def sourceComment (label : String) (source : Source.Ref) : String :=
   s!"-- Source: {reprStr source.file}:{span.start.line}:{span.start.column}-" ++
   s!"{span.stop.line}:{span.stop.column} ({label}, command {source.number}){source.namedContext}\n"
 
+/-- Lean prints names starting with ? or # as diagnostic placeholders, without
+escaping them. Give these SMT binders ordinary names before pretty-printing. -/
+private def printableName (name : Name) : Name :=
+  let name := name.eraseMacroScopes
+  let text := name.toString (escape := false)
+  if text.startsWith "?" || text.startsWith "#" || text == "_" then
+    Name.mkSimple ("smt_" ++ text)
+  else name
+
 private def printExpr (value : Expr) : MetaM String := do
   let value ← Datatypes.showParameters value
+  -- Also cover binders inside lets, lambdas, and nested theory expressions that
+  -- are printed by Lean directly instead of printProposition below.
+  let value ← Core.transform value (post := fun e => return .done <| match e with
+    | .forallE n t b i => .forallE (printableName n) t b i
+    | .lam n t b i => .lam (printableName n) t b i
+    | .letE n t v b d => .letE (printableName n) t v b d
+    | _ => e)
   let body ← withOptions (fun options => options
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true
@@ -54,7 +70,7 @@ private def printExpr (value : Expr) : MetaM String := do
   return body
 
 private def binderName (name : Name) (body : Expr) : MetaM Name := do
-  let name := name.eraseMacroScopes
+  let name := printableName name
   getUnusedUserName (if body.hasLooseBVar 0 then name else Name.mkSimple ("_" ++ name.toString))
 
 /-- Print logical spines at one indentation level. Parentheses preserve grouping;
@@ -100,7 +116,7 @@ private partial def withPrintedParameters (value : Expr)
     (inspect : Array Expr → Expr → MetaM String) (parameters : Array Expr := #[]) : MetaM String := do
   match value with
   | .lam name type body info =>
-    withLocalDecl (← getUnusedUserName name.eraseMacroScopes) info type fun x =>
+    withLocalDecl (← getUnusedUserName (printableName name)) info type fun x =>
       withPrintedParameters (body.instantiate1 x) inspect (parameters.push x)
   | _ => inspect parameters value
 

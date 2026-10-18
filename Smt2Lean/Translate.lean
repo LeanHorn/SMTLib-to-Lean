@@ -523,7 +523,9 @@ def problemStatement (problem : Chc.Problem) (name : Name := `Problem) : MetaM S
       let clauseValue ← mkLambdaFVars parameters (mkAndN calls.toList) (usedOnly := false)
       discard <| defineChecked clauseName clauseValue
       let clauseCall := mkAppN (mkConst clauseName) parameters
-      let value ← defineProposition name (← closeProblem problem.sorts.size parameters laws #[clauseCall])
+      -- With no clauses, retain the original laws alone instead of adding ∧ True.
+      let grouped := if clauses.isEmpty && !laws.isEmpty then #[] else #[clauseCall]
+      let value ← defineProposition name (← closeProblem problem.sorts.size parameters laws grouped)
       checkAssembly name original value
       let parts := parts.push { name := clauseName, value := clauseValue, label := "clauses" }
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }

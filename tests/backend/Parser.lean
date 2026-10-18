@@ -134,6 +134,11 @@ private def checkSolverOptions : IO Unit := do
       #[] 1 #["set-logic", "assert"] fun query =>
         require (query.commands[0]!.text == s!"(set-info :smt-lib-version {version})")
           "version metadata was not retained"
+  checkAccepted "origin metadata"
+    "(set-info :origin \"Eldarica\")(set-logic ALL)(assert true)(check-sat)"
+    #[] 1 #["set-logic", "assert"] fun query =>
+      require (query.commands[0]!.text == "(set-info :origin \"Eldarica\")")
+        "origin metadata was not retained"
   for key in #[":smt.mbqi", ":auto-config", ":model"] do
     for value in #["true", "false"] do
       let option := s!"(set-option {key} {value})"

@@ -281,6 +281,23 @@ private def checkAxiomRejection : IO Unit := do
   IO.println "Axiom checks passed: only Lean foundations allowed; transitive admissions rejected"
 
 private def checkHornReconstruction (env : Environment) : IO Unit := do
+  let nested := "tests/translation/chc/nested-clauses.smt2"
+  runProblem env nested (← IO.FS.readFile nested) fun problem => do
+    unless problem.clauses.map (·.assertionNumber) == #[1, 2, 3, 3, 4, 4] do
+      throwError "nested clauses lost their source assertions"
+    withClauses problem fun parameters clauses => do
+      let #[p, q] := parameters | throwError "expected P and Q"
+      let p : Q(Int → Prop) := p
+      let q : Q(Int → Prop) := q
+      checkClauseValues parameters clauses #[
+        q(∀ x y : Int, $p x → x = y → y < 0 → False),
+        q(∀ x : Int, $p x → $q x),
+        q(∀ outer inner : Int, $p outer → $q inner),
+        q(∀ outer inner : Int, $p outer → outer = inner → $p outer),
+        q(∀ x : Int, x > 0 → $p x),
+        q(∀ x y : Int, x > 0 → y < x → $q y)]
+    -- Exercise the named, source-preserving assembly as well as raw reconstruction.
+    discard <| problemStatement problem
   let path := "tests/chc/lh_sum_rec.smt2"
   runProblem env path (← IO.FS.readFile path) fun problem =>
     withClauses problem fun parameters clauses => do

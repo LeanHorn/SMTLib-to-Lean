@@ -330,6 +330,21 @@ def check_horn(lean, tmp):
     assert generated.count("(clause ") == 3
     assert all(f'(:named "{name}")' in generated for name in ["entry clause", "step", "safety"])
 
+    output = tmp / "nested-clauses"
+    run(CHC / "nested-clauses.smt2", "--out", output)
+    nested = check_generated(lean, output, goal="Problem")
+    assert nested.count("(clause ") == 6
+    assert "let smt_?old :=" in nested, "normalization lost a source let"
+    assert "smt_?x" in nested and "∀ (?x" not in nested
+
+    # Unused array-valued arguments still require model laws, even with no clauses.
+    source, output = tmp / "empty-array-horn.smt2", tmp / "empty-array-horn"
+    source.write_text("(set-logic HORN)"
+                      "(declare-fun P ((Array Int Int) (Array Int Bool)) Bool)(check-sat)")
+    run(source, "--out", output)
+    arrays = check_generated(lean, output, goal="Problem")
+    assert "SMT.arrayLaws Int Int" in arrays and "SMT.arrayLaws Int Prop" in arrays
+
     output = tmp / "surface-forms-chc"
     run(CHC / "surface-forms.smt2", "--out", output)
     surface = read_generated(output, goal="Problem")

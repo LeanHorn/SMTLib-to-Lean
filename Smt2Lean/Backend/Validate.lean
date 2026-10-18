@@ -259,7 +259,7 @@ def validateSortAlias (command : cvc5.Command) (sorts : Array ParsedSort := #[])
 def validateMetadata (command : cvc5.Command) : cvc5.Env Unit := do
   -- The binding exposes no command arguments; inspect cvc5's canonical printing.
   let text := command.toString
-  let keys := #[":status", ":source", ":category", ":license", ":notes"]
+  let keys := #[":status", ":source", ":origin", ":category", ":license", ":notes"]
   if keys.any (fun key => text.startsWith s!"(set-info {key} ") then return
   if #["(set-info :smt-lib-version 2.6)", "(set-info :smt-lib-version 2.7)"].contains text then return
   throw (.unsupported s!"unsupported metadata: {text}")

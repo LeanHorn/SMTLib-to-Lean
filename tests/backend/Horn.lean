@@ -48,6 +48,19 @@ example {α : Type} (p q : α → Prop) :
   ⟨fun h => ⟨fun x => (h x).1, fun x => (h x).2⟩,
    fun h x => ⟨h.1 x, h.2 x⟩⟩
 
+example {α : Type} (p : α → Prop) : (¬∃ x, p x) ↔ (∀ x, p x → False) :=
+  ⟨fun h x hx => h ⟨x, hx⟩, fun h ⟨x, hx⟩ => h x hx⟩
+
+example (p q : Prop) : (¬(p ∧ ¬q)) ↔ (p → q) := by
+  classical
+  exact ⟨fun h hp => Classical.byContradiction (fun hn => h ⟨hp, hn⟩),
+    fun h ⟨hp, hn⟩ => hn (h hp)⟩
+
+example {α : Type} (g : Prop) (p q : α → Prop) :
+    (g → ∀ x, p x ∧ q x) ↔ ((∀ x, g → p x) ∧ (∀ x, g → q x)) :=
+  ⟨fun h => ⟨fun x hg => (h hg x).1, fun x hg => (h hg x).2⟩,
+    fun h hg x => ⟨h.1 x hg, h.2 x hg⟩⟩
+
 private def require (condition : Bool) (message : String) : IO Unit := do
   unless condition do throw (IO.userError message)
 
@@ -256,7 +269,6 @@ private def checkRejectedClauses : IO Unit := do
     ("existential", "(exists ((x Int)) (P x))", "leading forall"),
     ("forall-exists", "(forall ((x Int)) (exists ((y Int)) (P y)))", "leading forall"),
     ("quantified-premise", "(=> (forall ((x Int)) (P x)) false)", "inside a quantified theory guard"),
-    ("quantified-head", "(=> done (forall ((x Int)) (P x)))", "leading forall"),
     ("quantified-argument", "(R 0 (exists ((p Bool)) p) 1)", "leading forall"),
     ("disjunctive-head", "(forall ((x Int)) (=> (P x) (or (P x) done)))", "as CHC head")
   ] do
@@ -378,6 +390,8 @@ private def checkRejectedProblems : IO Unit := do
     ("existential", "(exists ((y Int)) (P y))", "leading forall"),
     ("disjunctive-head", "(=> (P x) (or (P x) done))", "as CHC head"),
     ("nested-disjunctive-head", "(or (not (P x)) (or done (P x)))", "as CHC head"),
+    ("negated-two-heads", "(not (and (not done) (not (P x))))", "as CHC head"),
+    ("nested-quantified-two-heads", "(=> done (forall ((y Int)) (or (P x) (P y))))", "as CHC head"),
     ("negative-disjunctive-body", "(or (not (or (P x) done)) (P x))", "inside a theory guard"),
     ("positive-conjunctive-head", "(or (not (P x)) (and done (P x)))", "inside a CHC head"),
     ("split-invalid-branch", "(and (P x) (or done (P x)))", "as CHC head"),

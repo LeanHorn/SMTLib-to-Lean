@@ -5,3 +5,4 @@ __pycache__/
 /benchmarks/results/
 /benchmarks/chc-smtlib/archives/
 /benchmarks/chc-smtlib/extracted/
+/benchmarks/chc-smtlib/generated
