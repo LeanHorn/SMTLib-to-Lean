@@ -1,6 +1,7 @@
 .claude/
 .lake/
 /docs/
+/paper/
 __pycache__/
 /benchmarks/results/
 /benchmarks/chc-smtlib/archives/

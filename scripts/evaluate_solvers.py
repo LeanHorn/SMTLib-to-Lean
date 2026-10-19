@@ -13,6 +13,7 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import select
 import shutil
 import signal
 import statistics
@@ -120,25 +121,66 @@ def atomic_json(path, data):
     temporary.replace(path)
 
 
+def group_members(proc):
+    """Only live processes owned by us in the session created for this solver."""
+    result = subprocess.run(["ps", "-axo", "pid=,pgid=,uid=,stat="],
+                            capture_output=True, text=True, timeout=3, check=True)
+    members = []
+    for line in result.stdout.splitlines():
+        pid, pgid, uid, state = line.split()
+        if int(pgid) == proc.pid and int(uid) == os.getuid() and not state.startswith("Z"):
+            members.append(int(pid))
+    return members
+
+
 def kill(proc):
+    """Return a diagnostic if termination fails; cleanup must never raise."""
+    # An unreaped child still reserves its PID; do not send a group signal
+    # using a reaped child's PID, which could since have been reused.
+    if proc.returncode is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return None
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            pass
+        except OSError as exc:
+            return "Cannot terminate solver group: " + repr(exc)
+    # Target verified owned PIDs if group signaling was denied, or descendants
+    # retain log pipes after their parent has already exited.
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+        members = set(group_members(proc))
+        if proc.poll() is None:
+            members.add(proc.pid)
+        for pid in sorted(members, key=lambda pid: pid == proc.pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "Cannot terminate solver processes: " + repr(exc)
+    return None
 
 
-def capture(pipe, path, cap, exceeded):
+def capture(pipe, path, cap, exceeded, stop, failures):
     size = 0
-    with pipe, path.open("wb") as stream:
-        while True:
-            block = pipe.read(65536)
-            if not block:
-                return
-            remaining = max(0, cap - size)
-            stream.write(block[:remaining])
-            size += len(block)
-            if size > cap:
-                exceeded.set()
+    try:
+        with pipe, path.open("wb") as stream:
+            os.set_blocking(pipe.fileno(), False)
+            while not stop.is_set():
+                if not select.select([pipe], [], [], 0.1)[0]:
+                    continue
+                block = os.read(pipe.fileno(), 65536)
+                if not block:
+                    return
+                remaining = max(0, cap - size)
+                stream.write(block[:remaining])
+                size += len(block)
+                if size > cap:
+                    exceeded.set()
+    except OSError as exc:
+        failures.append("Cannot capture solver output: " + repr(exc))
 
 
 def classify(stdout, stderr, code, reason):
@@ -148,7 +190,7 @@ def classify(stdout, stderr, code, reason):
     error = re.search(r"(?im)^\s*(?:\(error\b|error\b|exception\b|fatal\b|unsupported\b)", combined)
     internal_timeout = re.search(
         r"(?im)^\s*(?:timeout|time limit exceeded|.*timed out|cvc5 interrupted by timeout\.)\s*$", combined)
-    if error or reason in {"memory_limit", "output_limit", "interrupted", "launch_error"}:
+    if error or reason in {"memory_limit", "output_limit", "interrupted", "launch_error", "cleanup_error", "capture_error"}:
         status = "error"
     elif reason == "wall_timeout" or internal_timeout:
         status = "timeout"
@@ -168,6 +210,8 @@ def run_one(case, solver, prefix, args, out):
     state = dict(reason=None, peak_rss_kb=0)
     proc, readers, failure = None, [], None
     overflow = threading.Event()
+    stop_readers = threading.Event()
+    capture_failures, cleanup_failures = [], []
     try:
         if STOP.is_set():
             state["reason"] = "interrupted"
@@ -176,32 +220,53 @@ def run_one(case, solver, prefix, args, out):
             with LOCK:
                 ACTIVE[proc.pid] = state
             for pipe, path in zip((proc.stdout, proc.stderr), paths):
-                reader = threading.Thread(target=capture, args=(pipe, path, args.log_mb * 1024**2, overflow))
+                reader = threading.Thread(target=capture,
+                    args=(pipe, path, args.log_mb * 1024**2, overflow, stop_readers, capture_failures))
                 reader.start()
                 readers.append(reader)
             while proc.poll() is None:
-                reason = ("interrupted" if STOP.is_set() else "output_limit" if overflow.is_set()
+                reason = ("interrupted" if STOP.is_set() else "capture_error" if capture_failures
+                          else "output_limit" if overflow.is_set()
                           else state["reason"] or ("wall_timeout" if time.monotonic() - start >= args.timeout else None))
                 if reason:
                     state["reason"] = reason
-                    kill(proc)
                     break
                 time.sleep(0.05)
-            proc.wait()
     except Exception as exc:
         failure, state["reason"] = str(exc), "launch_error"
-        if proc:
-            kill(proc)
-            proc.wait()
     finally:
-        if proc:
-            # Descendants must not keep pipes open after their parent exits.
-            kill(proc)
-        for reader in readers:
-            reader.join()
-        if proc:
-            with LOCK:
-                ACTIVE.pop(proc.pid, None)
+        try:
+            if proc:
+                error = kill(proc)
+                if error:
+                    cleanup_failures.append(error)
+                try:
+                    proc.wait(timeout=3)
+                    survivors = group_members(proc)
+                    deadline = time.monotonic() + 1
+                    while survivors and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                        survivors = group_members(proc)
+                    if survivors:
+                        cleanup_failures.append("Solver group still has live PIDs: " + str(survivors))
+                except (OSError, subprocess.SubprocessError) as exc:
+                    cleanup_failures.append("Cannot confirm solver termination: " + repr(exc))
+            for reader in readers:
+                reader.join(timeout=1)
+            if any(reader.is_alive() for reader in readers):
+                cleanup_failures.append("Solver output pipes did not close")
+            stop_readers.set()
+            for reader in readers:
+                reader.join(timeout=1)
+        finally:
+            if proc:
+                with LOCK:
+                    ACTIVE.pop(proc.pid, None)
+    if cleanup_failures:
+        failure, state["reason"] = "; ".join(cleanup_failures), "cleanup_error"
+        STOP.set()  # Do not dispatch more work if resource limits cannot be enforced.
+    elif capture_failures:
+        failure, state["reason"] = "; ".join(capture_failures), "capture_error"
     elapsed = time.monotonic() - start
     if overflow.is_set() and not state["reason"]:
         state["reason"] = "output_limit"
@@ -353,6 +418,7 @@ def main():
         solvers=versions, commands=prefixes,
         snapshot_sha256={p.name: digest(p) for p in out.iterdir()},
         timing="Process wall seconds including startup; concurrent shared CPU, not dedicated CPU seconds. External process-group SIGKILL deadline plus internal solver limits.",
+        cleanup="Bounded cleanup; denied group signals fall back to verified owned PIDs. Cleanup failures are infrastructure errors and stop further dispatch.",
         memory="Approximate process-group RSS sampled at most once per second; includes descendants. Exceeding limit causes error/memory_limit, never a challenge candidate.",
         labels="Raw upstream YAML and SMT status preserved only; not validated ground truth.",
         candidates="Both solvers timeout or unknown; requires an assertion/rule and query; SHA-256 deduplicated; errors excluded.")
@@ -390,7 +456,10 @@ def main():
                 if len(records) - last_count >= 10 or now - last_report >= 5:
                     write_progress(out, records, len(jobs), started, "stopping" if STOP.is_set() else state)
                     last_report, last_count = now, len(records)
-            state = "interrupted" if STOP.is_set() else "complete"
+            state = ("failed" if any(r["limit_reason"] == "cleanup_error" for r in records)
+                     else "interrupted" if STOP.is_set() else "complete")
+            if state == "failed":
+                atomic_json(out / "failure.json", dict(utc=utc(), error="Solver cleanup failed; see result diagnostics"))
     except BaseException as exc:
         state = "failed"
         atomic_json(out / "failure.json", dict(utc=utc(), error=repr(exc)))
