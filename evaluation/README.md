@@ -59,7 +59,7 @@ The original `results/solvers-300s-2026-10-18/` attempt failed during timeout cl
 Evaluate one complete archive at a time, starting with the **300 distinct QF_UFLIA inputs**. The first run is `results/translation-QF_UFLIA-2026-10-19/` (directory date is Hong Kong local time; metadata timestamps are UTC). It uses one worker alongside the solver baseline, a 300-second deadline per translation/Lean-check stage, 4 GiB sampled process-group RSS, and `maxRecDepth=4096`. Build time is excluded; subprocess wall times include startup and monitoring/cleanup overhead. Shared-machine times are preliminary performance measurements.
 
 ```sh
-lake build smt2lean
+python3 scripts/build.py smt2lean
 caffeinate -is nice -n 10 lake env python3 scripts/evaluate_translation.py \
   --archive smtcomp-2025-QF_UFLIA.tar.gz \
   --out evaluation/results/translation-QF_UFLIA-2026-10-19 \

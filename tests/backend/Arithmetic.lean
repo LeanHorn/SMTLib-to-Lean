@@ -94,7 +94,11 @@ def checkReals (env : Environment) : IO Unit := do
         ((x ≤ y ∧ y ≤ 3) ∧ (x < y ∧ y < 4) ∧ (y ≥ x ∧ x ≥ 0) ∧ y > x ∧ x > -1) ∧
         (x ≠ y ∧ x ≠ 1 / 3 ∧ y ≠ 1 / 3) ∧ (if b then x else y) = f (1 / 3) ∧
         x + 1 / 2 - x = 1 / 2 ∧ (∀ x : Real, ∃ y : Real, smtRealDiv d x 0 = smtRealDiv d y 0) ∧
-        smtRealDiv d x y = f (x + 1 / 10) ∧ smtRealDiv d x 0 = smtRealDiv d (x + 0) (-0) ∧
+        (smtRealDiv d x y = f (x + 1 / 10) ∧
+          x / 2 = x / 2 ∧ x / -2 = x / -2 ∧
+          x / (1 / 2) = x / (1 / 2) ∧ x / -(1 / 2) = x / -(1 / 2) ∧
+          smtRealDiv d x 0 = smtRealDiv d x 0) ∧
+        smtRealDiv d x 0 = smtRealDiv d (x + 0) (-0) ∧
         named x = smtRealDiv d x 0 ∧ g x b i a = f x ∧ (x + 1 = x + 1 ∧ i + 1 = i) ∧
         (∃ root : Real, root * root = 2)) → False)
   for logic in #["QF_LRA", "QF_NRA", "QF_UFLRA", "QF_UFNRA", "LRA", "NRA", "UFLRA", "UFNRA", "ALL"] do

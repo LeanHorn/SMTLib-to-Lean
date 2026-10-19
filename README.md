@@ -13,17 +13,17 @@ Full SMT-LIB support is in progress.
 
 ## Install
 
-Install [elan](https://github.com/leanprover/elan), Git, and a C++ toolchain
+Install [elan](https://github.com/leanprover/elan), Git, Python 3, and a C++ toolchain
 (Xcode Command Line Tools on macOS), then run:
 
 ```sh
 git clone https://github.com/LeanHorn/SMTLib-to-Lean.git
 cd SMTLib-to-Lean
-lake build
+python3 scripts/build.py
 ```
 
-The project pins Lean and its dependencies. The first build downloads dependencies
-and cvc5's native libraries.
+The project pins Lean and its dependencies. The build script applies the included
+cvc5 ownership fix; the first build downloads dependencies and cvc5's native libraries.
 
 ## Try it
 

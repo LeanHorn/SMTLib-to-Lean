@@ -1,0 +1,50 @@
+diff --git a/ffi/ffi.cpp b/ffi/ffi.cpp
+index 69487e7..0796d85 100644
+--- a/ffi/ffi.cpp
++++ b/ffi/ffi.cpp
+@@ -595,7 +595,10 @@ LEAN_EXPORT lean_bool sort_isInstantiated(lean_obj_arg sort)
+ 
+ LEAN_EXPORT lean_bool sort_beq(lean_obj_arg l, lean_obj_arg r)
+ {
+-  return bool_box(*sort_unbox(l) == *sort_unbox(r));
++  auto result = bool_box(*sort_unbox(l) == *sort_unbox(r));
++  lean_dec(l);
++  lean_dec(r);
++  return result;
+ }
+ 
+ LEAN_EXPORT lean_bool sort_blt(lean_obj_arg l, lean_obj_arg r)
+@@ -620,7 +623,9 @@ LEAN_EXPORT lean_bool sort_bge(lean_obj_arg l, lean_obj_arg r)
+ 
+ LEAN_EXPORT uint64_t sort_hash(lean_obj_arg s)
+ {
+-  return std::hash<Sort>()(*sort_unbox(s));
++  auto result = std::hash<Sort>()(*sort_unbox(s));
++  lean_dec(s);
++  return result;
+ }
+ 
+ LEAN_EXPORT lean_obj_res sort_getFunctionArity(lean_obj_arg s)
+@@ -1120,7 +1125,10 @@ LEAN_EXPORT lean_obj_res term_substitute(lean_obj_arg t,
+ 
+ LEAN_EXPORT lean_bool term_beq(lean_obj_arg l, lean_obj_arg r)
+ {
+-  return bool_box(*term_unbox(l) == *term_unbox(r));
++  auto result = bool_box(*term_unbox(l) == *term_unbox(r));
++  lean_dec(l);
++  lean_dec(r);
++  return result;
+ }
+ 
+ LEAN_EXPORT lean_bool term_blt(lean_obj_arg l, lean_obj_arg r)
+@@ -1145,7 +1153,9 @@ LEAN_EXPORT lean_bool term_bge(lean_obj_arg l, lean_obj_arg r)
+ 
+ LEAN_EXPORT uint64_t term_hash(lean_obj_arg t)
+ {
+-  return std::hash<Term>()(*term_unbox(t));
++  auto result = std::hash<Term>()(*term_unbox(t));
++  lean_dec(t);
++  return result;
+ }
+ 
+ LEAN_EXPORT lean_obj_arg term_getRealOrIntegerValueSign(lean_obj_arg t)

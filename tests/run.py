@@ -25,6 +25,7 @@ def checks():
     result.update({target: [f".lake/build/bin/{target}"] for target in
                    ("testSource", "testParser", "testReconstruction", "testHorn", "testArrays", "testModels")})
     result["runner-policy"] = [sys.executable, "tests/cli_selection.py"]
+    result["cvc5-ownership"] = [sys.executable, "tests/tools/check_cvc5_ownership.py"]
     result["anchor"] = [sys.executable, "tests/anchor.py"]
     return result
 
