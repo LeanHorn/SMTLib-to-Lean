@@ -79,6 +79,9 @@ def check_bitvector_widths(lean, tmp):
         assert check_generated(lean, output, goal=goal).startswith("import Init\n")
     exact = [
         "(= (concat #b1 #b00 #b101) #b100101)",
+        # Equal total widths must not unify the individual concat widths.
+        "(= (concat #b1 #b00 #b101) (concat #b10 #b01 #b01))",
+        "(= (concat #b1 #x00000000) (concat #x8000000 #b00000))",
         "(= ((_ extract 7 4) #xa5) #xa)", "(= ((_ extract 3 0) #xa5) #x5)",
         "(= ((_ extract 7 7) #xa5) #b1)", "(= ((_ extract 0 0) #xa5) #b1)",
         "(= ((_ extract 7 0) #xa5) #xa5)",
@@ -175,6 +178,8 @@ theorem checked_bvashr {w : Nat} (x y : BitVec w) : SMT.bvashr x y = x.sshiftRig
     exact = [
         "(= (bvshl #x9 #x1) #x2)", "(= (bvlshr #x8 #x1) #x4)",
         "(= (bvashr #x8 #x1) #xc)", "(= (bvashr #x7 #x1) #x3)",
+        "(= (bvashr (concat #b1 #x00000000) (concat #x0000000 #b00001))"
+        " (_ bv6442450944 33))",
         "(= (bvshl #x1 #x4) #x0)", "(= (bvshl #x1 #x5) #x0)",
         "(= (bvlshr #xf #x4) #x0)", "(= (bvashr #x8 #x4) #xf)",
         "(= ((_ rotate_left 1) #x9) #x3)", "(= ((_ rotate_right 1) #x9) #xc)",
@@ -192,9 +197,12 @@ theorem checked_bvashr {w : Nat} (x y : BitVec w) : SMT.bvashr x y = x.sshiftRig
     cases = [
         ("exact", "QF_BV", "(assert (not (and " + " ".join(exact) + ")))", "Refutation",
          "  intro h\n  apply h\n  decide\n"),
-        ("variable", "QF_BV", "(declare-const x (_ BitVec 4))(declare-const n (_ BitVec 4))"
-         "(assert (= n #x0))(assert (distinct (bvshl x n) x))", "Refutation",
-         "  intro x n h\n  rcases h with ⟨rfl, h⟩\n  apply h\n  simp [SMT.bvshl]\n"),
+        ("variable", "QF_BV", "(declare-const x (_ BitVec 32))(declare-const n (_ BitVec 5))"
+         "(assert (= n #b00000))"
+         "(assert (distinct (bvshl (concat #b1 x) (concat #x0000000 n))"
+         " (bvashr (concat #b1 x) (concat #x0000000 n))))", "Refutation",
+         "  intro x n h\n  rcases h with ⟨rfl, h⟩\n  apply h\n"
+         "  simp [SMT.bvshl, SMT.bvashr, BitVec.append]\n"),
         ("signedness", "QF_BV", "(assert (= (bvashr #x8 #x1) (bvlshr #x8 #x1)))", "Refutation",
          "  intro h\n  exact (by decide : (12 : BitVec 4) ≠ 4) h\n"),
         ("horn-model", "HORN", "(declare-fun P ((_ BitVec 4)) Bool)(assert (P #x8))"

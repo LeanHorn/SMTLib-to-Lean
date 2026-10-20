@@ -54,7 +54,10 @@ private def printExpr (value : Expr) : MetaM String := do
     | .forallE n t b i => .forallE (printableName n) t b i
     | .lam n t b i => .lam (printableName n) t b i
     | .letE n t v b d => .letE (printableName n) t v b d
-    | _ => e)
+    | _ =>
+      -- Equal total widths can have different splits (1 + 32 versus 28 + 5).
+      -- Preserve both append widths so elaboration cannot infer the wrong split.
+      if e.isAppOfArity ``BitVec.append 4 then e.setAppPPExplicit else e)
   let body ← withOptions (fun options => options
       |>.setBool `pp.fullNames true
       |>.setBool `pp.deepTerms true
