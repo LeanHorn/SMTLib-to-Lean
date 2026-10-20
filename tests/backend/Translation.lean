@@ -513,6 +513,108 @@ private def checkUninterpretedSorts (env : Environment) : IO Unit := do
     fun problem => checkProblem problem q(∃ A : Type, Nonempty A ∧ (∀ _x : A, False))
   IO.println "Uninterpreted sorts passed: arbitrary nonempty carriers, SMT/CHC closure, aliases, and mixed functions"
 
+/-- Keep distinct leaves around a repeated assertion, including an unpaired final leaf. -/
+private def conjunctionIndex (i : Nat) : Nat := if i == 32 then 7 else i
+
+private def conjunctionInput (count : Nat) (logic : String) : String :=
+  s!"(set-logic {logic})(declare-fun P (Int) Bool)" ++
+    String.join ((List.range count).map fun i => s!"(assert (P {conjunctionIndex i}))") ++
+    "(check-sat)"
+
+private partial def conjunctionShape (value : Expr) : Array Expr × Nat :=
+  if value.isAppOfArity ``And 2 then
+    let (left, leftDepth) := conjunctionShape value.appFn!.appArg!
+    let (right, rightDepth) := conjunctionShape value.appArg!
+    (left ++ right, 1 + max leftDepth rightDepth)
+  else (#[value], 0)
+
+/-- Check order and multiplicity independently of the balancing implementation. -/
+private def checkConjunction (value predicate : Expr) (parts : Array Smt2Lean.StatementPart)
+    (count : Nat) (proveAssociativity : Bool := false) : MetaM Unit := do
+  checkEqual (← inferType predicate) q(Int → Prop)
+  unless parts.size == count do throwError "wrong aggregate component count"
+  let calls := parts.map fun part => mkApp (mkConst part.name) predicate
+  if count == 0 then
+    checkEqual value q(True)
+  else
+    let (leaves, depth) := conjunctionShape value
+    unless leaves == calls do
+      throwError "aggregate conjunction changed leaf order or multiplicity"
+    let predicate : Q(Int → Prop) := predicate
+    for leaf in leaves, i in [:count] do
+      let index : Q(Int) := mkIntLit (Int.ofNat (conjunctionIndex i))
+      checkEqual leaf q($predicate $index)
+    if count > 64 then
+      unless depth ≤ 7 do throwError "65-component conjunction is still a deep chain: {depth}"
+  if count ≤ 64 then
+    unless value == mkAndN calls.toList do
+      throwError "small aggregate conjunction changed its original shape"
+  if proveAssociativity then
+    let context ← Simp.mkContext {} #[← ({} : SimpTheorems).addConst ``and_assoc]
+    let (result, _) ← simp value context
+    checkEqual result.expr (mkAndN calls.toList)
+    let some proof := result.proof? | throwError "expected a conjunction reassociation proof"
+    checkWithKernel proof
+
+private def checkAssertionConjunctions (env : Environment) : IO Unit := do
+  for count in #[0, 1, 64, 65] do
+    runQuery env s!"aggregate assertions {count}" (conjunctionInput count "QF_UFLIA") fun query => do
+      let original ← defineRefutation query `Original
+      let statement ← refutationStatement query (checkEquivalence := true)
+      checkEqual statement.value original
+      forallBoundedTelescope statement.value (some 1) fun parameters body => do
+        let #[predicate] := parameters | throwError "expected one refutation parameter"
+        let .forallE _ assertions conclusion _ := body
+          | throwError "expected an assertion conjunction implying False"
+        checkEqual conclusion q(False)
+        checkConjunction assertions predicate statement.parts count (proveAssociativity := count == 65)
+      let model ← modelStatement query (checkEquivalence := true)
+      unless model.value.isAppOfArity ``Exists 2 do throwError "expected existential model closure"
+      lambdaTelescope model.value.appArg! fun parameters assertions => do
+        let #[predicate] := parameters | throwError "expected one model interpretation"
+        checkConjunction assertions predicate model.parts count
+      -- Re-elaboration catches missing parentheses around left-nested And subtrees.
+      if count ≥ 64 then
+        checkEmission statement.value (parts := statement.parts)
+        checkEmission model.value .model (parts := model.parts)
+  let terms := String.intercalate " " ((List.range 65).map fun i => s!"(P {i})")
+  runQuery env "source conjunction stays unchanged"
+    s!"(set-logic QF_UFLIA)(declare-fun P (Int) Bool)(assert (and {terms}))(check-sat)" fun query =>
+      withAssertions query fun parameters assertions => do
+        let #[predicate] := parameters | throwError "expected one source parameter"
+        let #[assertion] := assertions | throwError "source conjunction lost its assertion boundary"
+        let expected := (List.range 65).map fun i => mkApp predicate (mkIntLit (Int.ofNat i))
+        checkEqual assertion (mkAndN expected)
+  IO.println "Assertion conjunctions passed: empty/singleton, 64/65 boundary, repeated leaves, model/refutation emission, and associativity"
+
+private def checkClauseConjunctions (env : Environment) : IO Unit := do
+  for count in #[64, 65] do
+    runProblem env s!"aggregate clauses {count}" (conjunctionInput count "HORN") fun problem => do
+      let original ← defineProblem problem `Original
+      let statement ← problemStatement problem (checkEquivalence := true)
+      checkEqual statement.value original
+      let some clauses := statement.parts.back? | throwError "missing clause aggregate"
+      unless clauses.name == `Problem.Clauses do throwError "wrong clause aggregate name"
+      lambdaTelescope clauses.value fun parameters body => do
+        let #[predicate] := parameters | throwError "expected one clause interpretation"
+        checkConjunction body predicate statement.parts.pop count
+      unless statement.value.isAppOfArity ``Exists 2 do throwError "expected existential CHC closure"
+      lambdaTelescope statement.value.appArg! fun parameters body => do
+        let #[predicate] := parameters | throwError "expected one CHC interpretation"
+        checkEqual body (mkApp (mkConst `Problem.Clauses) predicate)
+      checkEmission statement.value .problem (parts := statement.parts)
+  -- One array law plus 64 clauses crosses the balancing boundary; the expanded
+  -- equivalence reference must retain the named clause aggregate's grouping.
+  let input := (conjunctionInput 64 "HORN").replace "(declare-fun P (Int) Bool)"
+    "(declare-fun P (Int) Bool)(declare-const a (Array Int Int))"
+  runProblem env "clause conjunction with array laws" input fun problem => do
+    unless problem.clauses.size == 64 do throwError "expected 64 clauses with array laws"
+    let statement ← problemStatement problem (checkEquivalence := true)
+    unless statement.value.getUsedConstants.contains `SMT.arrayLaws do
+      throwError "array interpretation lost its model law"
+    checkEmission statement.value .problem (parts := statement.parts)
+  IO.println "Clause conjunctions passed: 64/65 boundary, repeated leaves, model closure, and emitted grouping"
+
 private def checkCore (env : Environment) : IO Unit := do
   let input ← IO.FS.readFile "tests/translation/bool/connectives.smt2"
   runQuery env "connectives" input fun query => do
@@ -697,10 +799,13 @@ def main (args : List String) : IO Unit := do
       checkNamedAssertions env
       checkQuantifierHints env),
     ("horn", fun env => do
+      checkClauseConjunctions env
       checkNamedClauses env
       checkHornReconstruction env
       checkHornProblems env),
-    ("core", checkCore)]
+    ("core", fun env => do
+      checkAssertionConjunctions env
+      checkCore env)]
   if args.isEmpty then
     for (name, _) in groups do
       let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args := #[name] }

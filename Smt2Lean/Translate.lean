@@ -439,9 +439,23 @@ private def nameParts (parameters values : Array Expr) (sources : Array (Option 
     parts := parts.push { name, value, source := sources[i]?.getD none, label := s!"{label.toLower} {i + 1}" }
   return (applications, parts)
 
+/-- Preserve small conjunctions; pair adjacent components to bound the depth of large ones.
+Only aggregates introduced by the translator use this; source assertions stay unchanged. -/
+private def mkConjunction (values : Array Expr) : Expr := Id.run do
+  if values.size ≤ 64 then return mkAndN values.toList
+  let mut level := values
+  while level.size > 1 do
+    let mut next := #[]
+    for i in [:level.size / 2] do
+      next := next.push (mkAnd level[2 * i]! level[2 * i + 1]!)
+    if level.size % 2 == 1 then
+      next := next.push level[level.size - 1]!
+    level := next
+  return level[0]!
+
 private def closeRefutation (sortCount : Nat) (parameters laws assertions : Array Expr) : MetaM Expr := do
-  let body ← mkArrow (mkAndN assertions.toList) q(False)
-  let body ← if laws.isEmpty then pure body else mkArrow (mkAndN laws.toList) body
+  let body ← mkArrow (mkConjunction assertions) q(False)
+  let body ← if laws.isEmpty then pure body else mkArrow (mkConjunction laws) body
   let carriers := parameters.extract 0 sortCount
   let body ← mkForallFVars (parameters.extract sortCount parameters.size) body (usedOnly := false)
   let body ← carriers.foldrM (init := body) fun carrier body => do
@@ -451,7 +465,7 @@ private def closeRefutation (sortCount : Nat) (parameters laws assertions : Arra
 private def closeProblem (sortCount : Nat) (parameters laws clauses : Array Expr) : MetaM Expr := do
   let carriers := parameters.extract 0 sortCount
   let interpretations := parameters.extract sortCount parameters.size
-  let body ← interpretations.foldrM (init := mkAndN (laws.toList ++ clauses.toList)) fun parameter body => do
+  let body ← interpretations.foldrM (init := mkConjunction (laws ++ clauses)) fun parameter body => do
     mkAppM ``Exists #[← mkLambdaFVars #[parameter] body (usedOnly := false)]
   carriers.foldrM (init := body) fun carrier body => do
     let body := mkApp2 (mkConst ``And) (← mkAppM ``Nonempty #[carrier]) body
@@ -526,14 +540,17 @@ def problemStatement (problem : Chc.Problem) (name : Name := `Problem)
     withClauseModel problem (namespaceName := some name) (checkEquivalence := checkEquivalence) fun parameters laws clauses originals definitions => do
       let (calls, parts) ← nameParts parameters clauses (problem.clauses.map (·.source)) name "Clause"
       let clauseName := name ++ `Clauses
-      let clauseValue ← mkLambdaFVars parameters (mkAndN calls.toList) (usedOnly := false)
+      let clauseValue ← mkLambdaFVars parameters (mkConjunction calls) (usedOnly := false)
       discard <| defineChecked clauseName clauseValue
       let clauseCall := mkAppN (mkConst clauseName) parameters
       -- With no clauses, retain the original laws alone instead of adding ∧ True.
       let grouped := if clauses.isEmpty && !laws.isEmpty then #[] else #[clauseCall]
       let value ← defineProposition name (← closeProblem problem.sorts.size parameters laws grouped)
       if checkEquivalence then
-        let original ← closeProblem problem.sorts.size parameters laws originals
+        -- Match the clause grouping above, including when theory laws are present.
+        let originalClauses := if originals.isEmpty && !laws.isEmpty then #[]
+          else #[mkConjunction originals]
+        let original ← closeProblem problem.sorts.size parameters laws originalClauses
         checkAssembly name original value
       let parts := parts.push { name := clauseName, value := clauseValue, label := "clauses" }
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
