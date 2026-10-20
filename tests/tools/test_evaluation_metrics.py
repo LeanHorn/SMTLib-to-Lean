@@ -108,6 +108,21 @@ end Demo
         self.assertEqual(statements, "namespace A\nnamespace B\ndef x := 0\nend B\nend A\n")
         self.assertEqual(measured, "def x := 0\n")
 
+    def test_statement_section_keeps_options_local_and_excludes_scaffolding(self):
+        block = "mutual\ninductive A where\n  | mk : B → A\ninductive B where\n  | mk : A → B\nend\n"
+        for name in ["", " Statements"]:
+            with self.subTest(name=name):
+                prefix = ("import Init\nnamespace Demo\n-- Statements\n\n"
+                          f"section{name}\nset_option Elab.async false\n\n"
+                          + block + "def Refutation : Prop := True\n"
+                          + f"end{name}\n\n")
+                text = (prefix + "-- Proofs\ntheorem refutation : Refutation := by trivial\n"
+                        "end Demo\n")
+                statements, measured = metrics.split_generated_source(text)
+                self.assertEqual(statements, prefix + "end Demo\n")
+                self.assertEqual(measured, "-- Statements\n\n\n" + block
+                                 + "def Refutation : Prop := True\n\n")
+
     def test_mutual_blocks_remain_in_statements_and_metrics(self):
         block = "mutual\ninductive A where\n  | mk : B → A\ninductive B where\n  | mk : A → B\nend\n"
         for opening, closing in [("", ""),
@@ -132,6 +147,10 @@ end Demo
                      "namespace Demo\nmutual\ninductive A\n-- Proofs\nend Demo\n",
                      "namespace Demo\nmutual\ninductive A\nend Demo\n-- Proofs\n",
                      "namespace Demo\ndef x := 0\nend Other\n-- Proofs\n",
+                     "section\ndef x := 0\n-- Proofs\n",
+                     "namespace Demo\nsection\ndef x := 0\n-- Proofs\nend Demo\n",
+                     "section Statements\ndef x := 0\nend Other\n-- Proofs\n",
+                     "namespace Demo\nsection\ndef x := 0\nend Demo\n-- Proofs\n",
                      "mutual\ninductive A\nend\nend\n-- Proofs\n"]:
             with self.subTest(text=text), self.assertRaises(metrics.LexicalError):
                 metrics.split_generated_source(text)

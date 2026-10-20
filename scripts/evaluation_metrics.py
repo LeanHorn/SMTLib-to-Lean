@@ -7,7 +7,7 @@ runs are one token; (), [], {}, comma, semicolon, and dot are separate. Quoted
 identifiers are one token. Whitespace and comments never contribute tokens.
 
 Output LOC/tokens cover declarations/helpers before the exact ``-- Proofs``
-line, excluding standalone imports, options, and namespace scaffolding emitted
+line, excluding standalone imports, options, and namespace/section scaffolding emitted
 by Smt2Lean. Mutual declaration blocks remain part of the measured code.
 The independently compilable statements source retains scaffolding
 and trailing namespace closures. Byte counts include original comments and
@@ -210,7 +210,7 @@ def split_generated_source(text):
         # Only unindented standalone commands used by the emitter are scaffolding.
         if first.start != starts[line] or first.kind != "identifier":
             continue
-        if first.value not in {"import", "set_option", "namespace", "mutual", "end"}:
+        if first.value not in {"import", "set_option", "namespace", "section", "mutual", "end"}:
             continue
         if first.value == "set_option" and any(t.value == "in" for t in group):
             raise LexicalError("Scoped set_option is outside the emitted scaffolding convention")
@@ -220,8 +220,8 @@ def split_generated_source(text):
                 raise LexicalError("Expected a standalone mutual command")
             scopes.append(("mutual", ""))
             continue
-        elif first.value == "namespace":
-            scopes.append(("namespace", name))
+        elif first.value in {"namespace", "section"}:
+            scopes.append((first.value, name))
         elif first.value == "end":
             if not scopes:
                 raise LexicalError("Unexpected end before proofs")
@@ -232,8 +232,9 @@ def split_generated_source(text):
                 continue
         end = starts[line + 1] if line + 1 < len(starts) else len(text)
         remove.append((starts[line], end))
-    if any(kind == "mutual" for kind, _ in scopes):
-        raise LexicalError("Unclosed mutual block before proofs")
+    for kind, _ in scopes:
+        if kind != "namespace":
+            raise LexicalError(f"Unclosed {kind} block before proofs")
     scopes = [name for _, name in scopes]
     closures = []
     scopes.reverse()

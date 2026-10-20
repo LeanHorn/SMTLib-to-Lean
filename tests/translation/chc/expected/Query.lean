@@ -4,6 +4,9 @@ set_option maxRecDepth 4096
 
 -- Statements
 
+section
+set_option Elab.async false
+
 -- Source: "tests/chc/lh_sum_rec.smt2":21:1-22:64 (clause 1, command 4)
 def Problem_1.Clause001
     (r0 : Int → Prop) : Prop :=
@@ -51,6 +54,8 @@ def Problem_1.Clauses
 def Problem : Prop :=
   ∃ (r0 : Int → Prop),
   Problem_1.Clauses r0
+
+end
 
 -- Proofs
 

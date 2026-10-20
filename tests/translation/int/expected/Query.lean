@@ -4,6 +4,9 @@ set_option maxRecDepth 4096
 
 -- Statements
 
+section
+set_option Elab.async false
+
 -- Source: "tests/translation/int/bounds.smt2":4:1-4:18 (assertion 1, command 3)
 def Refutation_1.Assertion001
     (x0 : Int) : Prop :=
@@ -21,6 +24,8 @@ def Refutation : Prop :=
   ((Refutation_1.Assertion001 x0) ∧
   Refutation_1.Assertion002 x0) →
   False
+
+end
 
 -- Proofs
 

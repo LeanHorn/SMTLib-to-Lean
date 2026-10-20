@@ -213,9 +213,12 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
     else if usesReal then "import Mathlib.Data.Real.Basic" else "import Init"
   let opening := scope.map (fun name => s!"namespace {name}\n\n") |>.getD ""
   let closing := scope.map (fun name => s!"\nend {name}\n") |>.getD ""
-  return imports ++ s!"\n\nset_option maxRecDepth {maxRecDepth}\n\n" ++ opening ++ "-- Statements\n\n" ++
+  -- Thousands of small definitions otherwise retain costly async elaboration state.
+  -- Scope the option to generated statements so user proofs keep their normal settings.
+  return imports ++ s!"\n\nset_option maxRecDepth {maxRecDepth}\n\n" ++ opening ++
+    "-- Statements\n\nsection\nset_option Elab.async false\n\n" ++
     requests ++ datatypeDeclarations ++ helperDefinitions ++
-    String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\n-- Proofs\n\n" ++
+    String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\nend\n\n-- Proofs\n\n" ++
     String.intercalate "\n" (entries.toList.map Prod.snd) ++ closing
 
 /-- Render one file with statements first, followed by unfinished proofs. -/

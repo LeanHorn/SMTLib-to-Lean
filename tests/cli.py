@@ -58,6 +58,18 @@ def check_cli(lean, tmp):
         generated = check_generated(lean, output) if index == 0 else read_generated(output)
         assert generated == expected["contradiction"].replace("maxRecDepth 4096", "maxRecDepth 8192")
 
+    # Statement elaboration is serial; the caller's option returns before proofs.
+    scoped = tmp / "ScopedOptions.lean"
+    statements = generated.split("-- Proofs\n", 1)[0].replace(
+        "import Init", "import Lean\n\nset_option Elab.async true", 1)
+    statements = statements.replace("\ndef ", "\nrun_elab do\n"
+        "  if Lean.Elab.async.get (← Lean.getOptions) then\n"
+        '    throwError "generated statements must disable async elaboration"\n\ndef ', 1)
+    scoped.write_text(statements + "run_elab do\n"
+        "  unless Lean.Elab.async.get (← Lean.getOptions) do\n"
+        '    throwError "generated statements must restore the caller option"\n')
+    check_lean(lean, scoped)
+
     # A small limit must also apply inside the translator, before output exists.
     output = tmp / "depth-too-low"
     limited = run(fixture, "--out", output, "--max-rec-depth", "1", code=1)

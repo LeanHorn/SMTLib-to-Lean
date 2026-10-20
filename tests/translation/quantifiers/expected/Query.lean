@@ -4,6 +4,9 @@ set_option maxRecDepth 4096
 
 -- Statements
 
+section
+set_option Elab.async false
+
 -- Source: "tests/translation/quantifiers/quantified.smt2":4:1-4:34 (assertion 1, command 3)
 def Refutation_1.Assertion001
     (f0 : Int → Prop) : Prop :=
@@ -23,6 +26,8 @@ def Refutation : Prop :=
   ((Refutation_1.Assertion001 f0) ∧
   Refutation_1.Assertion002 f0) →
   False
+
+end
 
 -- Proofs
 

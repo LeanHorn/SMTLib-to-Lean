@@ -4,6 +4,9 @@ set_option maxRecDepth 4096
 
 -- Statements
 
+section
+set_option Elab.async false
+
 -- Source: "tests/translation/functions/congruence.smt2":6:1-6:17 (assertion 1, command 5)
 def Refutation_1.Assertion001
     (x1 : Int)
@@ -25,6 +28,8 @@ def Refutation : Prop :=
   ((Refutation_1.Assertion001 x1 x2) ∧
   Refutation_1.Assertion002 f0 x1 x2) →
   False
+
+end
 
 -- Proofs
 
