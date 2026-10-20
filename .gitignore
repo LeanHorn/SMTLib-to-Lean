@@ -12,3 +12,10 @@ __pycache__/
 /evaluation/extracted/
 /evaluation/results/
 /evaluation/tools/
+# Temporary compatibility paths for the running, frozen evaluation.
+/scripts/evaluate_solvers.py
+/scripts/evaluate_translation.py
+/scripts/evaluation_metrics.py
+/scripts/evaluation_campaign.py
+/scripts/resume_evaluation_campaign.py
+/scripts/resume_translation_archive.py

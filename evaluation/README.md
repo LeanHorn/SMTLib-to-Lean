@@ -1,5 +1,46 @@
 This corpus contains 2,935 benchmark files: 1,609 from SMT-COMP 2025 and 1,326 from CHC suites. The ten local archives repackage complete upstream divisions or suite directories with unchanged source bytes; their filenames are local names.
 
+Use `python3 scripts/evaluate.py --help` for all evaluation commands:
+
+- `translate --archive NAME --out RESULTS --generated LEAN`: one archive.
+- `campaign --out RESULTS --generated LEAN`: the sequential, audited paper campaign.
+- `campaign --resume --out RESULTS`: continue a stopped campaign with its frozen settings.
+- `solvers --corpus paper|flex --out RESULTS --eldarica PATH`: the paper corpus or separate Flex corpus.
+
+Shared implementation lives in `scripts/evaluation/`. Solver limits and worker counts
+can be set with `--timeout`, `--memory-mb`, and `--workers`; campaign limits remain fixed.
+The running October 20 campaign temporarily retains ignored links at six old script
+paths. These point to its frozen snapshots and must remain unchanged; a local cleanup
+watcher removes the links after the campaign completes.
+
+### Fresh paper evaluation — 2026-10-20
+
+The fresh campaign is `results/paper-2026-10-20/`: [progress](results/paper-2026-10-20/progress.json),
+[report](results/paper-2026-10-20/report.md), [all records](results/paper-2026-10-20/results.jsonl),
+and [pinned environment](results/paper-2026-10-20/metadata.json).
+Generated files are under `generated/paper-2026-10-20/<archive-name>/`.
+Each archive has its own results, logs, summary and completion audit under the campaign's `archives/`.
+
+One archive and one benchmark run at a time: 300 seconds per stage, 4 GiB sampled
+process-group RSS, `maxRecDepth=4096`, and equivalence checking off. Statements and
+complete proof templates are checked separately. Input measurements include failed
+translations; output measurements include code LOC, lexical tokens, expansion,
+declaration sizes and lexical nesting. Definitions and limits are preserved with
+the runner snapshots. These measurements do not establish semantic equivalence.
+
+The supervisor verifies AC power and its own sleep-prevention assertions, checks
+file hashes, and audits each archive before advancing. Keep the laptop plugged in
+with its lid open. Unexpected errors stop the campaign for inspection; ordinary
+resource-limit failures remain in the results. Earlier recovery results are
+separate and are not merged into this fresh campaign.
+
+The campaign stopped at **08:33 UTC on 2026-10-20** when its AC-power check failed,
+and resumed at **10:42 UTC** with the same frozen translator, runners and limits.
+It retained 1,758 completed records, including four saved during shutdown, and
+retried the interrupted query. Original records and resume provenance are preserved
+under `results/paper-2026-10-20/resumptions/20261020T104227Z/`.
+Per-stage timings are unchanged; cumulative campaign wall time excludes the stopped interval.
+
 | Local archive | Exact upstream source and directory | Files |
 | --- | --- | ---: |
 | [smtcomp-2025-QF_UFLIA.tar.gz](smt-queries/smtcomp-2025-QF_UFLIA.tar.gz) | [single_query.tar.gz][smt2025] · `single_query/QF_UFLIA/` | 300 |
@@ -22,6 +63,8 @@ Original download timestamps were not recorded. The sibling corpus inventory (`S
 
 ### Solver baseline
 
+The sections below document earlier exploratory runs, not the fresh campaign above.
+
 Software verified on **2026-10-18**:
 
 | Software | Version | Role |
@@ -38,7 +81,7 @@ The fresh baseline launched on **2026-10-18 at 15:54 UTC (23:54 Hong Kong)** usi
 Invocation from the repository root (the existing run is already active; use a new output directory for another run):
 
 ```sh
-caffeinate -is nice -n 10 python3 scripts/evaluate_solvers.py \
+caffeinate -is nice -n 10 python3 scripts/evaluate.py solvers \
   --out evaluation/results/solvers-300s-2026-10-18-fresh \
   --z3 /opt/homebrew/Cellar/z3/4.15.4/bin/z3 \
   --cvc5 /opt/homebrew/Caskroom/cvc5/1.3.2/cvc5-macOS-arm64-static/bin/cvc5 \
@@ -60,7 +103,7 @@ Evaluate one complete archive at a time, starting with the **300 distinct QF_UFL
 
 ```sh
 python3 scripts/build.py smt2lean
-caffeinate -is nice -n 10 lake env python3 scripts/evaluate_translation.py \
+caffeinate -is nice -n 10 lake env python3 scripts/evaluate.py translate \
   --archive smtcomp-2025-QF_UFLIA.tar.gz \
   --out evaluation/results/translation-QF_UFLIA-2026-10-19 \
   --generated evaluation/generated/smtcomp-2025-QF_UFLIA
@@ -82,4 +125,6 @@ LIA (**300 distinct inputs**) launched on **2026-10-19 at 02:10 UTC**, using the
 
 LIA completed with **300/300 passing**. QF_AUFBV completed with **38/75 passing**; its 37 failures comprise 11 memory limits, 10 wall-time limits, 7 recursion limits, and 9 heartbeat limits. QF_UFNRA (**48 distinct files**) launched next on **2026-10-19 at 03:07 UTC**, using the unchanged translator/limits and `caffeinate -is` from launch. Records are in `results/translation-QF_UFNRA-2026-10-19/`, with output in `generated/smtcomp-2025-QF_UFNRA/`. This run stops after its archive; concurrent solver work means its timings are exploratory.
 
-The automatic continuation queue uses `scripts/evaluation_queue.py --out evaluation/results/evaluation-queue-2026-10-19`, wrapped in `caffeinate -is`. It reuses completed runs, waits for QF_UFNRA, then evaluates QF_DT (352), RustHorn (73), Sally (179), RInGen (439), and TriCera (635) sequentially. It also watches the existing solver baseline. Its `progress.json` covers the full 2,935-input translation corpus and 5,870 solver runs; final combined results and a macOS notification follow completion of both. Translator and runner pins remain fixed. An infrastructure failure produces a failure notification rather than a completion claim. Keep the Mac plugged in with the lid open; analysis and fixes follow completion.
+The October 19 continuation queue is retired; its source and records remain in
+`results/evaluation-queue-2026-10-19/`. New translation campaigns use
+`scripts/evaluate.py campaign`; solver evaluations remain separate.

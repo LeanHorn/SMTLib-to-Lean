@@ -1,6 +1,6 @@
 """Focused lexical/LOC checks; no benchmark corpus or solver is needed."""
 
-import importlib.util
+import sys
 import json
 from pathlib import Path
 import shutil
@@ -8,10 +8,8 @@ import tempfile
 import unittest
 
 
-spec = importlib.util.spec_from_file_location(
-    "evaluation_metrics", Path(__file__).resolve().parents[2] / "scripts/evaluation_metrics.py")
-metrics = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(metrics)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from evaluation import metrics
 
 
 class LexicalTests(unittest.TestCase):
@@ -156,6 +154,93 @@ end Demo
                 metrics.split_generated_source(text)
 
 
+class StructureTests(unittest.TestCase):
+    def test_input_counts_list_heads_and_exact_literal_bitvec_sorts(self):
+        text = '''; (forall () (let () x)) (_ BitVec 999)
+(set-info :source "(exists () true) (_ BitVec 512)")
+(declare-fun |forall| ((_ BitVec 8) (_ BitVec 8)) (_ BitVec 32))
+(define-funs-rec ((f () Int) (g () Int)) (0 1))
+(assert (forall ((x (_ BitVec 16)))
+  (exists ((y Int)) (let ((z y)) (= |let| z)))))
+(assert (= |forall| "(_ BitVec 128)"))
+(set-info :ignored ((|forall| x) ("exists" x) (|let| x)
+  (_ |BitVec| 64) (_ BitVec |64|) (_ BitVec 64 extra) (_ BitVec 00)))
+'''
+        result = metrics.input_structure(text)
+        self.assertEqual(result["max_parenthesis_depth"], 6)
+        self.assertEqual(result["quantifier_counts"], {"forall": 1, "exists": 1})
+        self.assertEqual(result["quantifier_count"], 2)
+        self.assertEqual(result["let_count"], 1)
+        self.assertEqual(result["declaration_counts"],
+                         {"declare-fun": 1, "define-funs-rec": 1})
+        self.assertEqual(result["declaration_count"], 2)
+        self.assertEqual(result["bitvec_sort_count"], 4)
+        self.assertEqual(result["bitvec_widths"], [8, 16, 32])
+        self.assertEqual(result["bitvec_width_min"], 8)
+        self.assertEqual(result["bitvec_width_max"], 32)
+
+    def test_input_empty_and_deep_nesting_without_recursion(self):
+        empty = metrics.input_structure("; (forall x) (_ BitVec 1)\n")
+        self.assertEqual(empty["max_parenthesis_depth"], 0)
+        self.assertEqual(empty["declaration_counts"], {})
+        self.assertEqual(empty["bitvec_widths"], [])
+        self.assertIsNone(empty["bitvec_width_min"])
+        self.assertIsNone(empty["bitvec_width_max"])
+        depth = 12000
+        result = metrics.input_structure("(" * depth + "x" + ")" * depth)
+        self.assertEqual(result["max_parenthesis_depth"], depth)
+        for text in ["(assert true", "(assert true))"]:
+            with self.subTest(text=text), self.assertRaises(metrics.LexicalError):
+                metrics.input_structure(text)
+
+    def test_generated_structure_uses_emitted_boundaries_and_lexical_binders(self):
+        first = "inductive A where\n  | mk : B → A\n"
+        second = "inductive B where\n  | mk : A → B\n"
+        declaration = '''noncomputable def target {α : Type} (x : α) : Prop :=
+  ∀ (y : α), ∃ (z : α),
+    let f := fun w => w
+    let g := λ w => w
+    (f (g x)) = x
+'''
+        text = ("import Init\nnamespace Demo\nsection\nset_option Elab.async false\n"
+                "-- def bogus := ∀ (let)\n/- ∃ /- fun let -/ λ -/\n"
+                "mutual\n" + first + second + "end\n" + declaration +
+                'def «fun» := "∀ ∃ fun λ let ( [ {"\n'
+                "def names := («forall», «let», 'λ')\n"
+                "end\n-- Proofs\n"
+                "theorem proof : ∀ x : Nat, x = x := by intro x; rfl\nend Demo\n")
+        result = metrics.generated_structure(text)
+        self.assertEqual(result["declaration_counts"], {"inductive": 2, "def": 3})
+        self.assertEqual(result["declaration_count"], 5)
+        self.assertEqual(result["largest_declaration_tokens"],
+                         len(metrics.lean_tokens(declaration)))
+        self.assertEqual(result["max_delimiter_depth"], 2)
+        self.assertEqual(result["binder_token_counts"],
+                         {"∀": 1, "forall": 0, "∃": 1, "fun": 1, "λ": 1})
+        self.assertEqual(result["binder_token_count"], 4)
+        self.assertEqual(result["let_count"], 2)
+
+    def test_generated_mutual_wrappers_are_not_declaration_tokens(self):
+        member = "inductive A where\n  | mk : A\n"
+        result = metrics.generated_structure("mutual\n" + member + "end\n-- Proofs\n")
+        self.assertEqual(result["largest_declaration_tokens"], len(metrics.lean_tokens(member)))
+        self.assertEqual(result["declaration_counts"], {"inductive": 1})
+        empty = metrics.generated_structure("import Init\n-- Proofs\n")
+        self.assertEqual(empty["declaration_count"], 0)
+        self.assertEqual(empty["largest_declaration_tokens"], 0)
+        self.assertEqual(empty["max_delimiter_depth"], 0)
+
+    def test_generated_delimiters_are_matched_and_scanned_iteratively(self):
+        depth = 12000
+        text = "def x := " + "(" * depth + "0" + ")" * depth + "\n-- Proofs\n"
+        self.assertEqual(metrics.generated_structure(text)["max_delimiter_depth"], depth)
+        mixed = "def x := ([{0}])\n-- Proofs\n"
+        self.assertEqual(metrics.generated_structure(mixed)["max_delimiter_depth"], 3)
+        for expression in ["([)]", "(0", "0)"]:
+            with self.subTest(expression=expression), self.assertRaises(metrics.LexicalError):
+                metrics.generated_structure(f"def x := {expression}\n-- Proofs\n")
+
+
 @unittest.skipUnless(shutil.which("cloc"), "cloc is not installed")
 class ClocTests(unittest.TestCase):
     def test_actual_cloc_counts_literals_and_excludes_comments_and_scaffolding(self):
@@ -190,6 +275,8 @@ end Example
             self.assertEqual(result["output_bytes"], len(generated.encode()))
             self.assertLess(result["output_statement_bytes"], result["output_bytes"])
             self.assertEqual(result["code_loc_ratio"], 1)
+            self.assertEqual(result["input_structure"], metrics.input_structure(source))
+            self.assertEqual(result["output_structure"], metrics.generated_structure(generated))
             artifact = Path(temp).resolve()
             self.assertIn('"semi;colon\nstring continues"', (artifact / "input.masked.smt2").read_text())
             self.assertIn('"first /-\n-- literal line', (artifact / "output.masked.txt").read_text())
@@ -207,6 +294,33 @@ end Example
             self.assertEqual(result["output_code_loc"], 0)
             for key in ["code_loc_ratio", "token_ratio", "byte_ratio", "statement_byte_ratio"]:
                 self.assertIsNone(result[key])
+
+    def test_input_only_cloc_matches_paired_measurement_and_keeps_artifacts(self):
+        source = '''; (_ BitVec 1000)
+(set-info :source "semi;colon
+string continues")
+(declare-const x (_ BitVec 8)) ; trailing
+(assert (= x #x00))
+'''
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            result = metrics.measure_input(source, root / "input")
+            paired = metrics.measure(source, "def p := True\n-- Proofs\n", root / "pair")
+            for key in ["input_code_loc", "input_tokens", "input_bytes"]:
+                self.assertEqual(result[key], paired[key])
+            self.assertEqual(result["input_structure"], paired["input_structure"])
+            self.assertEqual(result["input_code_loc"], 4)
+            self.assertEqual(result["input_structure"]["bitvec_widths"], [8])
+            command = json.loads((root / "input/cloc-command.json").read_text())
+            self.assertEqual(command[-1], str(root / "input/input.masked.smt2"))
+            self.assertTrue((root / "input/cloc.json").is_file())
+            self.assertTrue((root / "input/cloc.stderr").is_file())
+            self.assertIn('"semi;colon\nstring continues"',
+                          (root / "input/input.masked.smt2").read_text())
+            empty = metrics.measure_input("; only comments\n", root / "empty")
+            self.assertEqual(empty["input_code_loc"], 0)
+            self.assertEqual(empty["input_tokens"], 0)
+            self.assertEqual(empty["input_bytes"], len("; only comments\n".encode()))
 
 
 if __name__ == "__main__":

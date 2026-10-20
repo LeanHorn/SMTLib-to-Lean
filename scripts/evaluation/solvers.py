@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify/extract the evaluation corpus and measure original inputs with SMT/CHC solvers."""
+"""Measure original paper or Flex inputs with bounded SMT/CHC solver processes."""
 
 import argparse
 from collections import Counter, defaultdict, deque
@@ -22,7 +22,9 @@ import tarfile
 import threading
 import time
 
-CORPUS = Path(__file__).resolve().parents[1] / "evaluation"
+ROOT = Path(os.environ.get("SMT2LEAN_PROJECT_ROOT", Path(__file__).resolve().parents[2])).resolve()
+CORPUS = ROOT / "evaluation"
+FLEX_CORPUS = ROOT / "benchmarks/chc-smtlib"
 STOP = threading.Event()
 LOCK = threading.Lock()
 ACTIVE = {}
@@ -51,7 +53,21 @@ def safe_path(root, name):
     return path
 
 
-def prepare():
+def input_features(path):
+    # Commands at line starts avoid mistaking comments or ordinary strings for queries.
+    text = path.read_text(errors="replace")
+    has_query = bool(re.search(r"(?m)^\s*\(\s*(?:check-sat(?:-assuming)?|query)\b", text))
+    has_assert = bool(re.search(r"(?m)^\s*\(\s*(?:assert|rule)\b", text))
+    return dict(has_query=has_query, has_assert=has_assert, control=not (has_query and has_assert),
+                candidate_eligible=has_query and has_assert,
+                smt_status=re.findall(r"\(set-info\s+:status\s+(sat|unsat|unknown)\s*\)", text))
+
+
+def prepare(corpus="paper"):
+    if corpus == "flex":
+        return inputs()
+    if corpus != "paper":
+        raise ValueError("Unknown corpus: " + corpus)
     sources = json.loads((CORPUS / "sources.json").read_text())
     pins = {line.split(None, 1)[1]: line.split(None, 1)[0]
             for line in (CORPUS / "SHA256SUMS").read_text().splitlines() if line.strip()}
@@ -103,15 +119,89 @@ def prepare():
         path = safe_path(roots[case["archive"]], case["archive_member"])
         if not path.is_file() or path.stat().st_size != int(case["bytes"]) or digest(path) != case["sha256"]:
             raise ValueError("Input size/hash mismatch: " + str(path))
-        # Commands at line starts avoid mistaking comments or ordinary strings for queries.
-        text = path.read_text(errors="replace")
-        has_query = bool(re.search(r"(?m)^\s*\(\s*(?:check-sat(?:-assuming)?|query)\b", text))
-        has_assert = bool(re.search(r"(?m)^\s*\(\s*(?:assert|rule)\b", text))
-        case.update(path=str(path), bytes=int(case["bytes"]), has_query=has_query, has_assert=has_assert,
-                    candidate_eligible=has_query and has_assert, yaml_labels=labels.get(key, []),
-                    smt_status=re.findall(r"\(set-info\s+:status\s+(sat|unsat|unknown)\s*\)", text))
+        case.update(path=str(path), bytes=int(case["bytes"]), corpus="paper",
+                    kind="SMT" if case["suite"].startswith("smtcomp-") else "CHC",
+                    yaml_labels=labels.get(key, []), **input_features(path))
     if len(cases) != sources["file_count"]:
         raise ValueError("Input count differs from sources.json")
+    return cases
+
+
+def inputs():
+    """Load only the Flex selection, preserving upstream labels and input pins."""
+    with (FLEX_CORPUS / "manifest.csv").open(newline="") as stream:
+        pins = defaultdict(list)
+        for row in csv.DictReader(stream):
+            pins[Path(row["archive"]).name].append(row)
+    cases, seen = [], set()
+    suites = json.loads((FLEX_CORPUS / "generated/summary.json").read_text())["suites"]
+    for suite in suites:
+        name = suite["suite"]
+        manifest = "manifest.json" if name == "extra-small-lia" else f"{name}-manifest.json"
+        data = json.loads(safe_path(FLEX_CORPUS / "generated", manifest).read_text())
+        input_root = Path(data["input_root"])
+        # Generated manifests retain their original absolute checkout path.
+        # Rebase that path without changing their selected extraction layout.
+        _, marker, relative_root = input_root.as_posix().partition("/benchmarks/chc-smtlib/")
+        if marker:
+            input_root = safe_path(FLEX_CORPUS, relative_root)
+        elif not input_root.is_absolute():
+            input_root = safe_path(FLEX_CORPUS, str(input_root))
+        archive_name = f"{name}.tar.gz"
+        with tarfile.open(safe_path(FLEX_CORPUS / "archives", archive_name)) as archive:
+            labels = {}
+            for member in archive:
+                if not member.name.endswith((".yml", ".yaml")):
+                    continue
+                if not member.isfile():
+                    raise ValueError("Nonregular label member: " + member.name)
+                text = archive.extractfile(member).read().decode()
+                source = re.search(r"(?m)^input_files:\s*([^\n]+)$", text)
+                verdict = re.search(r"expected_verdict:\s*(true|false)\b", text)
+                if not source or not verdict:
+                    continue
+                filename = source[1].strip().strip("\"'")
+                if not re.fullmatch(r"[^\s\[\],]+\.smt2", filename):
+                    raise ValueError("Unsupported input_files label format: " + member.name)
+                key = str(PurePosixPath(member.name).parent / filename)
+                safe_path(FLEX_CORPUS / "extracted", key)
+                label = "sat" if verdict[1] == "true" else "unsat"
+                placeholder = "placeholder" in text.lower()
+                labels[key] = dict(expected=None if placeholder else label,
+                                   expected_source=None if placeholder else "CHC-COMP expected_verdict",
+                                   declared_verdict=label, placeholder_verdict=placeholder,
+                                   label_file=member.name, yaml_labels=[dict(file=member.name, raw=text)])
+            for entry in data["files"]:
+                # Translation manifests select the inputs; the source manifest
+                # independently pins their archive identities and contents.
+                relative = str(PurePosixPath(entry["input"]))
+                safe_path(FLEX_CORPUS, relative)
+                rows = [row for row in pins[archive_name]
+                        if row["archive_member"].endswith("/" + relative)
+                        or row["archive_member"] == relative]
+                if len(rows) != 1:
+                    raise ValueError("Input missing or ambiguous in pinned corpus: " + relative)
+                row = rows[0]
+                path = safe_path(input_root, relative)
+                sha = digest(path)
+                if sha != row["sha256"] or path.stat().st_size != int(row["bytes"]):
+                    raise ValueError("Input missing or changed from pinned corpus: " + str(path))
+                key = (row["archive"], row["archive_member"])
+                if key in seen:
+                    raise ValueError("Duplicate manifest input: " + str(key))
+                seen.add(key)
+                label = dict(labels.get(row["archive_member"], dict(expected=None,
+                    expected_source=None, declared_verdict=None, placeholder_verdict=False,
+                    label_file=None, yaml_labels=[])))
+                if label["expected"] is None and name == "hoice-regressions":
+                    expected = next((part for part in PurePosixPath(relative).parts[:-1]
+                                     if part in SOLVED), None)
+                    label.update(expected=expected,
+                                 expected_source="upstream sat/unsat directory" if expected else None)
+                cases.append(dict(suite=name, corpus="flex", kind="CHC", input=relative,
+                                  archive=row["archive"], archive_member=row["archive_member"],
+                                  source_path=name + "/" + relative, path=str(path), sha256=sha,
+                                  bytes=int(row["bytes"]), **input_features(path), **label))
     return cases
 
 
@@ -275,6 +365,7 @@ def run_one(case, solver, prefix, args, out):
     status, answers, reason = classify(*(p.read_text(errors="replace") for p in paths),
                                         proc.returncode if proc else None, state["reason"])
     return dict(case, solver=solver, status=status, answers=answers, failure=failure, limit_reason=reason,
+                expected_mismatch=status in SOLVED and case.get("expected") is not None and status != case["expected"],
                 pid=proc.pid if proc else None, started_utc=started, ended_utc=utc(), seconds=round(elapsed, 6),
                 returncode=proc.returncode if proc else None, sampled_peak_rss_kb=state["peak_rss_kb"] or None,
                 command=command, stdout=str(paths[0].relative_to(out)), stderr=str(paths[1].relative_to(out)),
@@ -318,6 +409,7 @@ def summarize(records):
         problems = sum(r["candidate_eligible"] for r in rows)
         solved_problems = sum(r["status"] in SOLVED and r["candidate_eligible"] for r in rows)
         value = dict(runs=len(rows), problem_inputs=problems, outcomes=dict(Counter(r["status"] for r in rows)),
+                     expected_mismatches=sum(r.get("expected_mismatch", False) for r in rows),
                      control_outcomes=dict(Counter(r["status"] for r in rows if not r["candidate_eligible"])),
                      limits=dict(Counter(r["limit_reason"] for r in rows if r["limit_reason"])),
                      solved=solved, solved_percent=round(100 * solved / len(rows), 3),
@@ -326,7 +418,8 @@ def summarize(records):
                      successful_seconds=runtime([r["seconds"] for r in rows if r["status"] in SOLVED]),
                      timeout_seconds=runtime([r["seconds"] for r in rows if r["status"] == "timeout"]))
         (totals if suite == "all" else suites.setdefault(suite, {}))[solver] = value
-    disagreements, candidates, neither, complete = [], {}, 0, 0
+    disagreements, candidates, neither, complete, solved_both = [], {}, 0, 0, 0
+    solved_any = sum(any(r["status"] in SOLVED for r in pair.values()) for pair in pairs.values())
     for pair in pairs.values():
         if len(pair) != 2:
             continue
@@ -334,6 +427,7 @@ def summarize(records):
         first = next(iter(pair.values()))
         states = {name: r["status"] for name, r in pair.items()}
         neither += not any(s in SOLVED for s in states.values())
+        solved_both += all(s in SOLVED for s in states.values())
         if set(states.values()) == SOLVED:
             disagreements.append(dict(suite=first["suite"], source_path=first["source_path"], answers=states))
         if first["candidate_eligible"] and all(s in {"timeout", "unknown"} for s in states.values()):
@@ -342,6 +436,7 @@ def summarize(records):
                 seconds={name: r["seconds"] for name, r in pair.items()}, duplicate_paths=[]))
             candidate["duplicate_paths"].append(first["source_path"])
     return dict(totals=totals, suites=suites, complete_pairs=complete, neither_solved=neither,
+                solved_by_either=solved_any, solved_by_both=solved_both,
                 disagreements=disagreements, candidate_distinct_contents=len(candidates)), sorted(candidates.values(), key=lambda r: r["sha256"])
 
 
@@ -362,10 +457,11 @@ def write_progress(out, records, total, started, state):
     print(json.dumps(progress), flush=True)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--corpus", choices=("paper", "flex"), default="paper")
     parser.add_argument("--prepare-only", action="store_true")
-    parser.add_argument("--out", type=Path)
+    parser.add_argument("--out", "--output", dest="out", type=Path)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--memory-mb", type=int, default=4096)
@@ -374,19 +470,20 @@ def main():
     parser.add_argument("--z3", default="z3")
     parser.add_argument("--cvc5", default="cvc5")
     parser.add_argument("--eldarica")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not 1 <= args.workers <= 4 or min(args.timeout, args.memory_mb, args.log_mb) < 1 or (args.limit is not None and args.limit < 1):
         parser.error("workers must be 1..4; timeout, memory-mb, log-mb and limit must be positive")
     if not args.prepare_only and (args.out is None or args.eldarica is None):
         parser.error("running requires --out and --eldarica")
-    cases = prepare()
-    print("Verified and extracted {} inputs ({} candidate-eligible)".format(len(cases), sum(c["candidate_eligible"] for c in cases)), flush=True)
+    cases = prepare(args.corpus)
+    print("Verified {} {} inputs ({} candidate-eligible)".format(len(cases), args.corpus, sum(c["candidate_eligible"] for c in cases)), flush=True)
     if args.prepare_only:
         return
+    STOP.clear()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: STOP.set())
     binaries, versions = {}, {}
-    for name in ("z3", "cvc5", "eldarica"):
+    for name in (("z3", "cvc5", "eldarica") if args.corpus == "paper" else ("z3", "eldarica")):
         binary = Path(shutil.which(getattr(args, name)) or getattr(args, name)).resolve()
         binaries[name] = str(binary)
         version = subprocess.run([str(binary), "-h" if name == "eldarica" else "--version"],
@@ -394,9 +491,10 @@ def main():
         versions[name] = dict(path=str(binary), sha256=digest(binary), stdout=version.stdout,
                               stderr=version.stderr, returncode=version.returncode)
     prefixes = dict(z3=[binaries["z3"], "-smt2", "timeout={}".format(args.timeout*1000)],
-                    cvc5=[binaries["cvc5"], "--lang=smt2", "--tlimit={}".format(args.timeout*1000)],
                     spacer=[binaries["z3"], "-smt2", "smt.logic=HORN", "fp.engine=spacer", "timeout={}".format(args.timeout*1000)],
                     eldarica=[binaries["eldarica"], "-horn", "-hsmt", "-t:{}".format(args.timeout)])
+    if "cvc5" in binaries:
+        prefixes["cvc5"] = [binaries["cvc5"], "--lang=smt2", "--tlimit={}".format(args.timeout*1000)]
     queues = defaultdict(deque)
     for case in sorted(cases, key=lambda c: (c["suite"], c["source_path"])):
         queues[case["suite"]].append(case)
@@ -406,25 +504,40 @@ def main():
             if queues[suite]:
                 ordered.append(queues[suite].popleft())
     ordered = ordered[:args.limit] if args.limit else ordered
-    jobs = [(case, name) for case in ordered for name in (("z3", "cvc5") if case["suite"].startswith("smtcomp-") else ("spacer", "eldarica"))]
+    jobs = [(case, name) for case in ordered for name in (("z3", "cvc5") if case["kind"] == "SMT" else ("spacer", "eldarica"))]
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    for source in (Path(__file__), CORPUS / "inputs.csv", CORPUS / "sources.json", CORPUS / "SHA256SUMS"):
-        shutil.copyfile(source, out / source.name)
+    shutil.copyfile(Path(__file__), out / "solvers.py")
+    if args.corpus == "paper":
+        sources = [CORPUS / name for name in ("inputs.csv", "sources.json", "SHA256SUMS")]
+    else:
+        sources = [FLEX_CORPUS / name for name in ("manifest.csv", "sources.json", "SHA256SUMS")]
+        sources += [FLEX_CORPUS / "generated/summary.json"]
+        sources += [FLEX_CORPUS / "generated" / ("manifest.json" if name == "extra-small-lia" else f"{name}-manifest.json")
+                    for name in sorted({case["suite"] for case in cases})]
+    corpus_root = CORPUS if args.corpus == "paper" else FLEX_CORPUS
+    for source in sources:
+        dest = out / source.relative_to(corpus_root)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, dest)
     metadata = dict(started_utc=utc(), pid=os.getpid(), workers=args.workers, timeout_seconds=args.timeout,
+        corpus=args.corpus, corpus_root=str(corpus_root),
         memory_mb=args.memory_mb, log_mb=args.log_mb, inputs=len(ordered), runs=len(jobs), smoke_limit=args.limit,
         platform=platform.platform(), python=platform.python_version(), logical_cpus=os.cpu_count(),
-        repository_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=CORPUS.parent, text=True).strip(),
+        repository_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         solvers=versions, commands=prefixes,
-        snapshot_sha256={p.name: digest(p) for p in out.iterdir()},
+        snapshot_sha256={str(p.relative_to(out)): digest(p) for p in out.rglob("*") if p.is_file()},
         timing="Process wall seconds including startup; concurrent shared CPU, not dedicated CPU seconds. External process-group SIGKILL deadline plus internal solver limits.",
         cleanup="Bounded cleanup; denied group signals fall back to verified owned PIDs. Cleanup failures are infrastructure errors and stop further dispatch.",
         memory="Approximate process-group RSS sampled at most once per second; includes descendants. Exceeding limit causes error/memory_limit, never a challenge candidate.",
-        labels="Raw upstream YAML and SMT status preserved only; not validated ground truth.",
+        labels=("Raw upstream YAML and SMT status preserved only; not validated ground truth." if args.corpus == "paper"
+                else "Upstream expected_verdict labels and HoIce sat/unsat directories are comparison labels, not independently checked proofs; placeholder verdicts excluded."),
         candidates="Both solvers timeout or unknown; requires an assertion/rule and query; SHA-256 deduplicated; errors excluded.")
     atomic_json(out / "metadata.json", metadata)
     (out / "runner.pid").write_text(str(os.getpid()) + "\n")
-    fields = ["suite", "source_path", "solver", "status", "seconds", "returncode", "limit_reason", "sha256", "bytes", "started_utc", "ended_utc", "pid", "sampled_peak_rss_kb", "stdout", "stderr", "candidate_eligible"]
+    fields = ["corpus", "kind", "suite", "source_path", "input", "solver", "status", "seconds", "expected",
+              "expected_mismatch", "returncode", "limit_reason", "sha256", "bytes", "started_utc", "ended_utc",
+              "pid", "sampled_peak_rss_kb", "stdout", "stderr", "candidate_eligible"]
     records, pending, cursor = [], {}, 0
     started = last_report = last_memory = time.monotonic()
     last_count, state = 0, "running"

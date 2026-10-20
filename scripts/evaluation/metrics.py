@@ -183,6 +183,63 @@ def source_info(text):
                 source_empty=not tokens, command_counts=dict(counts))
 
 
+def _input_structure(tokens):
+    """Inspect list heads and exact indexed-sort forms without constructing an AST."""
+    declarations, quantifiers = Counter(), {"forall": 0, "exists": 0}
+    depth, maximum, lets, bitvec_count = 0, 0, 0, 0
+    widths = set()
+    for index, token in enumerate(tokens):
+        if token.kind == "delimiter":
+            if token.value == "(":
+                depth += 1
+                maximum = max(maximum, depth)
+            else:
+                depth -= 1
+                if depth < 0:
+                    raise LexicalError("Unbalanced SMT-LIB parentheses")
+            continue
+        is_head = (index > 0 and tokens[index - 1].kind == "delimiter" and
+                   tokens[index - 1].value == "(")
+        if token.kind != "atom" or not is_head:
+            continue
+        if token.value in quantifiers:
+            quantifiers[token.value] += 1
+        elif token.value == "let":
+            lets += 1
+        if depth == 1 and token.value.startswith(("declare-", "define-")):
+            declarations[token.value] += 1
+        if token.value == "_" and index + 3 < len(tokens):
+            sort, width, closing = tokens[index + 1:index + 4]
+            if (sort.kind == "atom" and sort.value == "BitVec" and
+                    width.kind == "atom" and re.fullmatch(r"0|[1-9][0-9]*", width.value) and
+                    closing.kind == "delimiter" and closing.value == ")"):
+                widths.add(int(width.value))
+                bitvec_count += 1
+    if depth:
+        raise LexicalError("Unbalanced SMT-LIB parentheses")
+    widths = sorted(widths)
+    return dict(max_parenthesis_depth=maximum, quantifier_counts=quantifiers,
+                quantifier_count=sum(quantifiers.values()), let_count=lets,
+                declaration_counts=dict(declarations), declaration_count=sum(declarations.values()),
+                bitvec_sort_count=bitvec_count, bitvec_widths=widths,
+                bitvec_width_min=widths[0] if widths else None,
+                bitvec_width_max=widths[-1] if widths else None)
+
+
+def input_structure(text):
+    """Return lexical SMT structure, including comments/quoted-atom exclusions.
+
+    Depth counts all syntactic parentheses. Quantifiers and lets count unquoted
+    list heads, not binders or occurrences of the same name in another position.
+    Declarations count top-level list heads beginning ``declare-`` or ``define-``
+    (including extensions); a multi-declaration command counts once. Bit-vector
+    widths count exact ``(_ BitVec N)`` forms with a literal SMT numeral, retaining
+    their occurrence count and sorted distinct widths. These are lexical forms
+    anywhere in the source, not semantically resolved terms or sorts.
+    """
+    return _input_structure(_lex(text, "smt")[0])
+
+
 def _line_groups(text, tokens):
     starts = [0] + [m.end() for m in re.finditer("\n", text)]
     groups = {}
@@ -260,6 +317,87 @@ def split_generated_source(text):
     return prefix + "".join(reversed(closures)), "".join(metric)
 
 
+LEAN_DECLARATION_KINDS = frozenset({
+    "def", "abbrev", "axiom", "constant", "opaque", "inductive", "structure",
+    "theorem", "lemma", "instance", "class",
+})
+LEAN_DECLARATION_MODIFIERS = frozenset({
+    "noncomputable", "private", "protected", "unsafe", "partial",
+})
+LEAN_BINDER_TOKENS = ("∀", "forall", "∃", "fun", "λ")
+
+
+def generated_structure(text):
+    """Measure the emitted statement prefix using lexical conventions, not a Lean AST.
+
+    Imports, options, namespaces, sections and proofs are excluded by
+    ``split_generated_source``. Declaration starts are unindented lines beginning
+    with a listed declaration keyword after optional listed modifiers. A
+    declaration's token span ends at the next such start, a standalone unindented
+    ``mutual``/``end``, or EOF; mutual wrappers do not enter declaration sizes.
+    This matches the emitter's layout, including its unindented mutual members.
+
+    Delimiter depth counts matched (), [] and {} only. Binder counts count exact,
+    unquoted tokens ∀, forall, ∃, fun and λ; let counts exact unquoted ``let``
+    tokens. Neither counts bound variables, implicit arrow binders, or semantic
+    binder/let constructs. Comments, strings, characters and quoted names never
+    contribute keywords or delimiters.
+    """
+    _, metric = split_generated_source(text)
+    tokens, _ = _lex(metric, "lean")
+    return _generated_structure(metric, tokens)
+
+
+def _generated_structure(metric, tokens):
+    """Use already split/lexed metric text when measuring a translation pair."""
+    starts, groups = _line_groups(metric, tokens)
+    declarations, boundaries = Counter(), {}
+    for line, group in groups.items():
+        first = group[0]
+        if first.start != starts[line] or first.kind != "identifier":
+            continue
+        index = 0
+        while (index < len(group) and group[index].kind == "identifier" and
+               group[index].value in LEAN_DECLARATION_MODIFIERS):
+            index += 1
+        if (index < len(group) and group[index].kind == "identifier" and
+                group[index].value in LEAN_DECLARATION_KINDS):
+            kind = group[index].value
+            declarations[kind] += 1
+            boundaries[first.start] = True
+        elif first.value in {"mutual", "end"} and len(group) == 1:
+            boundaries[first.start] = False
+
+    stack, maximum, largest, declaration_size = [], 0, 0, None
+    binders, lets = dict.fromkeys(LEAN_BINDER_TOKENS, 0), 0
+    matching = {")": "(", "]": "[", "}": "{"}
+    for token in tokens:
+        if token.start in boundaries:
+            largest = max(largest, declaration_size or 0)
+            declaration_size = 0 if boundaries[token.start] else None
+        if declaration_size is not None:
+            declaration_size += 1
+        if token.kind in {"identifier", "operator"}:
+            if token.value in binders:
+                binders[token.value] += 1
+            if token.value == "let":
+                lets += 1
+        if token.kind == "delimiter":
+            if token.value in "([{":
+                stack.append(token.value)
+                maximum = max(maximum, len(stack))
+            elif token.value in matching:
+                if not stack or stack.pop() != matching[token.value]:
+                    raise LexicalError("Unbalanced Lean delimiters")
+    if stack:
+        raise LexicalError("Unbalanced Lean delimiters")
+    return dict(declaration_counts=dict(declarations),
+                declaration_count=sum(declarations.values()),
+                largest_declaration_tokens=max(largest, declaration_size or 0),
+                max_delimiter_depth=maximum, binder_token_counts=binders,
+                binder_token_count=sum(binders.values()), let_count=lets)
+
+
 def _mask_comments(text, comments):
     chunks, offset = [], 0
     for token in comments:
@@ -287,8 +425,40 @@ SMT_CLOC_CONFIG = """SMT-LIB
 """
 
 
+def measure_input(text, artifact_dir, cloc_path="cloc"):
+    """Measure an input independently of translation; retain the cloc artifacts.
+
+    Uses the same comment masking and cloc language definition as ``measure``.
+    For successful translations, callers can use ``measure`` and
+    ``input_structure`` instead to avoid running cloc on the input twice.
+    """
+    tokens, comments = _lex(text, "smt")
+    structure = _input_structure(tokens)
+    masked = _mask_comments(text, comments)
+    artifact_dir = Path(artifact_dir).resolve()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "input.masked.smt2").write_bytes(masked.encode("utf-8"))
+    (artifact_dir / "smt-cloc.lang").write_text(SMT_CLOC_CONFIG)
+    command = [str(cloc_path), "--json", "--by-file", "--quiet", "--skip-uniqueness",
+               "--read-lang-def=" + str(artifact_dir / "smt-cloc.lang"),
+               str(artifact_dir / "input.masked.smt2")]
+    (artifact_dir / "cloc-command.json").write_text(json.dumps(command, indent=2) + "\n")
+    process = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    (artifact_dir / "cloc.json").write_text(process.stdout)
+    (artifact_dir / "cloc.stderr").write_text(process.stderr)
+    if process.returncode:
+        raise RuntimeError(f"cloc exited {process.returncode}: {process.stderr.strip()}")
+    report = json.loads(process.stdout)
+    record = report.get(str(artifact_dir / "input.masked.smt2"))
+    if record is None and masked.strip():
+        raise RuntimeError("cloc did not report input.masked.smt2")
+    return dict(input_code_loc=record["code"] if record is not None else 0,
+                input_tokens=len(tokens), input_bytes=len(text.encode("utf-8")),
+                input_structure=structure)
+
+
 def measure(input_text, generated_text, artifact_dir, cloc_path="cloc"):
-    """Measure one pair with one cloc invocation; retain all counting artifacts."""
+    """Measure one pair with one cloc invocation; retain counting artifacts and structure."""
     artifact_dir = Path(artifact_dir).resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
     statements, metric = split_generated_source(generated_text)
@@ -324,7 +494,9 @@ def measure(input_text, generated_text, artifact_dir, cloc_path="cloc"):
                   input_tokens=len(input_tokens), output_tokens=len(output_tokens),
                   input_bytes=len(input_text.encode("utf-8")),
                   output_bytes=len(generated_text.encode("utf-8")),
-                  output_statement_bytes=len(metric.encode("utf-8")))
+                  output_statement_bytes=len(metric.encode("utf-8")),
+                  input_structure=_input_structure(input_tokens),
+                  output_structure=_generated_structure(metric, output_tokens))
     for name, numerator, denominator in (
         ("code_loc_ratio", "output_code_loc", "input_code_loc"),
         ("token_ratio", "output_tokens", "input_tokens"),
