@@ -12,10 +12,11 @@ inductive Mode where
   deriving BEq
 
 /-- Reconstruct at each check, but return output only after the entire session succeeds.
-`maxRecDepth` sets the recursion limit during translation and in the generated Lean file. -/
+`maxRecDepth` sets the recursion limit during translation and in the generated Lean file.
+`checkEquivalence` additionally proves equivalence of expanded and structured statements. -/
 def translateSession (input : String) (env : Environment) (name : String := "session")
     (maxRecDepth : Nat := Emit.defaultMaxRecDepth) (mode : Mode := .auto)
-    (scope : Option String := none) : IO String := do
+    (scope : Option String := none) (checkEquivalence : Bool := false) : IO String := do
   let adapted ← if mode == .fixedpoint then
     match Fixedpoint.adapt input name with
     | .ok script => pure script
@@ -42,7 +43,7 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
       let (statement, kind) ← match problem? with
         | some problem => do
           let stem := if mode == .fixedpoint then "Safe" else "Problem"
-          let statement ← Translate.problemStatement problem (.mkSimple s!"{stem}_{query.number}")
+          let statement ← Translate.problemStatement problem (.mkSimple s!"{stem}_{query.number}") checkEquivalence
           let assertionCount := query.assertions.size - query.assumptionCount
           let parts := statement.parts.mapIdx fun i part => Id.run do
             let some clause := problem.clauses[i]? | return part
@@ -52,8 +53,8 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
           pure ({ statement with parts }, if mode == .fixedpoint then .safety else .problem)
         | none => do
           if mode == .model then
-            pure (← Translate.modelStatement query (.mkSimple s!"Model_{query.number}"), .model)
-          else pure (← Translate.refutationStatement query (.mkSimple s!"Refutation_{query.number}"), .refutation)
+            pure (← Translate.modelStatement query (.mkSimple s!"Model_{query.number}") checkEquivalence, .model)
+          else pure (← Translate.refutationStatement query (.mkSimple s!"Refutation_{query.number}") checkEquivalence, .refutation)
       return {
         value := statement.value, parts := statement.parts, definitions := statement.definitions
         kind, source := query.source, assertions := query.assertionSources

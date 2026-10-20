@@ -84,7 +84,7 @@ private def writeAtomic (path temporary : FilePath) (text : String) : IO Unit :=
 /-- Translate a project independently file by file. A failed input has a report entry
 but no Lean file. Every translation starts from the same imported environment. -/
 def translate (input output : FilePath) (env : Environment)
-    (maxRecDepth : Nat) (mode : Pipeline.Mode) : IO Bool := do
+    (maxRecDepth : Nat) (mode : Pipeline.Mode) (checkEquivalence : Bool := false) : IO Bool := do
   let root ← IO.FS.realPath input
   let project := fileName (root.fileName.getD "Project")
   -- Reserve the report and scratch file outside the generated module tree.
@@ -109,7 +109,8 @@ def translate (input output : FilePath) (env : Environment)
     try
       let text ← IO.FS.readFile (root / job.input)
       inputBytes := some text.utf8ByteSize
-      let source ← Pipeline.translateSession text env (root / job.input).toString maxRecDepth mode (some job.scope)
+      let source ← Pipeline.translateSession text env (root / job.input).toString maxRecDepth mode
+        (some job.scope) checkEquivalence
       let destination := output / job.output
       IO.FS.createDirAll (destination.parent.getD "")
       writeAtomic destination temporary source
@@ -131,6 +132,7 @@ def translate (input output : FilePath) (env : Environment)
       ("input_root", toJson root.toString), ("project", toJson project),
       ("total", toJson jobs.size), ("translated", toJson translated), ("failed", toJson failed),
       ("max_rec_depth", toJson maxRecDepth),
+      ("check_equivalence", toJson checkEquivalence),
       ("mode", toJson (match mode with | .auto => "auto" | .model => "model" | .fixedpoint => "fixedpoint")),
       ("files", toJson records)]
     writeAtomic (output / "manifest.json") temporary (report.pretty ++ "\n")

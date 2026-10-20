@@ -270,7 +270,7 @@ private def usedDefinitions (definitions : Array StatementPart) (values : Array 
 /-- Reconstruct source and expanded terms in the same interpretation context. -/
 private def withAssertionModel [Inhabited α] (query : ParsedQuery)
     (inspect : Array Expr → Array Expr → Array Expr → Array Expr → Array StatementPart → MetaM α)
-    (namespaceName : Option Name := none) : MetaM α := do
+    (namespaceName : Option Name := none) (checkEquivalence : Bool := false) : MetaM α := do
   withCarriers query.carrierSorts fun carriers sortCache => do
     -- Prevent lean-smt's fallback from resolving an unmapped SMT name as a Lean constant.
     for h : i in [:query.assertions.size] do
@@ -304,7 +304,7 @@ private def withAssertionModel [Inhabited α] (query : ParsedQuery)
                 let value ← Smt.Reconstruct.reconstructTerm term
                 checkPropositions #[value] (← get)
                 return value
-            let originals ← if namespaceName.isSome then
+            let originals ← if namespaceName.isSome && checkEquivalence then
                 query.assertionTerms.mapM Smt.Reconstruct.reconstructTerm else pure assertions
             return (assertions, originals, parts)
           -- Match the instance scope used when the emitted `if` expressions are elaborated.
@@ -360,7 +360,7 @@ model laws, and clauses inside the callback, while their context and native term
 -/
 private def withClauseModel [Inhabited α] (problem : Chc.Problem)
     (inspect : Array Expr → Array Expr → Array Expr → Array Expr → Array StatementPart → MetaM α)
-    (namespaceName : Option Name := none) : MetaM α := do
+    (namespaceName : Option Name := none) (checkEquivalence : Bool := false) : MetaM α := do
   withCarriers problem.sorts fun carriers sortCache => do
     let terms := problem.clauses.flatMap fun clause =>
       let premises := clause.premises.flatMap fun premise => match premise with
@@ -407,7 +407,7 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
               if (← mkForallFVars (carriers ++ arrayParameters ++ zeroCases ++ parameters) value (usedOnly := false)).hasFVar then
                 throwError "clause contains variables outside its interpretation parameters"
               return value
-          let originals ← if namespaceName.isSome then
+          let originals ← if namespaceName.isSome && checkEquivalence then
             problem.clauses.mapM (reconstructClause context sortCache interpretations) else pure clauses
           inspect allParameters laws clauses originals definitions
 
@@ -490,34 +490,40 @@ def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr
     closeProblem problem.sorts.size parameters laws clauses
   atSource problem.source "Problem" (defineProposition name value) (chc := true) (queryNumber := problem.number)
 
-/-- Keep assertion boundaries through emission; the original model quantifiers are unchanged. -/
-def refutationStatement (query : ParsedQuery) (name : Name := `Refutation) : MetaM Statement :=
+/-- Keep assertion boundaries through emission; the original model quantifiers are unchanged.
+Definitions are always kernel-checked. `checkEquivalence` additionally proves equivalence
+to the expanded reconstruction; disabled by default because that proof can be expensive. -/
+def refutationStatement (query : ParsedQuery) (name : Name := `Refutation)
+    (checkEquivalence : Bool := false) : MetaM Statement :=
   atSource query.source "Refutation" (queryNumber := query.number) <|
-    withAssertionModel query (namespaceName := some name) fun parameters laws assertions originals definitions => do
-      let original ← closeRefutation query.carrierSorts.size parameters laws originals
+    withAssertionModel query (namespaceName := some name) (checkEquivalence := checkEquivalence) fun parameters laws assertions originals definitions => do
       let (calls, parts) ← nameParts parameters assertions (query.assertionSources.map some) name "Assertion"
       let parts := parts.mapIdx fun i part =>
         if i < assertions.size - query.assumptionCount then part else
           { part with label := s!"assumption {i + 1 - (assertions.size - query.assumptionCount)}" }
       let value ← defineProposition name (← closeRefutation query.carrierSorts.size parameters laws calls)
-      checkAssembly name original value
+      if checkEquivalence then
+        let original ← closeRefutation query.carrierSorts.size parameters laws originals
+        checkAssembly name original value
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 
 /-- General model existence: preserve assertions directly, without Horn normalization. -/
-def modelStatement (query : ParsedQuery) (name : Name := `Model) : MetaM Statement :=
+def modelStatement (query : ParsedQuery) (name : Name := `Model)
+    (checkEquivalence : Bool := false) : MetaM Statement :=
   atSource query.source "Model" (queryNumber := query.number) <|
-    withAssertionModel query (namespaceName := some name) fun parameters laws assertions originals definitions => do
-      let original ← closeProblem query.carrierSorts.size parameters laws originals
+    withAssertionModel query (namespaceName := some name) (checkEquivalence := checkEquivalence) fun parameters laws assertions originals definitions => do
       let (calls, parts) ← nameParts parameters assertions (query.assertionSources.map some) name "Assertion"
       let value ← defineProposition name (← closeProblem query.carrierSorts.size parameters laws calls)
-      checkAssembly name original value
+      if checkEquivalence then
+        let original ← closeProblem query.carrierSorts.size parameters laws originals
+        checkAssembly name original value
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 
 /-- Expose parameterized clauses, then existentially close their shared interpretation. -/
-def problemStatement (problem : Chc.Problem) (name : Name := `Problem) : MetaM Statement :=
+def problemStatement (problem : Chc.Problem) (name : Name := `Problem)
+    (checkEquivalence : Bool := false) : MetaM Statement :=
   atSource problem.source "Problem" (chc := true) (queryNumber := problem.number) <|
-    withClauseModel problem (namespaceName := some name) fun parameters laws clauses originals definitions => do
-      let original ← closeProblem problem.sorts.size parameters laws originals
+    withClauseModel problem (namespaceName := some name) (checkEquivalence := checkEquivalence) fun parameters laws clauses originals definitions => do
       let (calls, parts) ← nameParts parameters clauses (problem.clauses.map (·.source)) name "Clause"
       let clauseName := name ++ `Clauses
       let clauseValue ← mkLambdaFVars parameters (mkAndN calls.toList) (usedOnly := false)
@@ -526,7 +532,9 @@ def problemStatement (problem : Chc.Problem) (name : Name := `Problem) : MetaM S
       -- With no clauses, retain the original laws alone instead of adding ∧ True.
       let grouped := if clauses.isEmpty && !laws.isEmpty then #[] else #[clauseCall]
       let value ← defineProposition name (← closeProblem problem.sorts.size parameters laws grouped)
-      checkAssembly name original value
+      if checkEquivalence then
+        let original ← closeProblem problem.sorts.size parameters laws originals
+        checkAssembly name original value
       let parts := parts.push { name := clauseName, value := clauseValue, label := "clauses" }
       return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
 

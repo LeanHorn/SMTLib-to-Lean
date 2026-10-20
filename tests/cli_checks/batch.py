@@ -49,13 +49,14 @@ def check_batch(lean, tmp):
 
     output = tmp / "generated"
     result = subprocess.run(
-        [str(EXE), str(source), "--out", str(output), "--max-rec-depth", "8192"],
+        [str(EXE), str(source), "--out", str(output), "--max-rec-depth", "8192", "--check-equivalence"],
         cwd=ROOT, capture_output=True, text=True,
     )
     assert result.returncode == 1, result
     report_path = output / "manifest.json"
     assert report_path.exists(), (result.stdout, result.stderr)
     report = json.loads(report_path.read_text())
+    assert report["check_equivalence"] is True, report
     assert (report["total"], report["translated"], report["failed"]) == (5, 4, 1), report
     entries = report["files"]
     by_input = {entry["input"]: entry for entry in entries}
@@ -135,6 +136,7 @@ def check_batch(lean, tmp):
     normalized = tmp / "normalized"
     run(reserved, "--out", normalized)
     report = json.loads((normalized / "manifest.json").read_text())
+    assert report["check_equivalence"] is False, report
     assert (report["total"], report["translated"], report["failed"]) == (1, 1, 0)
     entry = report["files"][0]
     assert entry["input"] == "odd»name.smt2"

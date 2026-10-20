@@ -38,7 +38,7 @@ def expected_outputs():
 def check_cli(lean, tmp):
     expected = expected_outputs()
     help_text = run("--help").stdout
-    assert all(word in help_text for word in ["Usage:", "HORN", "Problem", "Refutation", "--max-rec-depth", "4096"])
+    assert all(word in help_text for word in ["Usage:", "HORN", "Problem", "Refutation", "--max-rec-depth", "4096", "--check-equivalence"])
     for args in [(), ("--unknown",), ("input.smt2",),
                  ("input.smt2", "--out", ""), ("input.smt2", "--out", "--help")]:
         run(*args, code=2)
@@ -470,9 +470,40 @@ def check_horn(lean, tmp):
         assert not output.exists()
 
 
+def check_equivalence(lean, tmp):
+    """Opt-in checking preserves output in every translation mode."""
+    for name, fixture, mode, goal, count in [
+        ("smt", BINDINGS / "preserved.smt2", "auto", "Refutation", 1),
+        ("horn", ROOT / "tests/chc/lh_sum_rec.smt2", "auto", "Problem", 1),
+        ("model", CHC / "general-model.smt2", "model", "Model", 3),
+        ("fixedpoint", ROOT / "tests/translation/fixedpoint/reachability.smt2", "fixedpoint", "Safe", 3),
+    ]:
+        default, checked = tmp / name, tmp / f"{name}-checked"
+        run(fixture, "--out", default, "--mode", mode)
+        args = ["--out", checked, "--mode", mode]
+        if name in ("smt", "model"):
+            args.insert(0, "--check-equivalence")
+        else:
+            args.append("--check-equivalence")
+        run(fixture, *args)
+        source = read_generated(default, goal=goal, count=count)
+        assert source == read_generated(checked, goal=goal, count=count), name
+        if name in ("smt", "horn"):
+            check_generated(lean, checked, goal=goal)
+    for index, flags in enumerate([
+        ["--check-equivalence", "--check-equivalence"],
+        ["--check-equivalence", "false"],
+    ]):
+        output = tmp / f"invalid-equivalence-{index}"
+        run(FIXTURES / "contradiction.smt2", "--out", output, *flags, code=2)
+        assert not output.exists()
+    print("Equivalence passed: opt-in checking leaves SMT, Horn, model, and fixedpoint output unchanged")
+
+
 # Each check belongs to exactly one group. No arguments runs every group.
 GROUPS = {
     "cli": (check_cli,),
+    "equivalence": (check_equivalence,),
     "sessions": (check_sessions,),
     "sorts": (check_uninterpreted_sorts,),
     "arithmetic": (check_integer_division, check_reals, check_conversions),

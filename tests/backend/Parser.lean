@@ -633,6 +633,66 @@ private def checkAssumptions : IO Unit := do
       seen.modify (·.push query.assertionTerms.size)).runIO
   require ((← seen.get) == #[2, 1]) "assumptions leaked into next check"
 
+private def checkGlobalAssertionOrder : IO Unit := do
+  let input := "
+    (set-option :global-declarations true)
+    (set-logic ALL)
+    (declare-const p Bool)
+    (assert p)
+    (assert p)
+    (push 1)
+    (define-fun neg () Bool (not p))
+    (assert neg)
+    (define-fun-rec r ((x Int)) Int (ite (= x 0) 0 (r (- x 1))))
+    (assert p)
+    (check-sat)
+    (pop 1)
+    (check-sat)
+    (assert neg)
+    (check-sat)
+    (reset-assertions)
+    (check-sat)
+    (assert neg)
+    (assert p)
+    (check-sat)
+    (reset)
+    (set-logic ALL)
+    (declare-const p Bool)
+    (assert p)
+    (check-sat)"
+  let sources := #[#[9, 4, 5, 8, 10], #[9, 4, 5], #[9, 4, 5, 14],
+    #[9], #[9, 18, 19], #[24]]
+  let seen ← IO.mkRef (#[] : Array (Array Nat))
+  (parseAndInspectSession input (name := "global-assertion-order.smt2") fun query => do
+    let i := (← seen.get).size
+    require (query.assertionSources.map (·.number) == sources[i]!)
+      "global equations or duplicate assertions changed source order"
+    let p := (query.declarations.map (·.term))[0]!
+    let mut terms := #[p]
+    if i < 5 then
+      require (query.declarations.map (·.name) == #["p", "r"] &&
+        query.definitions.map (·.name) == #["neg"] && query.recursiveDefinitions.size == 1)
+        "global definitions did not survive pop or reset-assertions"
+      let #[definition] := query.definitions | throw (.error "expected one global definition")
+      let #[recursive] := query.recursiveDefinitions | throw (.error "expected one global recursive definition")
+      let neg := definition.body
+      require (neg.getKind! == .NOT && neg[0]! == p && definition.source.number == 7 &&
+        recursive.symbol == (query.declarations.map (·.term))[1]!)
+        "global definitions lost their bodies or native symbols"
+      let assertions := #[#[p, p, neg, p], #[p, p], #[p, p, neg], #[], #[neg, p]]
+      require (query.assertionTerms == #[recursive.equation.term] ++ assertions[i]!)
+        "global definition capture changed assertion identities or multiplicities"
+      terms := terms ++ #[definition.symbol, recursive.symbol, recursive.equation.term, neg]
+    else
+      require (query.declarations.map (·.name) == #["p"] && query.definitions.isEmpty &&
+        query.recursiveDefinitions.isEmpty && query.assertionTerms == #[p])
+        "full reset retained a global definition or assertion"
+    seen.modify (·.push (terms.map (·.getId!)))
+  ).runIO
+  let ids ← seen.get
+  require (ids.size == 6 && (ids.extract 1 5).all (· == ids[0]!) &&
+    ids[5]![0]! != ids[0]![0]!) "global native identities changed or survived full reset"
+
 private def checkResets : IO Unit := do
   let path := "tests/translation/sessions/resets.smt2"
   let seen ← IO.mkRef (#[] : Array (Nat × Nat × Nat))
@@ -672,6 +732,7 @@ def main : IO Unit := do
   checkSessions
   checkAssumptions
   checkResets
+  checkGlobalAssertionOrder
   checkSorts
   checkDivision
   checkReals

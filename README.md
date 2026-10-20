@@ -64,3 +64,5 @@ For this example, replace `sorry` with:
 Run the Lean command again to check the completed proof. For broader examples,
 see [demo.smt2](demo.smt2) and [demo-chc.smt2](demo-chc.smt2).
 Use `--max-rec-depth N` to override the default recursion limit of 4096.
+Use `--check-equivalence` to additionally prove equivalence between expanded and
+structured Lean statements; this is off by default, while statement kernel checking is always enabled.

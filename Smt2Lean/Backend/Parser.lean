@@ -62,23 +62,32 @@ private def readAssumptions (command : Source.Command) (tm : cvc5.TermManager)
     terms := terms.push (term, surface)
   return terms
 
-/-- Native global equations can move: find the added term by occurrence count. -/
-private def addedAssertions (before after : Array cvc5.Term) : cvc5.Env (Array cvc5.Term) := do
-  let mut counts : Std.HashMap cvc5.Term Nat := {}
-  for term in before do counts := counts.insert term (counts[term]?.getD 0 + 1)
-  let mut added := #[]
-  for term in after do
-    let count := counts[term]?.getD 0
-    if count == 0 then added := added.push term
-    else counts := counts.insert term (count - 1)
-  unless counts.toList.all (·.2 == 0) do
-    throw (.error "native command removed an existing assertion")
-  return added
+/-- Replay the parsed command in an empty solver to capture only its terms.
+The live solver keeps the original scope and definition behavior. Both solvers
+share a term manager, so assertions and recursive equations keep their identities. -/
+private def captureAssertions (command : cvc5.Command) (capture : cvc5.Solver)
+    (symbols : cvc5.SymbolManager) : cvc5.Env (Array cvc5.Term) := do
+  capture.resetAssertions
+  invokeCommand command capture symbols
+  capture.getAssertions
 
-private def addedAssertion (before after : Array cvc5.Term) : cvc5.Env cvc5.Term := do
-  let #[term] ← addedAssertions before after
+private def singleAssertion (terms : Array cvc5.Term) : cvc5.Env cvc5.Term := do
+  let #[term] := terms
     | throw (.error "expected exactly one new native assertion")
   return term
+
+/-- Replaying define-fun creates a fresh symbol but reuses its original body.
+Replace that symbol with the one registered in the live parser's scope. -/
+private def captureDefinition (command : cvc5.Command) (tm : cvc5.TermManager)
+    (capture solver : cvc5.Solver) (symbols : cvc5.SymbolManager) : cvc5.Env cvc5.Term := do
+  let localSymbols ← cvc5.SymbolManager.new tm
+  let equation ← singleAssertion (← captureAssertions command capture localSymbols)
+  unless equation.getKind! == .EQUAL && equation.getNumChildren == 2 do
+    throw (.error "expected a native defining equation")
+  let resolver ← cvc5.InputParser.new solver (some symbols)
+  resolver.setStringInput equation[0]!.toString
+  let symbol ← resolver.nextTerm
+  tm.mkTerm .EQUAL #[symbol, equation[1]!]
 
 private def parseScript
     (input : String)
@@ -89,6 +98,11 @@ private def parseScript
   let tm      ← cvc5.TermManager.new
   let mut solver ← cvc5.Solver.new tm
   if !singleQuery then solver.setOption "incremental" "true"
+  -- The capture solver never solves or accumulates assertions. ALL also admits
+  -- native defining equations when the source logic is quantifier-free.
+  let capture ← cvc5.Solver.new tm
+  capture.setLogic "ALL"
+  let captureSymbols ← cvc5.SymbolManager.new tm
   let mut symbols ← cvc5.SymbolManager.new tm
   let mut parser ← cvc5.InputParser.new solver (some symbols)
   let inputTokens := Source.tokenize input
@@ -274,33 +288,28 @@ private def parseScript
           invoked := query.invoked.push commandName }
       | "define-fun" =>
         validateNamedTerms command.source.names tm solver symbols session.query allowQuantifiers
-        let before ← solver.getAssertions
         invokeCommand cmd solver symbols
-        let assertions ← solver.getAssertions
-        unless assertions.size == session.nativeCount + 1 do
-          throw (.error "expected one native defining equation")
-        let equation ← addedAssertion before assertions
+        let equation ← captureDefinition cmd tm capture solver symbols
         session := { session with query := ← session.query.collectTermSorts #[equation] command.source }
         let definition ← readDefinition equation command.source session.query tm allowQuantifiers
         let definition := { definition with
           arrayConstants := arrayConstants
           name := Collisions.originalName renamedBindings definition.name }
-        session := { session with nativeCount := assertions.size }
+        session := { session with nativeCount := session.nativeCount + 1 }
         session := session.mapQuery fun query => { query with
           definitions := query.definitions.push definition
           invoked := query.invoked.push commandName }
       | "define-fun-rec" =>
         validateNamedTerms command.source.names tm solver symbols session.query allowQuantifiers
-        let before ← solver.getAssertions
         invokeCommand cmd solver symbols
-        let assertions ← solver.getAssertions
-        let equations ← addedAssertions before assertions
+        let localSymbols ← cvc5.SymbolManager.new tm
+        let equations ← captureAssertions cmd capture localSymbols
         let query ← session.query.collectTermSorts equations command.source
         let query ← readRecursiveDefinitions equations command.source query tm allowQuantifiers arrayConstants
         let query := { query with declarations := query.declarations.map fun (d : ParsedDeclaration) =>
           { d with name := Collisions.originalName renamedBindings d.name } }
         session := { session with
-          nativeCount := assertions.size
+          nativeCount := session.nativeCount + equations.size
           query := { query with invoked := query.invoked.push commandName } }
       | "define-sort" =>
         validateSortAlias cmd session.query.valueSorts session.query.sortConstructors
@@ -310,12 +319,8 @@ private def parseScript
         let assertionNumber := session.query.assertions.size + 1
         try
           validateNamedTerms command.source.names tm solver symbols session.query allowQuantifiers
-          let before ← solver.getAssertions
           invokeCommand cmd solver symbols
-          let assertions ← solver.getAssertions
-          unless assertions.size == session.nativeCount + 1 do
-            throw (.error "expected one new native assertion")
-          let term ← addedAssertion before assertions
+          let term ← singleAssertion (← captureAssertions cmd capture captureSymbols)
           session := { session with query := ← session.query.collectTermSorts #[term] command.source }
           let term ← withoutQuantifierHints tm term
           validateAssertion term (knownTerms session.query) allowQuantifiers session.query.valueSorts session.query.arrayConstructors
@@ -323,7 +328,7 @@ private def parseScript
           let term ← SourceLets.erase tm session.query.sourceLets term
           let term ← expandDefinitions tm session.query.definitions term
           validateAssertion term session.query.declarations allowQuantifiers session.query.valueSorts session.query.arrayConstructors
-          session := { session with nativeCount := assertions.size }
+          session := { session with nativeCount := session.nativeCount + 1 }
           session := session.mapQuery fun query => { query with
             assertions := query.assertions.push { term, surface := some surface, source := command.source, arrayConstants } }
         catch error =>

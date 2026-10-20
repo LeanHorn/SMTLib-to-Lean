@@ -114,7 +114,7 @@ private def checkDefinitions (env : Environment) : IO Unit := do
 private def checkSourceBindings (env : Environment) : IO Unit := do
   let path := "tests/translation/bindings/preserved.smt2"
   runQuery env path (← IO.FS.readFile path) fun query => do
-    let statement ← refutationStatement query
+    let statement ← refutationStatement query (checkEquivalence := true)
     unless statement.definitions.map (·.name) == #[`Refutation.Definitions.inc, `Refutation.Definitions.twice] do
       throwError "lost source definitions or dependency order"
     let text ← render statement.value (parts := statement.parts) (definitions := statement.definitions)
@@ -144,7 +144,7 @@ private def checkSourceBindings (env : Environment) : IO Unit := do
     (assert (= (let ((a ((as const (Array Int Int)) 5))) (lookup a 0)) 5))
     (check-sat)" fun query => do
       unless query.declarations.size == 1 do throwError "private let markers escaped into parameters"
-      let statement ← refutationStatement query
+      let statement ← refutationStatement query (checkEquivalence := true)
       unless statement.definitions.size == 5 do throwError "missing theory definitions"
       checkEmission statement.value (parts := statement.parts) (definitions := statement.definitions)
   -- An inner conditional changes the outer condition's hidden Decidable type.
@@ -164,7 +164,7 @@ private def checkSourceBindings (env : Environment) : IO Unit := do
     (assert (forall ((x Int)) (let ((next (inc x)))
       (=> (and (R x) (positive next)) (R next)))))
     (check-sat)" fun problem => do
-      let statement ← problemStatement problem
+      let statement ← problemStatement problem (checkEquivalence := true)
       let text ← render statement.value .problem (parts := statement.parts) (definitions := statement.definitions)
       for fragment in #["let next := Problem.Definitions.inc", "Problem.Definitions.positive next", "r0 next"] do
         unless text.contains fragment do throwError "Horn source structure missing: {fragment}"
@@ -636,7 +636,7 @@ private def checkNamedClauses (env : Environment) : IO Unit := do
     s!"(assert (forall ((x S)) (=> (and {premises}) (R x))))(check-sat)"
   runProblem env "long clause" input fun problem => do
     let original ← defineProblem problem `Original
-    let statement ← problemStatement problem
+    let statement ← problemStatement problem (checkEquivalence := true)
     checkEqual statement.value original
     unless statement.parts.size == 3 &&
         statement.parts[2]?.map (·.name) == some `Problem.Clauses do
@@ -662,7 +662,7 @@ def main (args : List String) : IO Unit := do
     let input ← IO.FS.readFile path
     (Smt2Lean.Chc.parseAndInspectProblem input (name := path) fun problem => do
       let action : MetaM Unit := do
-        let statement ← problemStatement problem
+        let statement ← problemStatement problem (checkEquivalence := true)
         checkEmission statement.value .problem problem.source
           (problem.clauses.filterMap (·.source)) statement.parts statement.definitions
       discard <| action.toIO

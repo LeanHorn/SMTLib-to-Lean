@@ -102,7 +102,7 @@ def checkAxioms (name : Name) (usesClassical : Bool)
 
 def checkRefutation (query : ParsedQuery) (expected : Expr)
     (usesClassical : Bool := false) : MetaM Unit := do
-  let statement ← refutationStatement query
+  let statement ← refutationStatement query (checkEquivalence := true)
   let value := statement.value
   let proof ← Smt2Lean.Equivalence.prove value expected (fun n =>
     (`Refutation).isPrefixOf n || (`Problem).isPrefixOf n)
@@ -131,7 +131,7 @@ def runProblem (env : Environment) (name input : String)
 
 def checkProblem (problem : Smt2Lean.Chc.Problem) (expected : Expr)
     (usesClassical : Bool := false) (extraAxioms : Array Name := #[]) : MetaM Unit := do
-  let statement ← problemStatement problem
+  let statement ← problemStatement problem (checkEquivalence := true)
   let value := statement.value
   if value.hasFVar || value.hasMVar || value.hasLooseBVars then
     throwError "Problem contains unresolved variables"
