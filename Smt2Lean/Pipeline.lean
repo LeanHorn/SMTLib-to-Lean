@@ -8,15 +8,21 @@ open Lean Meta Emit
 
 /-- Explicit consumer profiles; auto retains the existing strict HORN behavior. -/
 inductive Mode where
-  | auto | model | fixedpoint
+  | auto | chc | model | fixedpoint
   deriving BEq
+
+/-- Generated source and serializable query identities for project consumers. -/
+structure Translation where
+  source : String
+  queries : Array Json
 
 /-- Reconstruct at each check, but return output only after the entire session succeeds.
 `maxRecDepth` sets the recursion limit during translation and in the generated Lean file.
 `checkEquivalence` additionally proves equivalence of expanded and structured statements. -/
-def translateSession (input : String) (env : Environment) (name : String := "session")
+def translateSessionWithMetadata (input : String) (env : Environment) (name : String := "session")
     (maxRecDepth : Nat := Emit.defaultMaxRecDepth) (mode : Mode := .auto)
-    (scope : Option String := none) (checkEquivalence : Bool := false) : IO String := do
+    (scope : Option String := none) (checkEquivalence : Bool := false)
+    (layout : Emit.Layout := .structured) : IO Translation := do
   let adapted ← if mode == .fixedpoint then
     match Fixedpoint.adapt input name with
     | .ok script => pure script
@@ -29,11 +35,12 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
     fileName := name, fileMap := default
     options := Lean.maxRecDepth.set {} maxRecDepth
     maxRecDepth }
-  (Backend.parseAndInspectSession adapted.text (name := name) (mode := .auto)
+  (Backend.parseAndInspectSession adapted.text (name := name)
+      (mode := if mode == .chc then .chc else .auto)
       (sources := adapted.sources)
       (onSkipped := fun command => skipped.modify (·.push command)) fun query => do
     let problem? ← if mode == .fixedpoint then some <$> Fixedpoint.validate query
-      else if mode == .auto && query.logic == some "HORN" then
+      else if mode == .chc || (mode == .auto && query.logic == some "HORN") then
         some <$> Chc.validateQuery query name else pure none
     let action : MetaM Goal := do
       if mode == .fixedpoint then
@@ -57,13 +64,29 @@ def translateSession (input : String) (env : Environment) (name : String := "ses
           else pure (← Translate.refutationStatement query (.mkSimple s!"Refutation_{query.number}") checkEquivalence, .refutation)
       return {
         value := statement.value, parts := statement.parts, definitions := statement.definitions
+        metadata := statement.metadata.mergeObj (Json.mkObj [
+          ("source", Translate.sourceMetadata query.source),
+          ("declared_logic", toJson (if mode == .fixedpoint then adapted.declaredLogic else query.logic)),
+          ("check_command", toJson (if mode == .fixedpoint then "query" else query.checkCommand))])
+        queryNumber := query.number
         kind, source := query.source, assertions := query.assertionSources
         checkCommand := if mode == .fixedpoint then "query" else query.checkCommand, assumptionCount := query.assumptionCount }
     let (goal, checkedState, _) ← action.toIO context (← state.get)
     state.set checkedState
     goals.modify (·.push goal)
   ).runIO
-  let (source, _, _) ← (renderSession (← goals.get) (← skipped.get) maxRecDepth scope).toIO context (← state.get)
-  return source
+  let action : MetaM Translation := do
+    let source ← renderSession (← goals.get) (← skipped.get) maxRecDepth scope layout checkEquivalence
+    let queries ← renderMetadata (← goals.get) scope layout
+    return { source, queries }
+  let (result, _, _) ← action.toIO context (← state.get)
+  return result
+
+/-- Source-only API retained for library callers. -/
+def translateSession (input : String) (env : Environment) (name : String := "session")
+    (maxRecDepth : Nat := Emit.defaultMaxRecDepth) (mode : Mode := .auto)
+    (scope : Option String := none) (checkEquivalence : Bool := false)
+    (layout : Emit.Layout := .structured) : IO String := do
+  return (← translateSessionWithMetadata input env name maxRecDepth mode scope checkEquivalence layout).source
 
 end Smt2Lean.Pipeline

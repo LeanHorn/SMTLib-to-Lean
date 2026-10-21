@@ -84,7 +84,8 @@ private def writeAtomic (path temporary : FilePath) (text : String) : IO Unit :=
 /-- Translate a project independently file by file. A failed input has a report entry
 but no Lean file. Every translation starts from the same imported environment. -/
 def translate (input output : FilePath) (env : Environment)
-    (maxRecDepth : Nat) (mode : Pipeline.Mode) (checkEquivalence : Bool := false) : IO Bool := do
+    (maxRecDepth : Nat) (mode : Pipeline.Mode) (checkEquivalence : Bool := false)
+    (layout : Emit.Layout := .structured) : IO Bool := do
   let root ← IO.FS.realPath input
   let project := fileName (root.fileName.getD "Project")
   -- Reserve the report and scratch file outside the generated module tree.
@@ -106,11 +107,14 @@ def translate (input output : FilePath) (env : Environment)
     let mut outputBytes : Option Nat := none
     let mut outputLines : Option Nat := none
     let mut failure : Option String := none
+    let mut queries : Array Json := #[]
     try
       let text ← IO.FS.readFile (root / job.input)
       inputBytes := some text.utf8ByteSize
-      let source ← Pipeline.translateSession text env (root / job.input).toString maxRecDepth mode
-        (some job.scope) checkEquivalence
+      let result ← Pipeline.translateSessionWithMetadata text env (root / job.input).toString maxRecDepth mode
+        (some job.scope) checkEquivalence layout
+      let source := result.source
+      queries := result.queries
       let destination := output / job.output
       IO.FS.createDirAll (destination.parent.getD "")
       writeAtomic destination temporary source
@@ -127,13 +131,15 @@ def translate (input output : FilePath) (env : Environment)
       ("module", toJson job.moduleName), ("namespace", toJson job.scope),
       ("status", toJson (if failure.isSome then "failed" else "translated")),
       ("error", toJson failure), ("translation_ms", toJson ((← IO.monoMsNow) - start)),
+      ("queries", toJson queries),
       ("input_bytes", toJson inputBytes), ("output_bytes", toJson outputBytes), ("output_lines", toJson outputLines)]
     let report := Json.mkObj [
       ("input_root", toJson root.toString), ("project", toJson project),
       ("total", toJson jobs.size), ("translated", toJson translated), ("failed", toJson failed),
       ("max_rec_depth", toJson maxRecDepth),
       ("check_equivalence", toJson checkEquivalence),
-      ("mode", toJson (match mode with | .auto => "auto" | .model => "model" | .fixedpoint => "fixedpoint")),
+      ("mode", toJson (match mode with | .auto => "auto" | .chc => "chc" | .model => "model" | .fixedpoint => "fixedpoint")),
+      ("layout", toJson (match layout with | .structured => "structured" | .inline => "inline")),
       ("files", toJson records)]
     writeAtomic (output / "manifest.json") temporary (report.pretty ++ "\n")
   IO.println s!"Translated {translated}/{jobs.size} files; {failed} failed. Report: {output / "manifest.json"}"

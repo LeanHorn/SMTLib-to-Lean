@@ -46,8 +46,8 @@ def Problem_1.Clause003
 def Problem_1.Clauses
     (r0 : Int → Prop) : Prop :=
   (Problem_1.Clause001 r0) ∧
-  (Problem_1.Clause002 r0) ∧
-  Problem_1.Clause003 r0
+  ((Problem_1.Clause002 r0) ∧
+  (Problem_1.Clause003 r0))
 
 -- Source: "tests/chc/lh_sum_rec.smt2":28:1-28:12 (check-sat, command 7)
 /-- There are interpretations of the declared symbols satisfying every Horn clause. -/

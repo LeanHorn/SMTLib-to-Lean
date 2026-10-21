@@ -8,6 +8,7 @@ structure Script where
   text : String := ""
   sources : Array Source.Ref := #[]
   skipped : Array Source.Command := #[]
+  declaredLogic : Option String := none
 
 private def Script.add (script : Script) (text : String) (source : Source.Ref) : Script :=
   { script with text := script.text ++ text ++ "\n", sources := script.sources.push source }
@@ -68,7 +69,7 @@ private def command (state : State) (command : Source.Command) (stem : String)
   | "set-logic" =>
     unless args == #["set-logic", "HORN"] || args == #["set-logic", "ALL"] do
       throw "fixedpoint expects HORN or ALL logic"
-    return state
+    return { state with script := { state.script with declaredLogic := some args[1]! } }
   | "set-option" =>
     unless args.size == 3 && args[1]! == ":fp.engine" &&
         #["spacer", "datalog"].contains args[2]! do

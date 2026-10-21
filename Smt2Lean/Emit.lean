@@ -12,6 +12,12 @@ open Lean Meta
 /-- Recursion limit for checking generated Lean files. -/
 def defaultMaxRecDepth : Nat := 4096
 
+/-- Keep generated components named, or expose CHC clauses directly in the goal. -/
+inductive Layout where
+  | structured
+  | inline
+  deriving BEq
+
 /-- Select the proposition and proof template to emit. -/
 inductive GoalKind where
   | refutation
@@ -30,6 +36,58 @@ structure Goal where
   kind : GoalKind := .refutation
   source : Option Source.Ref := none
   assertions : Array Source.Ref := #[]
+  metadata : Json := .null
+  queryNumber : Nat := 1
+
+/-- Public proposition name, preserving the single-query naming convention. -/
+def goalName (kind : GoalKind) (number : Option Nat := none) : String :=
+  let base := match kind with
+    | .refutation => "Refutation"
+    | .problem => "Problem"
+    | .model => "Model"
+    | .safety => "Safe"
+  base ++ (number.map (fun n => s!"_{n}") |>.getD "")
+
+/-- Stable semantic category for metadata consumers. -/
+def targetKind : GoalKind → String
+  | .refutation => "refutation"
+  | .problem | .model => "model_existence"
+  | .safety => "fixedpoint_safety"
+
+private def checkLayout (goal : Goal) (layout : Layout) : MetaM Unit := do
+  if layout == .inline && goal.kind != .problem && goal.kind != .safety then
+    throwError "inline layout is supported only for CHC Problem and Safe goals"
+
+/-- Expand only the exact generated wrappers. Beta substitution retains source lets
+and sharing lets; source definitions and theory helpers are never selected. -/
+private def inlineValue (goal : Goal) : MetaM Expr := do
+  let wrappers := goal.parts.foldl (fun values part => values.insert part.name part.value)
+    ({} : Std.HashMap Name Expr)
+  Core.transform goal.value (pre := fun value => do
+    if let .const name _ := value.getAppFn then
+      if let some body := wrappers[name]? then
+        return .visit (body.betaRev value.getAppRevArgs (useZeta := false))
+    return .continue)
+
+/-- Optional kernel check for the rendering transformation itself. The translation
+check separately relates the structured target to the original reconstruction. -/
+private def checkInline (original expanded : Expr) : MetaM Unit := do
+  let declaration : Declaration := .thmDecl {
+    name := ← mkFreshId
+    levelParams := []
+    type := ← mkAppM ``Eq #[original, expanded]
+    value := ← mkEqRefl original
+  }
+  discard <| ofExceptKernelException <|
+    (← getEnv).addDeclCore 0 (Lean.maxRecDepth.get (← getOptions)).toUSize declaration none
+
+private def goalValue (goal : Goal) (layout : Layout)
+    (checkEquivalence : Bool := false) : MetaM Expr := do
+  checkLayout goal layout
+  let value ← if layout == .inline then inlineValue goal else pure goal.value
+  if layout == .inline && checkEquivalence then checkInline goal.value value
+  -- lean-smt's Int.abs is not in Lean core; emit its if/then/else definition.
+  deltaExpand value (· == ``Int.abs)
 
 private def sourceComment (label : String) (source : Source.Ref) : String :=
   let span := source.span
@@ -93,7 +151,7 @@ private partial def printProposition (value : Expr) : MetaM String := do
         return ← withLocalDecl (← binderName name body) info type fun x => do
           return s!"∃ ({← printExpr x} : {← printExpr type}),\n{← printProposition (body.instantiate1 x)}"
     if value.isAppOfArity ``And 2 then
-      return s!"({← printProposition value.appFn!.appArg!}) ∧\n{← printProposition value.appArg!}"
+      return s!"({← printProposition value.appFn!.appArg!}) ∧\n({← printProposition value.appArg!})"
     printExpr value
 where
   -- Equal types can share a binder group; dependent types and premises stop it.
@@ -149,24 +207,24 @@ private def renderHelper (name : Name) : MetaM String := do
     return s!"{keyword} {name}{universes} " ++ String.intercalate " " binders.toList ++
       s!" : {← printExpr (← inferType body)} :=\n  " ++ (← printExpr body).replace "\n" "\n  " ++ "\n\n"
 
-private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × String) := do
-  let (baseName, baseProof, description, proofTarget) := match goal.kind with
-    | .refutation => ("Refutation", "refutation",
+private def renderGoal (goal : Goal) (number : Option Nat) (layout : Layout)
+    (checkEquivalence : Bool) : MetaM (String × String) := do
+  let (baseProof, description, proofTarget) := match goal.kind with
+    | .refutation => ("refutation",
         "No interpretation satisfies all assertions of the SMT query.", "the query's refutation")
-    | .problem => ("Problem", "problem",
+    | .problem => ("problem",
         "There are interpretations of the declared symbols satisfying every Horn clause.",
         "the existence of a satisfying interpretation")
-    | .model => ("Model", "model",
+    | .model => ("model",
         "General model existence: all assertions hold. Outside the Flex Horn adapter.",
         "a satisfying interpretation (use ¬Model to prove unsatisfiability)")
-    | .safety => ("Safe", "safe",
+    | .safety => ("safe",
         "There is a rule-closed interpretation excluding the queried relation. Z3 query verdict: unsat.",
         "unreachability; change the target to Reachable to prove reachability")
   let suffix := number.map (fun n => s!"_{n}") |>.getD ""
-  let definitionName := baseName ++ suffix
+  let definitionName := goalName goal.kind number
   let theoremName := baseProof ++ suffix
-  -- lean-smt's Int.abs is not in Lean core; emit its if/then/else definition.
-  let value ← deltaExpand goal.value (· == ``Int.abs)
+  let value ← goalValue goal layout checkEquivalence
   let needsClassical := (value.find? (·.isConstOf ``Classical.propDecidable)).isSome
   let body ← if goal.parts.isEmpty then printExpr value else printProposition value
   let label := match goal.kind with
@@ -177,11 +235,15 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
   let provenance := provenance ++ (if !goal.parts.isEmpty then "" else String.join
     (goal.assertions.mapIdx (fun i ref => sourceComment (if i < goal.assertions.size - goal.assumptionCount then s!"{queryLabel}{label} {i + 1}"
         else s!"{queryLabel}assumption {i + 1 - (goal.assertions.size - goal.assumptionCount)}") ref)).toList)
+  let provenance := provenance ++ (if layout == .inline then String.join
+    (goal.parts.toList.filterMap fun part =>
+      part.source.map (sourceComment (queryLabel ++ part.label))) else "")
   let definition := if needsClassical then
     s!"noncomputable def {definitionName} : Prop := by\n  classical\n  exact\n    " ++
       body.replace "\n" "\n    " ++ "\n"
     else s!"def {definitionName} : Prop :=\n  " ++ body.replace "\n" "\n  " ++ "\n"
-  let parts := String.join (← (goal.definitions ++ goal.parts).toList.mapM renderPart)
+  let parts := String.join (← (goal.definitions ++
+    (if layout == .structured then goal.parts else #[])).toList.mapM renderPart)
   let dual := if goal.kind == .safety then
       s!"\n/-- The queried relation is reachable. Z3 query verdict: sat. -/\ndef Reachable{suffix} : Prop := ¬{definitionName}\n"
     else ""
@@ -193,8 +255,10 @@ private def renderGoal (goal : Goal) (number : Option Nat) : MetaM (String × St
 /-- Emit helpers once, then all statements, then all unfinished proofs.
 Single-query files retain their original goal names. -/
 def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
-    (maxRecDepth : Nat := defaultMaxRecDepth) (scope : Option String := none) : MetaM String := do
+    (maxRecDepth : Nat := defaultMaxRecDepth) (scope : Option String := none)
+    (layout : Layout := .structured) (checkEquivalence : Bool := false) : MetaM String := do
   if goals.isEmpty then throwError "expected at least one translated query"
+  for goal in goals do checkLayout goal layout
   let values := goals.flatMap fun goal => #[goal.value] ++ (goal.definitions ++ goal.parts).map (·.value)
   let datatypeGroups ← Datatypes.groups values
   let datatypeDeclarations ← Datatypes.render datatypeGroups printExpr
@@ -204,7 +268,7 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
       unless helpers.contains name do helpers := helpers.push name
   let helperDefinitions := String.join (← (helpers.qsort Name.lt).toList.mapM renderHelper)
   let entries ← goals.mapIdxM fun i goal =>
-    renderGoal goal (if goals.size == 1 then none else some (i + 1))
+    renderGoal goal (if goals.size == 1 then none else some (i + 1)) layout checkEquivalence
   let requests := String.join (skipped.toList.map fun command =>
     sourceComment "unexecuted request" command.source ++ s!"-- Not executed: {reprStr command.text}\n")
   let usesReal := (← Datatypes.usesReal datatypeGroups) || values.any fun value => (value.find? (·.isConstOf ``Real)).isSome
@@ -221,12 +285,65 @@ def renderSession (goals : Array Goal) (skipped : Array Source.Command := #[])
     String.intercalate "\n" (entries.toList.map Prod.fst) ++ "\nend\n\n-- Proofs\n\n" ++
     String.intercalate "\n" (entries.toList.map Prod.snd) ++ closing
 
+/-- Walk only the interpretation prefix. Carrier nonemptiness premises separate
+carrier binders, while clause variables and model laws lie after this prefix. -/
+private partial def interpretationNames (value : Expr) (remaining : Nat) : MetaM (Array String) := do
+  if remaining == 0 then return #[]
+  if value.isAppOfArity ``Exists 2 then
+    if let .lam name type body info := value.appArg! then
+      return ← withLocalDecl (← binderName name body) info type fun x => do
+        return #[← printExpr x] ++ (← interpretationNames (body.instantiate1 x) (remaining - 1))
+  if value.isAppOfArity ``And 2 && value.appFn!.appArg!.isAppOfArity ``Nonempty 1 then
+    return ← interpretationNames value.appArg! remaining
+  throwError "CHC metadata does not match the emitted interpretation binders"
+
+private def qualifiedName (scope : Option String) (name : String) : String :=
+  scope.map (fun namespaceName => namespaceName ++ "." ++ name) |>.getD name
+
+/-- Attach final printed names without parsing Lean text or traversing clause binders. -/
+private def goalMetadata (goal : Goal) (number : Option Nat) (scope : Option String)
+    (layout : Layout) : MetaM Json := do
+  checkLayout goal layout
+  let symbols := ((goal.metadata.getObjValD "symbols").getArr?).toOption.getD #[]
+  let names ← if symbols.isEmpty then pure #[] else
+    interpretationNames (← goalValue goal layout) symbols.size
+  let symbols ← symbols.mapM fun (symbol : Json) => do
+    let index ← Lean.ofExcept ((symbol.getObjValD "parameter_index").getNat?)
+    let some name := names[index]?
+      | throwError "CHC metadata parameter index {index} is outside the interpretation prefix"
+    return symbol.mergeObj (Json.mkObj [("emitted_binder", toJson name)])
+  let clauses := ((goal.metadata.getObjValD "clauses").getArr?).toOption.getD #[]
+  let clauses := clauses.map fun clause =>
+    match (clause.getObjValD "wrapper_name").getStr? with
+    | .ok name => clause.mergeObj <|
+        Json.mkObj [("wrapper_name", toJson (qualifiedName scope name))]
+    | .error _ => clause
+  let metadata := goal.metadata.mergeObj <| Json.mkObj [
+    ("query_number", toJson goal.queryNumber),
+    ("goal_name", toJson (qualifiedName scope (goalName goal.kind number))),
+    ("target_kind", toJson (targetKind goal.kind)),
+    ("horn", toJson (goal.kind == .problem || goal.kind == .safety)),
+    ("layout", toJson (if layout == .structured then "structured" else "inline")),
+    ("wrappers_emitted", toJson (layout == .structured)),
+    ("wrapper_names", toJson (goal.parts.map fun part => qualifiedName scope part.name.toString)),
+    ("symbols", toJson symbols)]
+  return if clauses.isEmpty then metadata else
+    metadata.mergeObj (Json.mkObj [("clauses", toJson clauses)])
+
+/-- Query metadata uses exactly the declaration names and binders rendered above. -/
+def renderMetadata (goals : Array Goal) (scope : Option String := none)
+    (layout : Layout := .structured) : MetaM (Array Json) :=
+  goals.mapIdxM fun i goal =>
+    goalMetadata goal (if goals.size == 1 then none else some (i + 1)) scope layout
+
 /-- Render one file with statements first, followed by unfinished proofs. -/
 def render (value : Expr) (kind : GoalKind := .refutation)
     (source : Option Source.Ref := none) (assertions : Array Source.Ref := #[])
     (maxRecDepth : Nat := defaultMaxRecDepth) (parts : Array StatementPart := #[])
-    (definitions : Array StatementPart := #[]) : MetaM String :=
-  renderSession #[{ value, parts, definitions, kind, source, assertions }] (maxRecDepth := maxRecDepth)
+    (definitions : Array StatementPart := #[]) (layout : Layout := .structured)
+    (checkEquivalence : Bool := false) : MetaM String :=
+  renderSession #[{ value, parts, definitions, kind, source, assertions }]
+    (maxRecDepth := maxRecDepth) (layout := layout) (checkEquivalence := checkEquivalence)
 
 /-- Write Query.lean in a new directory. Existing destinations are refused. -/
 def writeFile (output : System.FilePath) (source : String) : IO Unit := do

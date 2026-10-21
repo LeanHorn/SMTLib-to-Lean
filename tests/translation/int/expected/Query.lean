@@ -22,7 +22,7 @@ def Refutation_1.Assertion002
 def Refutation : Prop :=
   ∀ (x0 : Int),
   ((Refutation_1.Assertion001 x0) ∧
-  Refutation_1.Assertion002 x0) →
+  (Refutation_1.Assertion002 x0)) →
   False
 
 end

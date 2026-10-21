@@ -41,7 +41,8 @@ lake exe smt2lean path/to/suite --out generated
 This writes `generated/suite/<relative-path>.lean`, preserving filenames and
 subdirectories. Each file has its own namespace so modules can be imported together.
 `generated/manifest.json` records input/output names, sizes, translation times and
-per-file errors. Failed inputs do not stop the remaining translations; the command
+per-file errors, plus query targets and CHC symbol/clause mappings.
+Failed inputs do not stop the remaining translations; the command
 exits with status 1 if any fail. No Lean proof is completed by translation.
 
 The output directory must be new, with an existing parent. For a single input
@@ -49,6 +50,13 @@ file, all queries' named assertions or clauses, statements and proof templates
 are written to `Query.lean`.
 SMT queries produce a `Refutation` goal; Horn queries produce a `Problem` goal
 asserting the existence of satisfying relations.
+
+Use `--mode chc --layout inline` to validate CHCs even without `set-logic HORN`
+and place their clauses directly inside `Problem`. Unfolding `Problem` exposes
+the existential interpretations and clauses; source definitions, lets, sharing
+and theory laws are preserved. Non-Horn inputs are rejected. The default layout,
+`structured`, retains named clause definitions. For CHCs, SAT corresponds to
+`Problem` and UNSAT to `¬Problem`; generated proofs remain unfinished.
 
 Use `--mode model` for general model-existence goals, including non-Horn formulas.
 Use `--mode fixedpoint` for positive Z3 `rule`/`query` inputs over Bool, Int, Real,

@@ -26,7 +26,7 @@ def Refutation : Prop :=
   ∀ (f0 : Int → Int),
   ∀ (x1 x2 : Int),
   ((Refutation_1.Assertion001 x1 x2) ∧
-  Refutation_1.Assertion002 f0 x1 x2) →
+  (Refutation_1.Assertion002 f0 x1 x2)) →
   False
 
 end

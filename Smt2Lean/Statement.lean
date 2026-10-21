@@ -15,6 +15,8 @@ structure Statement where
   value : Lean.Expr
   parts : Array StatementPart := #[]
   definitions : Array StatementPart := #[]
+  /-- Serializable provenance captured before the native parser objects expire. -/
+  metadata : Lean.Json := .null
   deriving Inhabited
 
 end Smt2Lean

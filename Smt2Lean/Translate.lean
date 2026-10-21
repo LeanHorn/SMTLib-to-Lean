@@ -19,6 +19,17 @@ namespace Smt2Lean.Translate
 open Lean Meta Qq
 open Backend
 
+private def positionMetadata (position : Source.Position) : Json :=
+  Json.mkObj [("offset", toJson position.offset), ("line", toJson position.line),
+    ("column", toJson position.column)]
+
+/-- Source locations contain only JSON values and survive the native parser callback. -/
+def sourceMetadata (source : Option Source.Ref) : Json :=
+  source.map (fun source => Json.mkObj [
+    ("file", toJson source.file), ("command_number", toJson source.number),
+    ("start", positionMetadata source.span.start), ("end", positionMetadata source.span.stop),
+    ("names", toJson source.names), ("rule_name", toJson source.ruleName)]) |>.getD .null
+
 private def atSource [Monad m] [MonadError m] (source : Option Source.Ref)
     (description : String) (action : m α) (chc : Bool := false) (queryNumber : Nat := 1) : m α := do
   try action
@@ -353,13 +364,94 @@ private def reconstructClause (context : Smt.Reconstruct.Context) (sortCache : S
     check value
     return value
 
+/-- Determine theory requirements from native signatures and term sorts, never from HORN. -/
+private def requiredTheories (problem : Chc.Problem) (terms : Array cvc5.Term) : Array String := Id.run do
+  let mut pending := terms
+  let mut visitedTerms : Std.HashSet cvc5.Term := {}
+  let mut sorts := problem.sorts.map (·.sort) ++
+    problem.datatypes.flatMap (fun group => group.types.flatMap fun datatype =>
+      #[datatype.sort] ++ datatype.constructors.flatMap (fun constructor => constructor.fields.map (·.sort)))
+  while !pending.isEmpty do
+    let term := pending.back!
+    pending := pending.pop
+    if visitedTerms.contains term then continue
+    visitedTerms := visitedTerms.insert term
+    sorts := sorts.push term.getSort!
+    pending := pending ++ term.getChildren
+    if term.isConstArray then pending := pending.push term.getConstArrayBase!
+  let mut visitedSorts : Std.HashSet cvc5.Sort := {}
+  let mut theories := #["Core"]
+  if !problem.functions.isEmpty then theories := theories.push "UninterpretedFunctions"
+  while !sorts.isEmpty do
+    let sort := sorts.back!
+    sorts := sorts.pop
+    if visitedSorts.contains sort then continue
+    visitedSorts := visitedSorts.insert sort
+    let theory := if sort.isInteger then some "Int"
+      else if sort.isReal then some "Real"
+      else if sort.isBitVector then some "BitVec"
+      else if sort.isArray then some "Arrays"
+      else if sort.isDatatype then some "Datatypes"
+      else if sort.isUninterpretedSort then some "UninterpretedSorts"
+      else none
+    if let some theory := theory then
+      unless theories.contains theory do theories := theories.push theory
+    if sort.isFunction then
+      sorts := sorts ++ sort.getFunctionDomainSorts! ++ #[sort.getFunctionCodomainSort!]
+    else if sort.isArray then
+      sorts := sorts ++ #[sort.getArrayIndexSort!, sort.getArrayElementSort!]
+    else if sort.isUninterpretedSort && sort.isInstantiated then
+      sorts := sorts ++ sort.getInstantiatedParameters!
+  -- Keep output independent of native traversal order.
+  return #["Core", "Int", "Real", "BitVec", "Arrays", "Datatypes",
+    "UninterpretedSorts", "UninterpretedFunctions"].filter theories.contains
+
+/-- Every interpretation parameter gets a stable structural index before emission. -/
+private def clauseMetadata (problem : Chc.Problem) (symbols : Array ParsedDeclaration)
+    (carriers modelParameters zeroCases parameters : Array Expr) (terms : Array cvc5.Term)
+    (clauses : Array (Chc.Clause Chc.Premise)) : MetaM Json := do
+  let mut entries := #[]
+  for declaration in problem.sorts, parameter in carriers, i in [:carriers.size] do
+    entries := entries.push <| Json.mkObj [
+      ("source_name", toJson declaration.name),
+      ("lean_binder", toJson (← parameter.fvarId!.getUserName).eraseMacroScopes.toString),
+      ("parameter_index", toJson i), ("role", toJson "carrier"),
+      ("argument_sorts", toJson (#[] : Array String)),
+      ("result_sort", toJson declaration.sort.toString), ("source", sourceMetadata declaration.source)]
+  for parameter in modelParameters ++ zeroCases, i in [:modelParameters.size + zeroCases.size] do
+    entries := entries.push <| Json.mkObj [
+      ("source_name", .null),
+      ("lean_binder", toJson (← parameter.fvarId!.getUserName).eraseMacroScopes.toString),
+      ("parameter_index", toJson (carriers.size + i)), ("role", toJson "theory_model_parameter"),
+      ("argument_sorts", toJson (#[] : Array String)), ("result_sort", .null), ("source", .null)]
+  let offset := carriers.size + modelParameters.size + zeroCases.size
+  for symbol in symbols, parameter in parameters, i in [:symbols.size] do
+    let sort ← ofExcept symbol.term.getSort
+    let arguments ← if sort.isFunction then ofExcept sort.getFunctionDomainSorts else pure #[]
+    let result ← if sort.isFunction then ofExcept sort.getFunctionCodomainSort else pure sort
+    let role := if i < problem.constants.size then "background_constant"
+      else if i < problem.constants.size + problem.functions.size then "background_function"
+      else "predicate"
+    entries := entries.push <| Json.mkObj [
+      ("source_name", toJson symbol.name),
+      ("lean_binder", toJson (← parameter.fvarId!.getUserName).eraseMacroScopes.toString),
+      ("parameter_index", toJson (offset + i)), ("role", toJson role),
+      ("argument_sorts", toJson (arguments.map toString)), ("result_sort", toJson result.toString),
+      ("source", sourceMetadata symbol.source)]
+  return Json.mkObj [
+    ("declared_logic", toJson (problem.query.bind (·.logic))),
+    ("symbols", toJson entries),
+    ("clauses", toJson (clauses.map fun clause => Json.mkObj [
+      ("assertion_number", toJson clause.assertionNumber), ("source", sourceMetadata clause.source)])),
+    ("required_theories", toJson (requiredTheories problem terms))]
+
 /--
 Reconstruct CHC clauses with carriers, theory models, and shared symbol interpretations.
 Each clause is `∀ variables, premise₁ → … → head`. Inspect the parameters and
 model laws, and clauses inside the callback, while their context and native terms are alive.
 -/
 private def withClauseModel [Inhabited α] (problem : Chc.Problem)
-    (inspect : Array Expr → Array Expr → Array Expr → Array Expr → Array StatementPart → MetaM α)
+    (inspect : Array Expr → Array Expr → Array Expr → Array Expr → Array StatementPart → Json → MetaM α)
     (namespaceName : Option Name := none) (checkEquivalence : Bool := false) : MetaM α := do
   withCarriers problem.sorts fun carriers sortCache => do
     let terms := problem.clauses.flatMap fun clause =>
@@ -409,12 +501,15 @@ private def withClauseModel [Inhabited α] (problem : Chc.Problem)
               return value
           let originals ← if namespaceName.isSome && checkEquivalence then
             problem.clauses.mapM (reconstructClause context sortCache interpretations) else pure clauses
-          inspect allParameters laws clauses originals definitions
+          let metadata ← if namespaceName.isSome then
+            clauseMetadata problem symbols carriers arrayParameters zeroCases parameters modelTerms sourceClauses
+            else pure .null
+          inspect allParameters laws clauses originals definitions metadata
 
 /-- Inspect reconstructed clauses while their interpretation parameters are in scope. -/
 def withClauses [Inhabited α] (problem : Chc.Problem)
     (inspect : Array Expr → Array Expr → MetaM α) : MetaM α :=
-  withClauseModel problem fun parameters _ clauses _ _ => inspect parameters clauses
+  withClauseModel problem fun parameters _ clauses _ _ _ => inspect parameters clauses
 
 private def defineProposition (name : Name) (value : Expr) : MetaM Expr := do
   defineChecked name (← Sharing.introduce value)
@@ -500,7 +595,7 @@ Define CHC model existence over admissible models and shared symbol interpretati
 Retain unused declarations; an empty clause conjunction is `True`. Check without proving it.
 -/
 def defineProblem (problem : Chc.Problem) (name : Name := `Problem) : MetaM Expr := do
-  let value ← withClauseModel problem fun parameters laws clauses _ _ => do
+  let value ← withClauseModel problem fun parameters laws clauses _ _ _ => do
     closeProblem problem.sorts.size parameters laws clauses
   atSource problem.source "Problem" (defineProposition name value) (chc := true) (queryNumber := problem.number)
 
@@ -537,8 +632,11 @@ def modelStatement (query : ParsedQuery) (name : Name := `Model)
 def problemStatement (problem : Chc.Problem) (name : Name := `Problem)
     (checkEquivalence : Bool := false) : MetaM Statement :=
   atSource problem.source "Problem" (chc := true) (queryNumber := problem.number) <|
-    withClauseModel problem (namespaceName := some name) (checkEquivalence := checkEquivalence) fun parameters laws clauses originals definitions => do
+    withClauseModel problem (namespaceName := some name) (checkEquivalence := checkEquivalence) fun parameters laws clauses originals definitions metadata => do
       let (calls, parts) ← nameParts parameters clauses (problem.clauses.map (·.source)) name "Clause"
+      let clauseMetadata := (metadata.getObjValAs? (Array Json) "clauses").toOption.getD #[]
+      let metadata := metadata.setObjVal! "clauses" <| toJson (parts.mapIdx fun i part =>
+        (clauseMetadata[i]?.getD (Json.mkObj [])).setObjVal! "wrapper_name" (toJson part.name.toString))
       let clauseName := name ++ `Clauses
       let clauseValue ← mkLambdaFVars parameters (mkConjunction calls) (usedOnly := false)
       discard <| defineChecked clauseName clauseValue
@@ -553,6 +651,7 @@ def problemStatement (problem : Chc.Problem) (name : Name := `Problem)
         let original ← closeProblem problem.sorts.size parameters laws originalClauses
         checkAssembly name original value
       let parts := parts.push { name := clauseName, value := clauseValue, label := "clauses" }
-      return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)) }
+      let metadata := metadata.setObjVal! "wrapper_names" (toJson (parts.map (·.name.toString)))
+      return { value, parts, definitions := usedDefinitions definitions (parts.map (·.value)), metadata }
 
 end Smt2Lean.Translate
